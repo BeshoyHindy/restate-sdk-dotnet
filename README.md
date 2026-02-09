@@ -321,6 +321,42 @@ Mock contexts are available for every context type:
 | `MockWorkflowContext` | Workflow run handlers |
 | `MockSharedWorkflowContext` | Workflow shared handlers |
 
+Mock context features:
+
+```csharp
+// Deterministic time
+var ctx = new MockContext();
+ctx.CurrentTime = new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero);
+var now = await ctx.Now(); // returns the configured time
+
+// Setup call results
+ctx.SetupCall<string>("GreeterService", "Greet", "Hello!");
+
+// Setup call failures
+ctx.SetupCallFailure("GreeterService", "Greet", new TerminalException("fail", 500));
+
+// Register typed clients
+ctx.RegisterClient<IGreeterServiceClient>(myMockClient);
+
+// Verify recorded calls, sends, and sleeps
+Assert.Single(ctx.Calls);
+Assert.Equal("GreeterService", ctx.Calls[0].Service);
+```
+
+### Interfaces
+
+Context interfaces (`IContext`, `IObjectContext`, etc.) are available for utility methods,
+type constraints, and generic programming:
+
+```csharp
+// Utility method accepting any context type
+public static async Task<string> FormatTimestamp(IContext ctx)
+{
+    var now = await ctx.Now();
+    return now.ToString("O");
+}
+```
+
 ### External Ingress Client
 
 Call Restate services from outside the runtime using `RestateClient`:
