@@ -10,8 +10,10 @@ namespace Restate.Sdk.Testing;
 public sealed class MockContext : Context
 {
     private readonly Queue<object?> _awakeableResults = new();
+    private readonly Dictionary<string, TerminalException> _callFailures = [];
     private readonly Dictionary<string, object?> _callResults = [];
     private readonly List<RecordedCall> _calls = [];
+    private readonly Dictionary<Type, object> _clients = [];
     private readonly List<RecordedSend> _sends = [];
     private readonly List<RecordedSleep> _sleeps = [];
     private int _invocationCounter;
@@ -65,6 +67,12 @@ public sealed class MockContext : Context
     }
 
     /// <summary>
+    ///     The time returned by <see cref="Now" />. Set this to control the time in tests.
+    ///     Defaults to 2024-01-01T00:00:00Z.
+    /// </summary>
+    public DateTimeOffset CurrentTime { get; set; } = new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
     ///     Enqueues a value to be returned by the next <see cref="Awakeable{T}" /> call.
     ///     Values are consumed in FIFO order. If no value is enqueued, the awakeable resolves
     ///     with <c>default(T)</c>.
@@ -72,6 +80,31 @@ public sealed class MockContext : Context
     public void SetupAwakeable<T>(T result)
     {
         _awakeableResults.Enqueue(result);
+    }
+
+    /// <summary>
+    ///     Configures a Call to the given service/handler to throw a <see cref="TerminalException" />.
+    /// </summary>
+    public void SetupCallFailure(string service, string handler, TerminalException exception)
+    {
+        _callFailures[$"{service}/{handler}"] = exception;
+    }
+
+    /// <summary>
+    ///     Configures a Call to the given service/key/handler to throw a <see cref="TerminalException" />.
+    /// </summary>
+    public void SetupCallFailure(string service, string key, string handler, TerminalException exception)
+    {
+        _callFailures[$"{service}/{key}/{handler}"] = exception;
+    }
+
+    /// <summary>
+    ///     Registers a typed client instance to be returned by <see cref="ServiceClient{TClient}" />,
+    ///     <see cref="ObjectClient{TClient}" />, or <see cref="WorkflowClient{TClient}" />.
+    /// </summary>
+    public void RegisterClient<TClient>(TClient client) where TClient : class
+    {
+        _clients[typeof(TClient)] = client;
     }
 
     /// <inheritdoc />
@@ -108,7 +141,10 @@ public sealed class MockContext : Context
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
         _calls.Add(new RecordedCall(service, null, handler, request));
-        if (_callResults.TryGetValue($"{service}/{handler}", out var result))
+        var lookupKey = $"{service}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
+        if (_callResults.TryGetValue(lookupKey, out var result))
             return new ValueTask<TResponse>((TResponse)result!);
         return new ValueTask<TResponse>(default(TResponse)!);
     }
@@ -118,7 +154,10 @@ public sealed class MockContext : Context
         object? request = null)
     {
         _calls.Add(new RecordedCall(service, key, handler, request));
-        if (_callResults.TryGetValue($"{service}/{key}/{handler}", out var result))
+        var lookupKey = $"{service}/{key}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
+        if (_callResults.TryGetValue(lookupKey, out var result))
             return new ValueTask<TResponse>((TResponse)result!);
         return new ValueTask<TResponse>(default(TResponse)!);
     }
@@ -144,37 +183,49 @@ public sealed class MockContext : Context
     /// <inheritdoc />
     public override TClient ServiceClient<TClient>()
     {
-        throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
     }
 
     /// <inheritdoc />
     public override TClient ObjectClient<TClient>(string key)
     {
-        throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
     }
 
     /// <inheritdoc />
     public override TClient WorkflowClient<TClient>(string key)
     {
-        throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedClientNotSupported);
     }
 
     /// <inheritdoc />
     public override TClient ServiceSendClient<TClient>(SendOptions? options = null)
     {
-        throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
     }
 
     /// <inheritdoc />
     public override TClient ObjectSendClient<TClient>(string key, SendOptions? options = null)
     {
-        throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
     }
 
     /// <inheritdoc />
     public override TClient WorkflowSendClient<TClient>(string key, SendOptions? options = null)
     {
-        throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
+        return _clients.TryGetValue(typeof(TClient), out var c)
+            ? (TClient)c
+            : throw new NotSupportedException(MockHelpers.TypedSendClientNotSupported);
     }
 
     /// <inheritdoc />
@@ -211,7 +262,7 @@ public sealed class MockContext : Context
     /// <inheritdoc />
     public override ValueTask<DateTimeOffset> Now()
     {
-        return new ValueTask<DateTimeOffset>(DateTimeOffset.UtcNow);
+        return new ValueTask<DateTimeOffset>(CurrentTime);
     }
 
     /// <inheritdoc />
@@ -232,6 +283,8 @@ public sealed class MockContext : Context
     {
         _calls.Add(new RecordedCall(service, key, handler, request));
         var lookupKey = key is not null ? $"{service}/{key}/{handler}" : $"{service}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
         if (_callResults.TryGetValue(lookupKey, out var result))
             return new ValueTask<TResponse>((TResponse)result!);
         return new ValueTask<TResponse>(default(TResponse)!);
