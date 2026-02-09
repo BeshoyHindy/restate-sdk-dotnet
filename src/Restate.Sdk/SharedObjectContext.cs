@@ -10,7 +10,7 @@ public abstract class SharedObjectContext : Context
     ///     The base context to delegate Context operations to.
     ///     Set by subclasses in their constructors.
     /// </summary>
-    protected Context? BaseContext { get; init; }
+    internal Context BaseContext { get; init; } = null!;
 
     /// <summary>The key of the virtual object instance.</summary>
     public abstract string Key { get; }
@@ -18,19 +18,19 @@ public abstract class SharedObjectContext : Context
     // --- Context delegation to BaseContext ---
 
     /// <inheritdoc />
-    public override string InvocationId => BaseContext!.InvocationId;
+    public override string InvocationId => BaseContext.InvocationId;
 
     /// <inheritdoc />
-    public override DurableRandom Random => BaseContext!.Random;
+    public override DurableRandom Random => BaseContext.Random;
 
     /// <inheritdoc />
-    public override DurableConsole Console => BaseContext!.Console;
+    public override DurableConsole Console => BaseContext.Console;
 
     /// <inheritdoc />
-    public override IReadOnlyDictionary<string, string> Headers => BaseContext!.Headers;
+    public override IReadOnlyDictionary<string, string> Headers => BaseContext.Headers;
 
     /// <inheritdoc />
-    public override CancellationToken Aborted => BaseContext!.Aborted;
+    public override CancellationToken Aborted => BaseContext.Aborted;
 
     /// <summary>Gets the value for the given state key, or default if not set.</summary>
     public abstract ValueTask<T?> Get<T>(StateKey<T> key);
@@ -41,64 +41,64 @@ public abstract class SharedObjectContext : Context
     /// <inheritdoc />
     public override ValueTask<DateTimeOffset> Now()
     {
-        return BaseContext!.Now();
+        return BaseContext.Now();
     }
 
     /// <inheritdoc />
     public override ValueTask<T> Run<T>(string name, Func<Task<T>> action)
     {
-        return BaseContext!.Run(name, action);
+        return BaseContext.Run(name, action);
     }
 
     /// <inheritdoc />
     public override ValueTask Run(string name, Func<Task> action)
     {
-        return BaseContext!.Run(name, action);
+        return BaseContext.Run(name, action);
     }
 
     /// <inheritdoc />
     public override ValueTask<T> Run<T>(string name, Func<T> action)
     {
-        return BaseContext!.Run(name, action);
+        return BaseContext.Run(name, action);
     }
 
     /// <inheritdoc />
     public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null)
     {
-        return BaseContext!.Run(name, action, options);
+        return BaseContext.Run(name, action, options);
     }
 
     /// <inheritdoc />
     public override ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null)
     {
-        return BaseContext!.Run(name, action, options);
+        return BaseContext.Run(name, action, options);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
-        return BaseContext!.Call<TResponse>(service, handler, request);
+        return BaseContext.Call<TResponse>(service, handler, request);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        return BaseContext!.Call<TResponse>(service, key, handler, request);
+        return BaseContext.Call<TResponse>(service, key, handler, request);
     }
 
     /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        return BaseContext!.Send(service, handler, request, delay, idempotencyKey);
+        return BaseContext.Send(service, handler, request, delay, idempotencyKey);
     }
 
     /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        return BaseContext!.Send(service, key, handler, request, delay, idempotencyKey);
+        return BaseContext.Send(service, key, handler, request, delay, idempotencyKey);
     }
 
     /// <inheritdoc />
@@ -140,76 +140,76 @@ public abstract class SharedObjectContext : Context
     /// <inheritdoc />
     public override ValueTask Sleep(TimeSpan duration)
     {
-        return BaseContext!.Sleep(duration);
+        return BaseContext.Sleep(duration);
     }
 
     /// <inheritdoc />
     public override Awakeable<T> Awakeable<T>(ISerde<T>? serde = null)
     {
-        return BaseContext!.Awakeable(serde);
+        return BaseContext.Awakeable(serde);
     }
 
     /// <inheritdoc />
     public override void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null)
     {
-        BaseContext!.ResolveAwakeable(id, payload, serde);
+        BaseContext.ResolveAwakeable(id, payload, serde);
     }
 
     /// <inheritdoc />
     public override void RejectAwakeable(string id, string reason)
     {
-        BaseContext!.RejectAwakeable(id, reason);
+        BaseContext.RejectAwakeable(id, reason);
     }
 
     /// <inheritdoc />
     public override ValueTask<T> Attach<T>(string invocationId)
     {
-        return BaseContext!.Attach<T>(invocationId);
+        return BaseContext.Attach<T>(invocationId);
     }
 
     /// <inheritdoc />
     public override ValueTask<T?> GetOutput<T>(string invocationId) where T : default
     {
-        return BaseContext!.GetOutput<T>(invocationId);
+        return BaseContext.GetOutput<T>(invocationId);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
         string? key = null)
     {
-        return BaseContext!.Call<TRequest, TResponse>(service, handler, request, key);
+        return BaseContext.Call<TRequest, TResponse>(service, handler, request, key);
     }
 
     /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send<TRequest>(string service, string handler, TRequest request,
         string? key = null, SendOptions? options = null)
     {
-        return BaseContext!.Send(service, handler, request, key, options);
+        return BaseContext.Send(service, handler, request, key, options);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action)
     {
-        return BaseContext!.RunAsync(name, action);
+        return BaseContext.RunAsync(name, action);
     }
 
     /// <inheritdoc />
     public override IDurableFuture Timer(TimeSpan duration)
     {
-        return BaseContext!.Timer(duration);
+        return BaseContext.Timer(duration);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler,
         object? request = null)
     {
-        return BaseContext!.CallFuture<TResponse>(service, handler, request);
+        return BaseContext.CallFuture<TResponse>(service, handler, request);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        return BaseContext!.CallFuture<TResponse>(service, key, handler, request);
+        return BaseContext.CallFuture<TResponse>(service, key, handler, request);
     }
 }
