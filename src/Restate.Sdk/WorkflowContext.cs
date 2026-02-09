@@ -4,7 +4,7 @@ namespace Restate.Sdk;
 ///     Context for the workflow run handler. Provides read-write state access
 ///     and durable promises for coordinating with shared handlers.
 /// </summary>
-public abstract class WorkflowContext : ObjectContext
+public abstract class WorkflowContext : ObjectContext, IWorkflowContext
 {
     /// <summary>Waits for a workflow promise to be resolved.</summary>
     public abstract ValueTask<T> Promise<T>(string name);

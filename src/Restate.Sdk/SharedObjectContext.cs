@@ -4,7 +4,7 @@ namespace Restate.Sdk;
 ///     Context for shared handlers on virtual objects. Provides read-only state access
 ///     and can run concurrently with other shared handlers for the same key.
 /// </summary>
-public abstract class SharedObjectContext : Context
+public abstract class SharedObjectContext : Context, ISharedObjectContext
 {
     /// <summary>
     ///     The base context to delegate Context operations to.

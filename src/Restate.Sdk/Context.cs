@@ -5,7 +5,7 @@ namespace Restate.Sdk;
 ///     Provides durable execution primitives: side effects, calls, timers, and awakeables.
 ///     Subclass this to create test doubles (see Restate.Sdk.Testing).
 /// </summary>
-public abstract class Context
+public abstract class Context : IContext
 {
     /// <summary>Replay-safe random number generator seeded by the invocation.</summary>
     public abstract DurableRandom Random { get; }
