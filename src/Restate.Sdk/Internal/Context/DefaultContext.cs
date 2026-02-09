@@ -46,13 +46,13 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return _stateMachine.RunSync(name, action, Aborted);
     }
 
-    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null)
+    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
     {
         var runCtx = new RunContext(Aborted, _logger);
         return _stateMachine.RunAsync(name, () => action(runCtx), Aborted);
     }
 
-    public override ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null)
+    public override ValueTask Run(string name, Func<IRunContext, Task> action)
     {
         var runCtx = new RunContext(Aborted, _logger);
         return _stateMachine.RunAsync(name, () => action(runCtx), Aborted);

@@ -63,15 +63,15 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
-    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null)
+    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
     {
-        return BaseContext.Run(name, action, options);
+        return BaseContext.Run(name, action);
     }
 
     /// <inheritdoc />
-    public override ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null)
+    public override ValueTask Run(string name, Func<IRunContext, Task> action)
     {
-        return BaseContext.Run(name, action, options);
+        return BaseContext.Run(name, action);
     }
 
     /// <inheritdoc />

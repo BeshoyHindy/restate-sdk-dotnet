@@ -121,12 +121,12 @@ public class HandlerInvokerTests
             throw new NotImplementedException();
         }
 
-        public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null)
+        public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
         {
             throw new NotImplementedException();
         }
 
-        public override ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null)
+        public override ValueTask Run(string name, Func<IRunContext, Task> action)
         {
             throw new NotImplementedException();
         }

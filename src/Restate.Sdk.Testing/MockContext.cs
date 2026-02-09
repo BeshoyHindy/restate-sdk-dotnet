@@ -126,13 +126,13 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
-    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null)
+    public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
     {
         return new ValueTask<T>(action(new MockRunContext()));
     }
 
     /// <inheritdoc />
-    public override ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null)
+    public override ValueTask Run(string name, Func<IRunContext, Task> action)
     {
         return new ValueTask(action(new MockRunContext()));
     }

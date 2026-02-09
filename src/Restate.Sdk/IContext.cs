@@ -26,10 +26,10 @@ public interface IContext
     ValueTask<T> Run<T>(string name, Func<T> action);
 
     /// <summary>Executes an async side effect with a restricted run context. Prevents nested Restate operations.</summary>
-    ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null);
+    ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action);
 
     /// <summary>Executes an async void side effect with a restricted run context.</summary>
-    ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null);
+    ValueTask Run(string name, Func<IRunContext, Task> action);
 
     /// <summary>Calls a handler on a stateless service and awaits its response.</summary>
     ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null);

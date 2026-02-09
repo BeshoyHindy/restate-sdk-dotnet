@@ -32,10 +32,10 @@ public abstract class Context : IContext
     public abstract ValueTask<T> Run<T>(string name, Func<T> action);
 
     /// <summary>Executes an async side effect with a restricted run context. Prevents nested Restate operations.</summary>
-    public abstract ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action, RunOptions? options = null);
+    public abstract ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action);
 
     /// <summary>Executes an async void side effect with a restricted run context.</summary>
-    public abstract ValueTask Run(string name, Func<IRunContext, Task> action, RunOptions? options = null);
+    public abstract ValueTask Run(string name, Func<IRunContext, Task> action);
 
     /// <summary>Calls a handler on a stateless service and awaits its response.</summary>
     public abstract ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null);
