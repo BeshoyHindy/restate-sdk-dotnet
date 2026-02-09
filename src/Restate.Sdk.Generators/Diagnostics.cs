@@ -54,4 +54,12 @@ internal static class Diagnostics
         "Restate",
         DiagnosticSeverity.Warning,
         true);
+
+    public static readonly DiagnosticDescriptor InvalidTimeSpanFormat = new(
+        "RESTATE009",
+        "Invalid TimeSpan format",
+        "Handler '{0}' has an invalid TimeSpan value '{1}' for property '{2}'. Use a valid TimeSpan format (e.g. \"00:05:00\" for 5 minutes).",
+        "Restate",
+        DiagnosticSeverity.Error,
+        true);
 }

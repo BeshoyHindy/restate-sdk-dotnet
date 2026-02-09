@@ -153,7 +153,7 @@ public class ProtocolIntegrationTests
     }
 
     [Fact]
-    public async Task HandleAsync_NullInput_ProducesOutputWithDefaultGreeting()
+    public async Task HandleAsync_NullInput_ProducesError()
     {
         var startPayload = BuildStartMessagePayload("test-inv-2", 1, "test-key", 99);
 
@@ -184,15 +184,10 @@ public class ProtocolIntegrationTests
         Assert.True(responseData.Length > 0, "Response stream should not be empty");
 
         var offset = 0;
-        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        var (errorHeader, _) = ReadFramedMessage(responseData, ref offset);
 
-        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
-        var resultContent = ExtractOutputContent(outputPayload);
-        var resultJson = Encoding.UTF8.GetString(resultContent);
-        Assert.Equal("\"Hello, !\"", resultJson);
-
-        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.End, endHeader.Type);
+        // Null JSON input should be rejected by the generated deserializer null check
+        Assert.Equal(MessageType.Error, errorHeader.Type);
     }
 
     [Fact]

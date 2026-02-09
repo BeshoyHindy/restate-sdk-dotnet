@@ -251,6 +251,27 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     Diagnostics.MultipleInputParameters,
                     method.Locations.FirstOrDefault() ?? classDecl.GetLocation(),
                     method.Name, firstInputName ?? "unknown"));
+
+            // RESTATE009: Invalid TimeSpan format
+            foreach (var attr2 in method.GetAttributes())
+            {
+                var attrFullName = attr2.AttributeClass?.ToDisplayString();
+                if (attrFullName != "Restate.Sdk.HandlerAttribute" && attrFullName != "Restate.Sdk.SharedHandlerAttribute")
+                    continue;
+
+                var timeSpanProps = new[] { "InactivityTimeout", "AbortTimeout", "IdempotencyRetention", "JournalRetention" };
+                foreach (var prop in timeSpanProps)
+                {
+                    var value = GetAttributeStringArg(attr2, prop);
+                    if (value is not null && !System.TimeSpan.TryParse(value, out _))
+                        diagnostics.Add(Diagnostic.Create(
+                            Diagnostics.InvalidTimeSpanFormat,
+                            method.Locations.FirstOrDefault() ?? classDecl.GetLocation(),
+                            method.Name, value, prop));
+                }
+
+                break;
+            }
         }
 
         // RESTATE004: Workflow missing Run handler
