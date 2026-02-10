@@ -15,11 +15,11 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v6
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: csharp
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
       - run: dotnet build --configuration Release
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
