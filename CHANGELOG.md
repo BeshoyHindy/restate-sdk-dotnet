@@ -7,26 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Source generator bundled into Restate.Sdk NuGet package (no separate install needed)
-- Per-package NuGet descriptions for Testing and Lambda packages
-- Pack verification in CI pipeline (validates generator bundling on every PR)
-- Version validation in publish workflow (tag must match Directory.Build.props)
-- GitHub Release creation on tag push
-- Branch protection documentation
-- Release process guide (RELEASING.md)
-
-### Changed
-
-- Restate.Sdk.Generators is no longer published as a standalone NuGet package
-
-### Fixed
-
-- PipeReader cleanup race condition in InvocationHandler (await incoming task before completing reader)
-- ReplayRun benchmark now correctly measures StartAsync replay
-
-## [0.1.0-alpha.1] - 2026-02-08
+## [0.1.0-alpha.1] - 2026-02-11
 
 ### Added
 
@@ -44,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deterministic utilities: `DurableRandom`, `Now()`
 - Replay-aware logging: `DurableConsole` with `ReplayAwareInterpolatedStringHandler`
 - Ingress client (`RestateClient`) for external service invocation
-- Source generator (`Restate.Sdk.Generators`) for typed client and service definition generation
+- Source generator (`Restate.Sdk.Generators`) bundled into Restate.Sdk NuGet package (no separate install needed)
 - Source generator diagnostics: RESTATE001-009, including compile-time TimeSpan validation (RESTATE009)
 - Source generator hardening: `#pragma warning disable` on generated code, null checks in deserializers
 - Testing package (`Restate.Sdk.Testing`) with `MockContext`, `MockObjectContext`, `MockWorkflowContext`, `MockSharedObjectContext`, `MockSharedWorkflowContext`
@@ -53,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ASP.NET Core integration: `AddRestate()` / `MapRestate()` DI extensions
 - Quick-start host: `RestateHost.CreateBuilder()`
 - Native AOT and trimming compatibility (`IsAotCompatible`, `IsTrimmable`)
+- Per-package NuGet descriptions for Testing and Lambda packages
+- Pack verification in CI pipeline (validates generator bundling on every PR)
+- Version validation in publish workflow (tag must match Directory.Build.props)
+- GitHub Release creation on tag push
+- Release process guide (RELEASING.md)
 - 4 sample applications: Greeter, Counter, TicketReservation, SignupWorkflow
 - BenchmarkDotNet microbenchmarks for protocol layer and serialization
 - Community files: CONTRIBUTING.md, DECISION_LOG.md, issue templates, CodeQL, Dependabot
@@ -62,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol layer hang caused by incorrect `PipeReader.AdvanceTo(consumed, buffer.End)` — fixed to `AdvanceTo(consumed)`
 - `ProposeRunCompletion` encoding: raw bytes instead of nested Value
 - `CallCompletion` / `CallInvocationIdCompletion` IDs were swapped (0x800D/0x800E)
+- PipeReader cleanup race condition in InvocationHandler (await incoming task before completing reader)
 
 ### Removed
 
