@@ -9,7 +9,7 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
     <!-- Logging abstractions (Restate.Sdk core) -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
     <!-- AWS Lambda -->
     <PackageVersion Include="Amazon.Lambda.Core" Version="2.8.1" />
     <PackageVersion Include="Amazon.Lambda.APIGatewayEvents" Version="2.7.3" />
