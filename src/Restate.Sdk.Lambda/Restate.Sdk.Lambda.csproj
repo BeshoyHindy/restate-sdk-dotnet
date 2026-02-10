@@ -5,6 +5,8 @@
         <AssemblyName>Restate.Sdk.Lambda</AssemblyName>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <IsPackable>true</IsPackable>
+        <Description>AWS Lambda adapter for the Restate .NET SDK. Deploy Restate service handlers as Lambda functions with REQUEST_RESPONSE invocation mode.</Description>
+        <PackageTags>$(PackageTags);aws;lambda;serverless;faas</PackageTags>
     </PropertyGroup>
 
     <ItemGroup>

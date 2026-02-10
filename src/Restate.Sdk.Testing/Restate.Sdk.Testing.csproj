@@ -5,6 +5,8 @@
         <AssemblyName>Restate.Sdk.Testing</AssemblyName>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <IsPackable>true</IsPackable>
+        <Description>Testing library for the Restate .NET SDK. Provides mock contexts (MockContext, MockObjectContext, MockWorkflowContext) for unit testing handlers without a running Restate server.</Description>
+        <PackageTags>$(PackageTags);testing;mocking;unit-test</PackageTags>
     </PropertyGroup>
 
     <ItemGroup>
