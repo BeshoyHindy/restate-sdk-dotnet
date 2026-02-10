@@ -55,7 +55,7 @@ internal sealed class InvocationHandler
             var context = CreateContext(sm, service.Type, handler.IsShared, logger, handlerToken);
 
             object? input = null;
-            if (!startInfo.Input.IsEmpty && handler.InputDeserializer is not null)
+            if (handler.InputDeserializer is not null)
                 input = handler.InputDeserializer(new ReadOnlySequence<byte>(startInfo.Input));
 
             var serviceInstance = service.Factory(serviceProvider);
@@ -102,21 +102,21 @@ internal sealed class InvocationHandler
             // the remaining cleanup from executing AND propagate an exception to Kestrel.
             try { writer.Complete(); } catch { /* already completed or broken */ }
 
+            // Cancel and await the incoming reader task BEFORE completing the reader.
+            // This avoids a "Concurrent reads or writes are not supported" race between
+            // PipeReader.Complete() and ProcessIncomingMessagesAsync's pending ReadAsync().
             try { await incomingCts.CancelAsync().ConfigureAwait(false); } catch { /* ignore */ }
-            try { reader.Complete(); } catch { /* already completed or broken */ }
-
-            // Observe the incoming task to prevent silent exception swallowing.
-            // Expected: OperationCanceledException (cancellation) or InvalidOperationException
-            // (reader.Complete() interrupted a pending read).
             if (incomingTask is not null)
                 try
                 {
                     await incomingTask.ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
+                catch (OperationCanceledException ex)
                 {
                     Log.IncomingReaderStopped(logger, ex, sm.InvocationId);
                 }
+
+            try { reader.Complete(); } catch { /* already completed or broken */ }
         }
     }
 

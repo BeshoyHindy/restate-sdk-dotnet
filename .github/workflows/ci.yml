@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
@@ -32,8 +32,16 @@ jobs:
       - name: Test
         run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx"
 
+      - name: Pack
+        run: dotnet pack --no-build -c Release -o ./artifacts
+
+      - name: Verify generator bundled
+        run: |
+          unzip -l ./artifacts/Restate.Sdk.0.*.nupkg | grep -q "analyzers/dotnet/cs/Restate.Sdk.Generators.dll"
+          echo "Generator DLL verified in package."
+
       - name: Upload test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: test-results
@@ -44,10 +52,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'

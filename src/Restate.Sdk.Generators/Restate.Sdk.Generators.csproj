@@ -7,22 +7,14 @@
         <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
         <RootNamespace>Restate.Sdk.Generators</RootNamespace>
         <AssemblyName>Restate.Sdk.Generators</AssemblyName>
-        <IsPackable>true</IsPackable>
-        <DevelopmentDependency>true</DevelopmentDependency>
-        <IncludeBuildOutput>false</IncludeBuildOutput>
-        <IncludeSymbols>false</IncludeSymbols>
-        <NoWarn>$(NoWarn);NETSDK1212;NETSDK1210;RS2008;NU5128</NoWarn>
+        <!-- Bundled into Restate.Sdk.nupkg via _IncludeGeneratorInPackage target -->
+        <IsPackable>false</IsPackable>
+        <NoWarn>$(NoWarn);NETSDK1212;NETSDK1210;RS2008</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all"/>
         <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all"/>
-    </ItemGroup>
-
-    <ItemGroup>
-        <None Include="$(OutputPath)\$(AssemblyName).dll"
-              Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false"/>
-        <None Include="../../README.md" Pack="true" PackagePath="\"/>
     </ItemGroup>
 
 </Project>

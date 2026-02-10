@@ -21,7 +21,7 @@ internal sealed partial class InvocationStateMachine
         Log.ReadingMessage(Logger, "(pre-start)");
         var startMsg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
                        ?? throw new ProtocolException("Stream ended before StartMessage");
-        Log.MessageRead(Logger, "(pre-start)", startMsg.Header.Type.ToString(), startMsg.Header.Length);
+        Log.MessageRead(Logger, "(pre-start)", startMsg.Header.Type, startMsg.Header.Length);
 
         if (startMsg.Header.Type != MessageType.Start)
             throw new ProtocolException($"Expected StartMessage, got {startMsg.Header.Type}");
@@ -41,7 +41,7 @@ internal sealed partial class InvocationStateMachine
         Log.ReadingMessage(Logger, InvocationId);
         var inputMsg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
                        ?? throw new ProtocolException("Stream ended before InputCommand");
-        Log.MessageRead(Logger, InvocationId, inputMsg.Header.Type.ToString(), inputMsg.Header.Length);
+        Log.MessageRead(Logger, InvocationId, inputMsg.Header.Type, inputMsg.Header.Length);
 
         if (inputMsg.Header.Type != MessageType.InputCommand)
             throw new ProtocolException($"Expected InputCommand, got {inputMsg.Header.Type}");
@@ -69,7 +69,7 @@ internal sealed partial class InvocationStateMachine
             Log.ReadingMessage(Logger, InvocationId);
             var msg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
                       ?? throw new ProtocolException("Stream ended during replay");
-            Log.MessageRead(Logger, InvocationId, msg.Header.Type.ToString(), msg.Header.Length);
+            Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
 
             if (msg.Header.Type.IsCommand())
             {
@@ -114,7 +114,7 @@ internal sealed partial class InvocationStateMachine
             }
 
             var msg = message.Value;
-            Log.MessageRead(Logger, InvocationId, msg.Header.Type.ToString(), msg.Header.Length);
+            Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
             HandleIncomingMessage(msg);
             msg.Dispose();
         }
@@ -137,7 +137,7 @@ internal sealed partial class InvocationStateMachine
             if (signal.Idx is not null)
             {
                 var signalIndex = (int)signal.Idx.Value;
-                Log.NotificationReceived(Logger, InvocationId, "SignalNotification", signalIndex, signal.IsFailure);
+                Log.NotificationReceived(Logger, InvocationId, MessageType.SignalNotification, signalIndex, signal.IsFailure);
 
                 if (signal.IsFailure)
                 {
@@ -164,7 +164,7 @@ internal sealed partial class InvocationStateMachine
 
             var notification = ProtobufCodec.ParseCompletionNotification(message.Payload);
             var entryIndex = (int)notification.CompletionId;
-            Log.NotificationReceived(Logger, InvocationId, type.ToString(), entryIndex, notification.IsFailure);
+            Log.NotificationReceived(Logger, InvocationId, type, entryIndex, notification.IsFailure);
 
             // Invocation ID notification (field 16) — complete with the ID as UTF-8 bytes
             if (notification.InvocationId is not null)
