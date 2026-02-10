@@ -20,7 +20,7 @@ public static class RestateEndpointRouteBuilderExtensions
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
 
     // Supported manifest versions, highest priority first.
-    // v4 adds retry_policy fields we don't support yet, so we cap at v3.
+    // v4 adds lambda compression fields we don't support yet, so we cap at v3.
     private static readonly string[] SupportedContentTypes =
     [
         "application/vnd.restate.endpointmanifest.v3+json",
