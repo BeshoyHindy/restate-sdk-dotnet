@@ -6,7 +6,7 @@
 
 # Restate .NET SDK
 
-> **Pre-release (0.1.0-alpha.1)** -- Under active development. APIs may change between releases.
+> **Pre-release (0.1.0-alpha.2)** -- Under active development. APIs may change between releases.
 >
 > This is a community-driven project, not an official Restate SDK.
 > Built by reverse-engineering the Java, TypeScript, and Go SDKs.
@@ -40,14 +40,14 @@ that run on the Restate runtime.
 ### Install
 
 ```bash
-dotnet add package Restate.Sdk --version 0.1.0-alpha.1
+dotnet add package Restate.Sdk --version 0.1.0-alpha.2
 ```
 
 Optional packages:
 
 ```bash
-dotnet add package Restate.Sdk.Testing --version 0.1.0-alpha.1   # Mock contexts for unit testing
-dotnet add package Restate.Sdk.Lambda --version 0.1.0-alpha.1    # AWS Lambda adapter
+dotnet add package Restate.Sdk.Testing --version 0.1.0-alpha.2   # Mock contexts for unit testing
+dotnet add package Restate.Sdk.Lambda --version 0.1.0-alpha.2    # AWS Lambda adapter
 ```
 
 > The Roslyn source generator is bundled with `Restate.Sdk` -- typed clients and service
@@ -407,7 +407,7 @@ dotnet run
 
 | SDK Version | Restate Server | Protocol | .NET |
 |-------------|----------------|----------|------|
-| 0.1.0-alpha.1 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.2 | 1.6.0+ | v5 - v6 | .NET 10.0 |
 
 ## Contributing
 

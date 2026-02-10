@@ -10,7 +10,7 @@
 
     <!-- Shared NuGet package metadata -->
     <PropertyGroup>
-        <Version>0.1.0-alpha.1</Version>
+        <Version>0.1.0-alpha.2</Version>
         <Authors>Beshoy Hindy</Authors>
         <Company>Beshoy Hindy</Company>
         <Copyright>Copyright (c) 2026 Beshoy Hindy</Copyright>
@@ -20,7 +20,7 @@
         <RepositoryType>git</RepositoryType>
         <PackageProjectUrl>https://github.com/BeshoyHindy/restate-sdk-dotnet</PackageProjectUrl>
         <Description>Community .NET SDK for Restate — build durable, distributed applications with guaranteed execution.</Description>
-        <PackageReadmeFile Condition="'$(IsPackable)' == 'true'">README.md</PackageReadmeFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <DebugType>embedded</DebugType>
     </PropertyGroup>
