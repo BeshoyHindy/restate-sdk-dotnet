@@ -16,7 +16,7 @@
     <PackageVersion Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.5" />
     <!-- Protocol Buffers -->
     <PackageVersion Include="Google.Protobuf" Version="3.29.3" />
-    <PackageVersion Include="Grpc.Tools" Version="2.70.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.78.0" />
     <!-- Benchmarks -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- Test -->
