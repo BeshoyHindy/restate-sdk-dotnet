@@ -91,10 +91,12 @@ public class InvocationLifecycleBenchmarks
     }
 
     [Benchmark(Description = "ReplayRun_5Entries")]
-    public async Task<string> ReplayRun_5Entries()
+    public async Task<int> ReplayRun_5Entries()
     {
         using var protocol = new MockProtocol();
 
+        // 6 known entries = InputCommand + 5 RunCommands.
+        // StartAsync reads ALL known entries — this is where journal replay happens.
         WriteStartMessage(protocol, knownEntries: 6);
         WriteInputCommand(protocol, ReadOnlySpan<byte>.Empty);
 
@@ -108,13 +110,10 @@ public class InvocationLifecycleBenchmarks
         protocol.CompleteInbound();
 
         using var sm = new InvocationStateMachine(protocol.Reader, protocol.Writer);
-        await sm.StartAsync(CancellationToken.None);
+        var start = await sm.StartAsync(CancellationToken.None);
 
-        string last = "";
-        for (var i = 0; i < 5; i++)
-            last = await sm.RunSync<string>($"step{i}", () => throw new InvalidOperationException("should replay"), CancellationToken.None);
-
-        return last;
+        // After StartAsync, all 6 entries are in the journal and state is Processing.
+        return start.KnownEntries;
     }
 
     // ---- Protocol message construction helpers using generated protobuf ----

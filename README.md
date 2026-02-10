@@ -1,3 +1,5 @@
+[![CI](https://github.com/BeshoyHindy/restate-sdk-dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/BeshoyHindy/restate-sdk-dotnet/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/Restate.Sdk)](https://www.nuget.org/packages/Restate.Sdk)
 [![Documentation](https://img.shields.io/badge/doc-reference-blue)](https://docs.restate.dev)
 [![Discord](https://img.shields.io/discord/1128210118216007792?logo=discord)](https://discord.gg/skW3AZ6uGd)
 [![Twitter](https://img.shields.io/twitter/follow/restatedev.svg?style=social&label=Follow)](https://twitter.com/intent/follow?screen_name=restatedev)
@@ -47,6 +49,9 @@ Optional packages:
 dotnet add package Restate.Sdk.Testing --version 0.1.0-alpha.1   # Mock contexts for unit testing
 dotnet add package Restate.Sdk.Lambda --version 0.1.0-alpha.1    # AWS Lambda adapter
 ```
+
+> The Roslyn source generator is bundled with `Restate.Sdk` -- typed clients and service
+> definitions are generated automatically at compile time. No additional packages needed.
 
 ### Quick Start
 
@@ -398,11 +403,11 @@ cd samples/Greeter
 dotnet run
 ```
 
-## Versions
+## Compatibility
 
-| SDK | Restate Service Protocol |
-|-----|-------------------------|
-| 0.1.0-alpha.1 | v5 - v6 |
+| SDK Version | Restate Server | Protocol | .NET |
+|-------------|----------------|----------|------|
+| 0.1.0-alpha.1 | 1.6.0+ | v5 - v6 | .NET 10.0 |
 
 ## Contributing
 

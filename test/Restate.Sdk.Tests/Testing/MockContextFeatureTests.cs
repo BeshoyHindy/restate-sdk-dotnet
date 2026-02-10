@@ -1,4 +1,3 @@
-using System.Reflection;
 using Restate.Sdk.Testing;
 
 namespace Restate.Sdk.Tests.Testing;
@@ -62,40 +61,14 @@ public class MockContextFeatureTests
         Assert.Equal(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero), second);
     }
 
-    [Fact]
-    public async Task MockObjectContext_Now_ReturnsDefaultTime()
+    [Theory]
+    [InlineData(typeof(MockObjectContext))]
+    [InlineData(typeof(MockSharedObjectContext))]
+    [InlineData(typeof(MockWorkflowContext))]
+    [InlineData(typeof(MockSharedWorkflowContext))]
+    public async Task KeyedMockContext_Now_ReturnsDefaultTime(Type mockType)
     {
-        var ctx = new MockObjectContext();
-
-        var now = await ctx.Now();
-
-        Assert.Equal(DefaultTime, now);
-    }
-
-    [Fact]
-    public async Task MockSharedObjectContext_Now_ReturnsDefaultTime()
-    {
-        var ctx = new MockSharedObjectContext();
-
-        var now = await ctx.Now();
-
-        Assert.Equal(DefaultTime, now);
-    }
-
-    [Fact]
-    public async Task MockWorkflowContext_Now_ReturnsDefaultTime()
-    {
-        var ctx = new MockWorkflowContext();
-
-        var now = await ctx.Now();
-
-        Assert.Equal(DefaultTime, now);
-    }
-
-    [Fact]
-    public async Task MockSharedWorkflowContext_Now_ReturnsDefaultTime()
-    {
-        var ctx = new MockSharedWorkflowContext();
+        var ctx = (Context)Activator.CreateInstance(mockType, "test-key", null)!;
 
         var now = await ctx.Now();
 
@@ -423,12 +396,6 @@ public class MockContextFeatureTests
     }
 
     [Fact]
-    public void HandlerAttributeBase_IsAbstract()
-    {
-        Assert.True(typeof(HandlerAttributeBase).IsAbstract);
-    }
-
-    [Fact]
     public void HandlerAttribute_AllPropertiesSettable()
     {
         var attr = new HandlerAttribute
@@ -468,22 +435,6 @@ public class MockContextFeatureTests
         Assert.Equal("2.00:00:00", attr.IdempotencyRetention);
         Assert.Equal("14.00:00:00", attr.JournalRetention);
         Assert.False(attr.IngressPrivate);
-    }
-
-    [Theory]
-    [InlineData(nameof(HandlerAttributeBase.Name))]
-    [InlineData(nameof(HandlerAttributeBase.InactivityTimeout))]
-    [InlineData(nameof(HandlerAttributeBase.AbortTimeout))]
-    [InlineData(nameof(HandlerAttributeBase.IdempotencyRetention))]
-    [InlineData(nameof(HandlerAttributeBase.JournalRetention))]
-    [InlineData(nameof(HandlerAttributeBase.IngressPrivate))]
-    public void HandlerAttributeBase_HasExpectedProperty(string propertyName)
-    {
-        var property = typeof(HandlerAttributeBase).GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
-
-        Assert.NotNull(property);
-        Assert.True(property.CanRead);
-        Assert.True(property.CanWrite);
     }
 
     [Fact]

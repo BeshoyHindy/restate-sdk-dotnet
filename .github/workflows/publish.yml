@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -14,13 +14,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version matches Directory.Build.props
+        run: |
+          PROPS_VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -1)
+          if [ "$PROPS_VERSION" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "::error::Tag version (${{ steps.version.outputs.VERSION }}) does not match Directory.Build.props ($PROPS_VERSION)"
+            exit 1
+          fi
+          echo "Version: $PROPS_VERSION"
 
       - name: Restore
         run: dotnet restore
@@ -34,6 +47,13 @@ jobs:
       - name: Pack
         run: dotnet pack --no-build -c Release -o ./artifacts
 
+      - name: Verify generator bundled in package
+        run: |
+          unzip -l ./artifacts/Restate.Sdk.${{ steps.version.outputs.VERSION }}.nupkg \
+            | grep -q "analyzers/dotnet/cs/Restate.Sdk.Generators.dll" \
+            || (echo "::error::Source generator DLL not found in Restate.Sdk package!" && exit 1)
+          echo "Generator DLL verified in package."
+
       - name: Push to NuGet.org
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
@@ -42,7 +62,13 @@ jobs:
         continue-on-error: true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nuget-packages
           path: ./artifacts/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: ./artifacts/*.nupkg
