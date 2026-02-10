@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Internal;
 
@@ -49,7 +50,7 @@ internal static partial class Log
 
     [LoggerMessage(EventId = 101, Level = LogLevel.Trace,
         Message = "[{InvocationId}] Read message: type={MessageType}, length={Length}")]
-    public static partial void MessageRead(ILogger logger, string invocationId, string messageType, uint length);
+    public static partial void MessageRead(ILogger logger, string invocationId, MessageType messageType, uint length);
 
     [LoggerMessage(EventId = 102, Level = LogLevel.Trace,
         Message = "[{InvocationId}] Stream ended (no more messages)")]
@@ -57,7 +58,7 @@ internal static partial class Log
 
     [LoggerMessage(EventId = 103, Level = LogLevel.Trace,
         Message = "[{InvocationId}] Writing command: type={MessageType}, payloadLength={PayloadLength}")]
-    public static partial void WritingCommand(ILogger logger, string invocationId, string messageType, int payloadLength);
+    public static partial void WritingCommand(ILogger logger, string invocationId, MessageType messageType, int payloadLength);
 
     [LoggerMessage(EventId = 104, Level = LogLevel.Trace,
         Message = "[{InvocationId}] Flushing response stream...")]
@@ -77,7 +78,7 @@ internal static partial class Log
 
     [LoggerMessage(EventId = 108, Level = LogLevel.Trace,
         Message = "[{InvocationId}] Notification: type={NotificationType}, entryIndex={EntryIndex}, isFailure={IsFailure}")]
-    public static partial void NotificationReceived(ILogger logger, string invocationId, string notificationType, int entryIndex, bool isFailure);
+    public static partial void NotificationReceived(ILogger logger, string invocationId, MessageType notificationType, int entryIndex, bool isFailure);
 
     [LoggerMessage(EventId = 109, Level = LogLevel.Trace,
         Message = "[{InvocationId}] State transition: {OldState} -> {NewState}")]
