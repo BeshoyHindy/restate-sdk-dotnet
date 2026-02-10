@@ -120,7 +120,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     private void WriteCommand(MessageType type, ReadOnlySpan<byte> payload)
     {
-        Log.WritingCommand(Logger, InvocationId, type.ToString(), payload.Length);
+        Log.WritingCommand(Logger, InvocationId, type, payload.Length);
         _writer.WriteMessage(type, payload);
     }
 
@@ -135,7 +135,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private void WriteCommand(MessageType type, IMessage message)
     {
         var size = message.CalculateSize();
-        Log.WritingCommand(Logger, InvocationId, type.ToString(), size);
+        Log.WritingCommand(Logger, InvocationId, type, size);
         var memory = _writer.GetPayloadMemory(type, MessageFlags.None, size);
         message.WriteTo(memory.Span[..size]);
         _writer.AdvancePayload(size);

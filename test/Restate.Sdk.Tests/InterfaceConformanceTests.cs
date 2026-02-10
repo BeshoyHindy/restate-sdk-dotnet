@@ -5,217 +5,76 @@ namespace Restate.Sdk.Tests;
 public class InterfaceConformanceTests
 {
     // ──────────────────────────────────────────────
-    // 1. Interface hierarchy relationships
+    // 1. Abstract classes implement expected interfaces
     // ──────────────────────────────────────────────
 
-    [Fact]
-    public void ISharedObjectContext_Is_IContext()
+    [Theory]
+    [InlineData(typeof(Context), typeof(IContext))]
+    [InlineData(typeof(SharedObjectContext), typeof(ISharedObjectContext))]
+    [InlineData(typeof(SharedObjectContext), typeof(IContext))]
+    [InlineData(typeof(ObjectContext), typeof(IObjectContext))]
+    [InlineData(typeof(ObjectContext), typeof(ISharedObjectContext))]
+    [InlineData(typeof(ObjectContext), typeof(IContext))]
+    [InlineData(typeof(SharedWorkflowContext), typeof(ISharedWorkflowContext))]
+    [InlineData(typeof(SharedWorkflowContext), typeof(ISharedObjectContext))]
+    [InlineData(typeof(WorkflowContext), typeof(IWorkflowContext))]
+    [InlineData(typeof(WorkflowContext), typeof(IObjectContext))]
+    [InlineData(typeof(WorkflowContext), typeof(ISharedWorkflowContext))]
+    [InlineData(typeof(WorkflowContext), typeof(ISharedObjectContext))]
+    [InlineData(typeof(WorkflowContext), typeof(IContext))]
+    public void AbstractClass_ImplementsExpectedInterface(Type classType, Type interfaceType)
     {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(ISharedObjectContext)));
-    }
-
-    [Fact]
-    public void IObjectContext_Is_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(IObjectContext)));
-    }
-
-    [Fact]
-    public void IObjectContext_Is_IContext()
-    {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(IObjectContext)));
-    }
-
-    [Fact]
-    public void ISharedWorkflowContext_Is_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(ISharedWorkflowContext)));
-    }
-
-    [Fact]
-    public void ISharedWorkflowContext_Is_IContext()
-    {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(ISharedWorkflowContext)));
-    }
-
-    [Fact]
-    public void IWorkflowContext_Is_IObjectContext()
-    {
-        Assert.True(typeof(IObjectContext).IsAssignableFrom(typeof(IWorkflowContext)));
-    }
-
-    [Fact]
-    public void IWorkflowContext_Is_ISharedWorkflowContext()
-    {
-        Assert.True(typeof(ISharedWorkflowContext).IsAssignableFrom(typeof(IWorkflowContext)));
-    }
-
-    [Fact]
-    public void IWorkflowContext_Is_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(IWorkflowContext)));
-    }
-
-    [Fact]
-    public void IWorkflowContext_Is_IContext()
-    {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(IWorkflowContext)));
+        Assert.True(interfaceType.IsAssignableFrom(classType),
+            $"{classType.Name} should implement {interfaceType.Name}");
     }
 
     // ──────────────────────────────────────────────
-    // 2. Abstract classes implement expected interfaces
+    // 2. Mock contexts implement expected interfaces (runtime instances)
     // ──────────────────────────────────────────────
 
     [Fact]
-    public void Context_Implements_IContext()
+    public void MockContext_ImplementsExpectedInterfaces()
     {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(Context)));
+        Assert.IsAssignableFrom<IContext>(new MockContext());
     }
 
     [Fact]
-    public void SharedObjectContext_Implements_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(SharedObjectContext)));
-    }
-
-    [Fact]
-    public void SharedObjectContext_Implements_IContext()
-    {
-        Assert.True(typeof(IContext).IsAssignableFrom(typeof(SharedObjectContext)));
-    }
-
-    [Fact]
-    public void ObjectContext_Implements_IObjectContext()
-    {
-        Assert.True(typeof(IObjectContext).IsAssignableFrom(typeof(ObjectContext)));
-    }
-
-    [Fact]
-    public void ObjectContext_Implements_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(ObjectContext)));
-    }
-
-    [Fact]
-    public void SharedWorkflowContext_Implements_ISharedWorkflowContext()
-    {
-        Assert.True(typeof(ISharedWorkflowContext).IsAssignableFrom(typeof(SharedWorkflowContext)));
-    }
-
-    [Fact]
-    public void SharedWorkflowContext_Implements_ISharedObjectContext()
-    {
-        Assert.True(typeof(ISharedObjectContext).IsAssignableFrom(typeof(SharedWorkflowContext)));
-    }
-
-    [Fact]
-    public void WorkflowContext_Implements_IWorkflowContext()
-    {
-        Assert.True(typeof(IWorkflowContext).IsAssignableFrom(typeof(WorkflowContext)));
-    }
-
-    [Fact]
-    public void WorkflowContext_Implements_IObjectContext()
-    {
-        Assert.True(typeof(IObjectContext).IsAssignableFrom(typeof(WorkflowContext)));
-    }
-
-    [Fact]
-    public void WorkflowContext_Implements_ISharedWorkflowContext()
-    {
-        Assert.True(typeof(ISharedWorkflowContext).IsAssignableFrom(typeof(WorkflowContext)));
-    }
-
-    // ──────────────────────────────────────────────
-    // 3. Mock contexts implement expected interfaces (runtime instances)
-    // ──────────────────────────────────────────────
-
-    [Fact]
-    public void MockContext_Is_IContext()
-    {
-        var ctx = new MockContext();
-        Assert.IsAssignableFrom<IContext>(ctx);
-    }
-
-    [Fact]
-    public void MockObjectContext_Is_IObjectContext()
+    public void MockObjectContext_ImplementsExpectedInterfaces()
     {
         var ctx = new MockObjectContext();
         Assert.IsAssignableFrom<IObjectContext>(ctx);
-    }
-
-    [Fact]
-    public void MockObjectContext_Is_ISharedObjectContext()
-    {
-        var ctx = new MockObjectContext();
         Assert.IsAssignableFrom<ISharedObjectContext>(ctx);
-    }
-
-    [Fact]
-    public void MockObjectContext_Is_IContext()
-    {
-        var ctx = new MockObjectContext();
         Assert.IsAssignableFrom<IContext>(ctx);
     }
 
     [Fact]
-    public void MockSharedObjectContext_Is_ISharedObjectContext()
+    public void MockSharedObjectContext_ImplementsExpectedInterfaces()
     {
         var ctx = new MockSharedObjectContext();
         Assert.IsAssignableFrom<ISharedObjectContext>(ctx);
-    }
-
-    [Fact]
-    public void MockSharedObjectContext_Is_IContext()
-    {
-        var ctx = new MockSharedObjectContext();
         Assert.IsAssignableFrom<IContext>(ctx);
     }
 
     [Fact]
-    public void MockWorkflowContext_Is_IWorkflowContext()
+    public void MockWorkflowContext_ImplementsExpectedInterfaces()
     {
         var ctx = new MockWorkflowContext();
         Assert.IsAssignableFrom<IWorkflowContext>(ctx);
-    }
-
-    [Fact]
-    public void MockWorkflowContext_Is_IObjectContext()
-    {
-        var ctx = new MockWorkflowContext();
         Assert.IsAssignableFrom<IObjectContext>(ctx);
-    }
-
-    [Fact]
-    public void MockWorkflowContext_Is_ISharedWorkflowContext()
-    {
-        var ctx = new MockWorkflowContext();
         Assert.IsAssignableFrom<ISharedWorkflowContext>(ctx);
     }
 
     [Fact]
-    public void MockSharedWorkflowContext_Is_ISharedWorkflowContext()
+    public void MockSharedWorkflowContext_ImplementsExpectedInterfaces()
     {
         var ctx = new MockSharedWorkflowContext();
         Assert.IsAssignableFrom<ISharedWorkflowContext>(ctx);
-    }
-
-    [Fact]
-    public void MockSharedWorkflowContext_Is_ISharedObjectContext()
-    {
-        var ctx = new MockSharedWorkflowContext();
         Assert.IsAssignableFrom<ISharedObjectContext>(ctx);
-    }
-
-    [Fact]
-    public void MockSharedWorkflowContext_Is_IContext()
-    {
-        var ctx = new MockSharedWorkflowContext();
         Assert.IsAssignableFrom<IContext>(ctx);
     }
 
     // ──────────────────────────────────────────────
-    // 4. Mock contexts can be passed to methods accepting interfaces
+    // 3. Mock contexts can be passed to methods accepting interfaces
     // ──────────────────────────────────────────────
 
     [Fact]
