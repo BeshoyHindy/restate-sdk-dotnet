@@ -5,6 +5,27 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Source generator bundled into Restate.Sdk NuGet package (no separate install needed)
+- Per-package NuGet descriptions for Testing and Lambda packages
+- Pack verification in CI pipeline (validates generator bundling on every PR)
+- Version validation in publish workflow (tag must match Directory.Build.props)
+- GitHub Release creation on tag push
+- Branch protection documentation
+- Release process guide (RELEASING.md)
+
+### Changed
+
+- Restate.Sdk.Generators is no longer published as a standalone NuGet package
+
+### Fixed
+
+- PipeReader cleanup race condition in InvocationHandler (await incoming task before completing reader)
+- ReplayRun benchmark now correctly measures StartAsync replay
+
 ## [0.1.0-alpha.1] - 2026-02-08
 
 ### Added
