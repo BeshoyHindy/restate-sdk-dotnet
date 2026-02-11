@@ -22,9 +22,9 @@ namespace Restate.Sdk;
 ///     <code>
 /// public class Handler : RestateLambdaHandler
 /// {
-///     public override void Register(Action&lt;Type&gt; bind)
+///     public override void Register()
 ///     {
-///         bind(typeof(GreeterService));
+///         Bind&lt;GreeterService&gt;();
 ///     }
 /// }
 /// </code>
@@ -39,6 +39,8 @@ public abstract class RestateLambdaHandler
 
     private readonly InvocationHandler _handler;
 
+    private readonly List<Type> _serviceTypes = [];
+
     private readonly ServiceRegistry _registry;
 
     /// <summary>
@@ -46,17 +48,23 @@ public abstract class RestateLambdaHandler
     /// </summary>
     protected RestateLambdaHandler()
     {
-        var types = new List<Type>();
-        Register(types.Add);
-        _registry = ServiceRegistry.FromTypes(types);
+        Register();
+        _registry = ServiceRegistry.FromTypes(_serviceTypes);
         _handler = new InvocationHandler();
     }
 
     /// <summary>
-    ///     Override this method to register your Restate service types.
+    ///     Registers a Restate service type. Call from <see cref="Register" />.
     /// </summary>
-    /// <param name="bind">Delegate to register a service type. The type must have a Restate service attribute.</param>
-    public abstract void Register(Action<Type> bind);
+    protected void Bind<TService>() where TService : class
+    {
+        _serviceTypes.Add(typeof(TService));
+    }
+
+    /// <summary>
+    ///     Override this method to register your Restate service types using <see cref="Bind{TService}" />.
+    /// </summary>
+    public abstract void Register();
 
     /// <summary>
     ///     Lambda function handler entry point. Processes Restate discovery and invocation requests.
