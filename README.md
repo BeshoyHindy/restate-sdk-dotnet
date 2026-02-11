@@ -288,14 +288,14 @@ await app.RunAsync();
 Deploy handlers as Lambda functions using the `Restate.Sdk.Lambda` package:
 
 ```csharp
-using Restate.Sdk.Lambda;
+using Restate.Sdk;
 
 public class Handler : RestateLambdaHandler
 {
-    public override void Register(Action<Type> bind)
+    public override void Register()
     {
-        bind(typeof(GreeterService));
-        bind(typeof(CounterObject));
+        Bind<GreeterService>();
+        Bind<CounterObject>();
     }
 }
 ```
