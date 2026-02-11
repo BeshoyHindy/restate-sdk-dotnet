@@ -376,5 +376,9 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
         var serviceDefSource = ServiceDefinitionEmitter.Generate(distinct);
         spc.AddSource("ServiceDefinitions.g.cs",
             SourceText.From(serviceDefSource, Encoding.UTF8));
+
+        var registrationSource = RegistrationEmitter.Generate(distinct);
+        spc.AddSource("RestateRegistration.g.cs",
+            SourceText.From(registrationSource, Encoding.UTF8));
     }
 }

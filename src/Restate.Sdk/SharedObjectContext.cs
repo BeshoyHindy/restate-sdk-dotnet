@@ -75,6 +75,24 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy)
+    {
+        return BaseContext.Run(name, action, retryPolicy);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask Run(string name, Func<Task> action, RetryPolicy retryPolicy)
+    {
+        return BaseContext.Run(name, action, retryPolicy);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy)
+    {
+        return BaseContext.Run(name, action, retryPolicy);
+    }
+
+    /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
         return BaseContext.Call<TResponse>(service, handler, request);
@@ -85,6 +103,26 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
         object? request = null)
     {
         return BaseContext.Call<TResponse>(service, key, handler, request);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
+        CallOptions options)
+    {
+        return BaseContext.Call<TResponse>(service, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
+        CallOptions options)
+    {
+        return BaseContext.Call<TResponse>(service, key, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask CancelInvocation(string invocationId)
+    {
+        return BaseContext.CancelInvocation(invocationId);
     }
 
     /// <inheritdoc />

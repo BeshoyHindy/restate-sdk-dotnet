@@ -209,13 +209,35 @@ The `Context` object provides durable operations that are automatically journale
 var result = await ctx.Run("name", async () => await FetchDataAsync());
 var value = await ctx.Run("name", () => ComputeSync());
 
+// Side effects with retry policy (custom backoff per operation)
+var data = await ctx.Run("fetch", async () => await FetchDataAsync(),
+    RetryPolicy.FixedAttempts(5));
+var computed = await ctx.Run("compute", () => ComputeSync(),
+    RetryPolicy.Default);
+await ctx.Run("fire-and-forget", async () => await NotifyAsync(),
+    new RetryPolicy
+    {
+        InitialDelay = TimeSpan.FromSeconds(1),
+        ExponentiationFactor = 3.0,
+        MaxDelay = TimeSpan.FromSeconds(30),
+        MaxAttempts = 10,
+        MaxDuration = TimeSpan.FromMinutes(5)
+    });
+
 // Service-to-service calls (retried, exactly-once)
 var response = await ctx.Call<string>("GreeterService", "Greet", "Alice");
 var count = await ctx.Call<int>("CounterObject", "my-key", "Add", 1);
 
+// Calls with idempotency key (exactly-once deduplication)
+var txnId = await ctx.Call<string>("PaymentService", "Charge", request,
+    CallOptions.WithIdempotencyKey("order-123"));
+
 // One-way sends (fire-and-forget, returns InvocationHandle for tracking)
 InvocationHandle handle = await ctx.Send("EmailService", "SendEmail", request);
 await ctx.Send("ReminderService", "Remind", data, delay: TimeSpan.FromHours(1));
+
+// Cancel a running invocation
+await ctx.CancelInvocation("inv-id-to-cancel");
 
 // Durable timers (survive restarts)
 await ctx.Sleep(TimeSpan.FromMinutes(5));
@@ -302,6 +324,33 @@ public class Handler : RestateLambdaHandler
 
 Configure the Lambda function handler as `YourAssembly::YourNamespace.Handler::FunctionHandler`.
 
+### NativeAOT
+
+For ahead-of-time compiled deployments with minimal startup time and memory footprint, use
+`BuildAot` with the source-generated registration:
+
+```csharp
+using Restate.Sdk.Hosting;
+
+await RestateHost.CreateBuilder()
+    .AddService<GreeterService>()
+    .BuildAot()       // Slim Kestrel host, no reflection
+    .RunAsync();
+```
+
+Publish as a self-contained NativeAOT binary:
+
+```bash
+dotnet publish -c Release -r linux-x64
+```
+
+The source generator emits `AddRestateGenerated()` which registers all service definitions
+and JSON serializer contexts without reflection. See the
+[NativeAotGreeter](samples/NativeAotGreeter) sample for a complete working example.
+
+> **Tip**: Set `<PublishAot>true</PublishAot>` in your `.csproj` to enable AOT compilation.
+> The SDK's source generator handles all trimming and serialization concerns automatically.
+
 ### Testing
 
 The `Restate.Sdk.Testing` package provides mock contexts for unit testing handlers without
@@ -346,6 +395,13 @@ ctx.RegisterClient<IGreeterServiceClient>(myMockClient);
 // Verify recorded calls, sends, and sleeps
 Assert.Single(ctx.Calls);
 Assert.Equal("GreeterService", ctx.Calls[0].Service);
+
+// Verify idempotency keys on recorded calls
+Assert.Equal("my-key", ctx.Calls[0].IdempotencyKey);
+
+// Verify cancellations
+Assert.Single(ctx.Cancellations);
+Assert.Equal("inv-123", ctx.Cancellations[0]);
 ```
 
 ### Interfaces
@@ -395,6 +451,9 @@ The [`samples/`](samples/) directory contains complete working examples:
 | [Counter](samples/Counter) | 9081 | Virtual object state, `StateKey<T>`, shared handlers |
 | [TicketReservation](samples/TicketReservation) | 9082 | State machines, delayed sends, cross-service calls |
 | [SignupWorkflow](samples/SignupWorkflow) | 9084 | Workflows, durable promises, awakeables |
+| [NativeAotGreeter](samples/NativeAotGreeter) | 9085 | NativeAOT publishing, `BuildAot()`, source-generated registration |
+| [Saga](samples/Saga) | 9086 | Saga/compensation pattern, `RetryPolicy`, cross-service orchestration |
+| [FanOut](samples/FanOut) | 9087 | Fan-out/fan-in, `RunAsync` + `All`/`Race` combinators |
 
 Run any sample:
 

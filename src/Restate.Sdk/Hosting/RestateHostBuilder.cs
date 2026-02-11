@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Restate.Sdk.Hosting;
 
@@ -72,6 +73,46 @@ public sealed class RestateHostBuilder
     {
         var builder = WebApplication.CreateBuilder();
 
+        ConfigureKestrel(builder);
+
+        var types = _serviceTypes;
+        builder.Services.AddRestate(opts =>
+        {
+            foreach (var type in types)
+                opts.ServiceTypes.Add(type);
+        });
+
+        var app = builder.Build();
+        app.MapRestate();
+
+        return app;
+    }
+
+    /// <summary>
+    ///     Builds a <see cref="WebApplication" /> using source-generated registration for NativeAOT compatibility.
+    ///     Use this instead of <see cref="Build" /> when publishing with <c>&lt;PublishAot&gt;true&lt;/PublishAot&gt;</c>.
+    ///     Requires the source-generated <c>AddRestateGenerated()</c> extension method (emitted by the Restate source generator).
+    /// </summary>
+    /// <param name="configureServices">
+    ///     Callback to register services using the source-generated <c>AddRestateGenerated()</c> extension.
+    ///     Example: <c>services => services.AddRestateGenerated()</c>
+    /// </param>
+    public WebApplication BuildAot(Action<IServiceCollection> configureServices)
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+
+        ConfigureKestrel(builder);
+
+        configureServices(builder.Services);
+
+        var app = builder.Build();
+        app.MapRestate();
+
+        return app;
+    }
+
+    private void ConfigureKestrel(WebApplicationBuilder builder)
+    {
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.ListenAnyIP(_port, listenOptions => { listenOptions.Protocols = HttpProtocols.Http2; });
@@ -89,17 +130,5 @@ public sealed class RestateHostBuilder
             options.Limits.Http2.InitialConnectionWindowSize = 1024 * 1024; // 1 MB
             options.Limits.Http2.InitialStreamWindowSize = 512 * 1024; // 512 KB
         });
-
-        var types = _serviceTypes;
-        builder.Services.AddRestate(opts =>
-        {
-            foreach (var type in types)
-                opts.ServiceTypes.Add(type);
-        });
-
-        var app = builder.Build();
-        app.MapRestate();
-
-        return app;
     }
 }
