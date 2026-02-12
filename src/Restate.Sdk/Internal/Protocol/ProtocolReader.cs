@@ -12,6 +12,7 @@ internal sealed class ProtocolReader : IDisposable
     private readonly PipeReader _reader;
     private MessageHeader _pendingHeader;
     private DecoderState _state = DecoderState.WaitingHeader;
+    private bool _completed;
 
     public ProtocolReader(PipeReader reader)
     {
@@ -24,7 +25,7 @@ internal sealed class ProtocolReader : IDisposable
 
     public void Dispose()
     {
-        Complete();
+        try { Complete(); } catch { /* stream may already be broken */ }
     }
 
     /// <summary>
@@ -63,6 +64,8 @@ internal sealed class ProtocolReader : IDisposable
 
     public void Complete(Exception? exception = null)
     {
+        if (_completed) return;
+        _completed = true;
         _reader.Complete(exception);
     }
 
