@@ -13,6 +13,7 @@ public sealed class MockContext : Context
     private readonly Dictionary<string, TerminalException> _callFailures = [];
     private readonly Dictionary<string, object?> _callResults = [];
     private readonly List<RecordedCall> _calls = [];
+    private readonly List<string> _cancellations = [];
     private readonly Dictionary<Type, object> _clients = [];
     private readonly List<RecordedSend> _sends = [];
     private readonly List<RecordedSleep> _sleeps = [];
@@ -49,6 +50,9 @@ public sealed class MockContext : Context
 
     /// <summary>All recorded Sleep invocations with their requested durations.</summary>
     public IReadOnlyList<RecordedSleep> Sleeps => _sleeps;
+
+    /// <summary>All recorded CancelInvocation calls (invocation IDs that were cancelled).</summary>
+    public IReadOnlyList<string> Cancellations => _cancellations;
 
     /// <summary>
     ///     Configures the return value for a Call to the given service/handler.
@@ -138,6 +142,26 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
+    public override ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy)
+    {
+        // In tests, retry policy is ignored — side effects execute inline.
+        return new ValueTask<T>(action());
+    }
+
+    /// <inheritdoc />
+    public override ValueTask Run(string name, Func<Task> action, RetryPolicy retryPolicy)
+    {
+        return new ValueTask(action());
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy)
+    {
+        // In tests, retry policy is ignored — side effects execute inline.
+        return new ValueTask<T>(action());
+    }
+
+    /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
         _calls.Add(new RecordedCall(service, null, handler, request));
@@ -160,6 +184,39 @@ public sealed class MockContext : Context
         if (_callResults.TryGetValue(lookupKey, out var result))
             return new ValueTask<TResponse>((TResponse)result!);
         return new ValueTask<TResponse>(default(TResponse)!);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
+        CallOptions options)
+    {
+        _calls.Add(new RecordedCall(service, null, handler, request, options.IdempotencyKey));
+        var lookupKey = $"{service}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
+        if (_callResults.TryGetValue(lookupKey, out var result))
+            return new ValueTask<TResponse>((TResponse)result!);
+        return new ValueTask<TResponse>(default(TResponse)!);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
+        CallOptions options)
+    {
+        _calls.Add(new RecordedCall(service, key, handler, request, options.IdempotencyKey));
+        var lookupKey = $"{service}/{key}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
+        if (_callResults.TryGetValue(lookupKey, out var result))
+            return new ValueTask<TResponse>((TResponse)result!);
+        return new ValueTask<TResponse>(default(TResponse)!);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask CancelInvocation(string invocationId)
+    {
+        _cancellations.Add(invocationId);
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -429,7 +486,12 @@ public sealed class MockContext : Context
 }
 
 /// <summary>A recorded Call invocation.</summary>
-public sealed record RecordedCall(string Service, string? Key, string Handler, object? Request);
+public sealed record RecordedCall(
+    string Service,
+    string? Key,
+    string Handler,
+    object? Request,
+    string? IdempotencyKey = null);
 
 /// <summary>A recorded Send invocation.</summary>
 public sealed record RecordedSend(

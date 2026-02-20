@@ -30,6 +30,9 @@ public sealed class MockWorkflowContext : WorkflowContext
     /// <summary>All recorded Sleep invocations with their requested durations.</summary>
     public IReadOnlyList<RecordedSleep> Sleeps => _helper.Sleeps;
 
+    /// <summary>All recorded CancelInvocation calls (invocation IDs that were cancelled).</summary>
+    public IReadOnlyList<string> Cancellations => _helper.Cancellations;
+
     /// <summary>Configures the return value for a Call to the given service/handler.</summary>
     public void SetupCall<T>(string service, string handler, T result) => _helper.SetupCall(service, handler, result);
 

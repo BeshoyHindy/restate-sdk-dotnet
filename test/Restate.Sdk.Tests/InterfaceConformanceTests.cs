@@ -109,6 +109,59 @@ public class InterfaceConformanceTests
         Assert.Equal("test-key", result);
     }
 
+    // ──────────────────────────────────────────────
+    // 4. IContext exposes new feature-parity members
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void IContext_HasRunWithRetryPolicy_VoidAsyncOverload()
+    {
+        var method = typeof(IContext).GetMethod(
+            "Run",
+            [typeof(string), typeof(Func<Task>), typeof(RetryPolicy)]
+        );
+        Assert.NotNull(method);
+    }
+
+    [Fact]
+    public void IContext_HasCallWithCallOptions_ServiceOverload()
+    {
+        var methods = typeof(IContext)
+            .GetMethods()
+            .Where(
+                m =>
+                    m.Name == "Call"
+                    && m.GetParameters().Length == 4
+                    && m.GetParameters()[3].ParameterType == typeof(CallOptions)
+            )
+            .ToList();
+
+        Assert.NotEmpty(methods);
+    }
+
+    [Fact]
+    public void IContext_HasCallWithCallOptions_KeyedOverload()
+    {
+        var methods = typeof(IContext)
+            .GetMethods()
+            .Where(
+                m =>
+                    m.Name == "Call"
+                    && m.GetParameters().Length == 5
+                    && m.GetParameters()[4].ParameterType == typeof(CallOptions)
+            )
+            .ToList();
+
+        Assert.NotEmpty(methods);
+    }
+
+    [Fact]
+    public void IContext_HasCancelInvocation()
+    {
+        var method = typeof(IContext).GetMethod("CancelInvocation", [typeof(string)]);
+        Assert.NotNull(method);
+    }
+
     // Helper methods simulating handler signatures that accept interfaces
 
     private static async Task<string> AcceptIContext(IContext ctx)

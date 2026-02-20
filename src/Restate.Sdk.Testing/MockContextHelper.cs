@@ -20,6 +20,7 @@ internal sealed class MockContextHelper
     public IReadOnlyList<RecordedCall> Calls => InnerMock.Calls;
     public IReadOnlyList<RecordedSend> Sends => InnerMock.Sends;
     public IReadOnlyList<RecordedSleep> Sleeps => InnerMock.Sleeps;
+    public IReadOnlyList<string> Cancellations => InnerMock.Cancellations;
 
     // Delegation setup methods
     public void SetupCall<T>(string service, string handler, T result)

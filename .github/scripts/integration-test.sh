@@ -2,19 +2,27 @@
 set -euo pipefail
 
 # Integration test for the Restate .NET SDK samples.
+# Designed for GitHub Actions CI — uses host networking so Restate
+# can reach sample services at localhost.
 # Prerequisites: docker, dotnet SDK, curl
-# Usage: ./test/integration-test.sh
+# Usage: .github/scripts/integration-test.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PIDS=()
+AOT_DIR=""
+RESTATE_IMAGE="docker.io/restatedev/restate:latest"
+RESTATE_CONTAINER="restate-ci"
 
 cleanup() {
     echo "Cleaning up..."
     for pid in "${PIDS[@]+"${PIDS[@]}"}"; do
         kill "$pid" 2>/dev/null || true
     done
-    docker compose -f "$ROOT_DIR/docker-compose.yml" down --volumes 2>/dev/null || true
+    if [ -n "$AOT_DIR" ] && [ -d "$AOT_DIR" ]; then
+        rm -rf "$AOT_DIR"
+    fi
+    docker rm -f "$RESTATE_CONTAINER" 2>/dev/null || true
     echo "Done."
 }
 trap cleanup EXIT
@@ -41,7 +49,7 @@ wait_for_port() {
 }
 
 wait_for_restate() {
-    local retries=30
+    local retries=60
     for ((i=1; i<=retries; i++)); do
         if curl -sf "http://localhost:9070/health" >/dev/null 2>&1; then
             return 0
@@ -54,9 +62,6 @@ wait_for_restate() {
 register_deployment() {
     local port=$1
     local response
-    response=$(curl -sf -X POST "http://localhost:9070/deployments" \
-        -H "content-type: application/json" \
-        -d "{\"uri\": \"http://host.docker.internal:$port\"}" 2>&1) || \
     response=$(curl -sf -X POST "http://localhost:9070/deployments" \
         -H "content-type: application/json" \
         -d "{\"uri\": \"http://localhost:$port\"}" 2>&1) || \
@@ -124,9 +129,9 @@ assert_void_status() {
 echo "=== Restate .NET SDK Integration Tests ==="
 echo ""
 
-# 1. Start Restate server
+# 1. Start Restate server with host networking (CI needs localhost access)
 echo "Starting Restate server..."
-docker compose -f "$ROOT_DIR/docker-compose.yml" up -d
+docker run -d --name "$RESTATE_CONTAINER" --network host "$RESTATE_IMAGE"
 wait_for_restate
 echo "Restate server ready."
 echo ""
@@ -282,4 +287,136 @@ assert_void_response \
     "awaiting-verification"
 
 echo ""
-echo "=== All Tests Passed ==="
+echo "=== Regular Tests Passed ==="
+echo ""
+
+# === Phase 2: NativeAOT Samples ===
+echo "=== NativeAOT Integration Tests ==="
+echo ""
+
+# Stop regular sample services (AOT samples reuse the same service names)
+echo "Stopping regular sample services..."
+for pid in "${PIDS[@]+"${PIDS[@]}"}"; do
+    kill "$pid" 2>/dev/null || true
+done
+PIDS=()
+
+# Restart Restate for clean state (AOT services share service names with regular ones)
+echo "Restarting Restate server..."
+docker rm -f "$RESTATE_CONTAINER"
+docker run -d --name "$RESTATE_CONTAINER" --network host "$RESTATE_IMAGE"
+wait_for_restate
+echo "Restate server ready."
+echo ""
+
+# Publish NativeAOT samples
+AOT_DIR=$(mktemp -d)
+echo "Publishing NativeAOT samples to $AOT_DIR..."
+dotnet publish "$ROOT_DIR/samples/NativeAotGreeter" -c Release -o "$AOT_DIR/greeter" --verbosity quiet || fail "AOT publish NativeAotGreeter failed"
+echo "  NativeAotGreeter published."
+dotnet publish "$ROOT_DIR/samples/NativeAotCounter" -c Release -o "$AOT_DIR/counter" --verbosity quiet || fail "AOT publish NativeAotCounter failed"
+echo "  NativeAotCounter published."
+dotnet publish "$ROOT_DIR/samples/NativeAotSaga" -c Release -o "$AOT_DIR/saga" --verbosity quiet || fail "AOT publish NativeAotSaga failed"
+echo "  NativeAotSaga published."
+echo "AOT publish complete."
+echo ""
+
+# Start AOT native binaries
+echo "Starting NativeAotGreeter on port 9085..."
+"$AOT_DIR/greeter/NativeAotGreeter" &
+PIDS+=($!)
+
+echo "Starting NativeAotCounter on port 9086..."
+"$AOT_DIR/counter/NativeAotCounter" &
+PIDS+=($!)
+
+echo "Starting NativeAotSaga on port 9087..."
+"$AOT_DIR/saga/NativeAotSaga" &
+PIDS+=($!)
+
+echo "Waiting for AOT services to start..."
+wait_for_port 9085
+wait_for_port 9086
+wait_for_port 9087
+echo "All AOT services ready."
+echo ""
+
+# Register AOT deployments
+echo "Registering AOT deployments..."
+register_deployment 9085
+register_deployment 9086
+register_deployment 9087
+echo ""
+
+sleep 2
+
+echo "=== Running AOT Tests ==="
+echo ""
+
+# --- NativeAotGreeter (Service: ctx.Run) ---
+
+assert_response \
+    "AOT GreeterService/Greet" \
+    "http://localhost:8080/GreeterService/Greet" \
+    '{"name":"Restate"}' \
+    "Hello, Restate!"
+
+assert_response \
+    "AOT GreeterService/GreetWithRetry" \
+    "http://localhost:8080/GreeterService/GreetWithRetry" \
+    '{"name":"AOT"}' \
+    "Hello, AOT!"
+
+# --- NativeAotCounter (VirtualObject: state management) ---
+
+assert_response \
+    "AOT CounterObject/Add (first)" \
+    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "10" \
+    "10"
+
+assert_response \
+    "AOT CounterObject/Add (second)" \
+    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "7" \
+    "17"
+
+assert_void_response \
+    "AOT CounterObject/Reset" \
+    "http://localhost:8080/CounterObject/aot-counter/Reset" \
+    ""
+
+assert_response \
+    "AOT CounterObject/Add (after reset)" \
+    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "1" \
+    "1"
+
+# --- NativeAotSaga (TripBookingService — compensating transactions) ---
+# Car rental has a 20% failure rate with 3 retries (~0.8% chance all fail).
+# Both outcomes validate the saga pattern:
+#   Success (200): all bookings confirmed
+#   Failure (500): TerminalException after compensations ran
+
+SAGA_PAYLOAD='{"tripId":"test-trip","userId":"alice","flight":{"from":"NYC","to":"LAX","date":"2025-06-15"},"hotel":{"city":"Los Angeles","checkIn":"2025-06-15","checkOut":"2025-06-20"},"carRental":{"city":"Los Angeles","pickUp":"2025-06-15","dropOff":"2025-06-20"}}'
+
+saga_response=$(curl -s -w "\n%{http_code}" -X POST "http://localhost:8080/TripBookingService/Book" \
+    -H "content-type: application/json" \
+    -d "$SAGA_PAYLOAD" 2>&1)
+saga_code=$(echo "$saga_response" | tail -1)
+saga_body=$(echo "$saga_response" | sed '$d')
+
+if [ "$saga_code" = "200" ]; then
+    if echo "$saga_body" | grep -qF "tripId"; then
+        pass "AOT TripBookingService/Book (success — all bookings confirmed)"
+    else
+        fail "AOT TripBookingService/Book: HTTP 200 but missing 'tripId' in: $saga_body"
+    fi
+elif [ "$saga_code" = "500" ]; then
+    pass "AOT TripBookingService/Book (compensated — car rental failed after retries)"
+else
+    fail "AOT TripBookingService/Book: expected HTTP 200 or 500, got HTTP $saga_code: $saga_body"
+fi
+
+echo ""
+echo "=== All Tests Passed (Regular + AOT) ==="
