@@ -63,33 +63,4 @@ public static class RestateServiceCollectionExtensions
 
         return services;
     }
-
-    /// <inheritdoc cref="AddRestateAot(IServiceCollection, ServiceDefinition[])" />
-    /// <param name="services">The service collection.</param>
-    /// <param name="definitions">Service definitions resolved from the source-generated registry.</param>
-    /// <param name="serviceTypes">The CLR types of the service implementations for reflection-based DI registration.</param>
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    [UnconditionalSuppressMessage(
-        "AOT",
-        "IL2072",
-        Justification = "Service types are passed from source-generated code using typeof(T), which preserves the type metadata."
-    )]
-    [UnconditionalSuppressMessage(
-        "Trimming",
-        "IL2062",
-        Justification = "Service types are passed from source-generated code using typeof(T), which preserves the type metadata."
-    )]
-    public static IServiceCollection AddRestateAot(
-        this IServiceCollection services,
-        ServiceDefinition[] definitions,
-        Type[] serviceTypes
-    )
-    {
-        AddRestateAot(services, definitions);
-
-        foreach (var type in serviceTypes)
-            services.TryAddScoped(type);
-
-        return services;
-    }
 }

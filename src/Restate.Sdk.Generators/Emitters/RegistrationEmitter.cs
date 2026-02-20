@@ -18,17 +18,23 @@ internal static class RegistrationEmitter
         sb.AppendLine();
         sb.AppendLine("/// <summary>");
         sb.AppendLine("///     Source-generated AOT-friendly service registration.");
-        sb.AppendLine("///     Eliminates reflection-based DI registration for NativeAOT compatibility.");
         sb.AppendLine("/// </summary>");
         sb.AppendLine("internal static class RestateRegistration");
         sb.AppendLine("{");
         sb.AppendLine("    /// <summary>");
         sb.AppendLine("    ///     Registers all discovered Restate services into the DI container without reflection.");
-        sb.AppendLine("    ///     Call this from <c>RestateHostBuilder.BuildAot()</c> or directly in your DI setup.");
         sb.AppendLine("    /// </summary>");
         sb.AppendLine("    public static global::Microsoft.Extensions.DependencyInjection.IServiceCollection AddRestateGenerated(");
-        sb.AppendLine("        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services)");
+        sb.AppendLine("        this global::Microsoft.Extensions.DependencyInjection.IServiceCollection services,");
+        sb.AppendLine("        global::System.Text.Json.Serialization.JsonSerializerContext? jsonContext = null)");
         sb.AppendLine("    {");
+
+        // Configure JsonSerde when a context is provided
+        sb.AppendLine("        if (jsonContext is not null)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            global::Restate.Sdk.JsonSerde.Configure(jsonContext.Options);");
+        sb.AppendLine("        }");
+        sb.AppendLine();
 
         // Build the definitions array
         sb.AppendLine("        var definitions = new global::Restate.Sdk.Endpoint.ServiceDefinition[]");
@@ -46,7 +52,6 @@ internal static class RegistrationEmitter
         sb.AppendLine("        };");
         sb.AppendLine();
 
-        // Call the public AddRestateAot method (definitions only — no Type[] needed)
         sb.AppendLine("        global::Restate.Sdk.Hosting.RestateServiceCollectionExtensions.AddRestateAot(services, definitions);");
         sb.AppendLine();
 

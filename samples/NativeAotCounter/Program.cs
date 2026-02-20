@@ -1,12 +1,11 @@
-using NativeAotGreeter;
+using NativeAotCounter;
 using Restate.Sdk.Generated;
 using Restate.Sdk.Hosting;
 
-// NativeAOT-compatible Restate endpoint.
-// Uses BuildAot() with source-generated AddRestateGenerated() to avoid reflection.
+// NativeAOT-compatible Restate endpoint with a Virtual Object.
 // Publish with: dotnet publish -c Release
 await RestateHost
     .CreateBuilder()
-    .WithPort(9085)
+    .WithPort(9086)
     .BuildAot(services => services.AddRestateGenerated(AppJsonContext.Default))
     .RunAsync();
