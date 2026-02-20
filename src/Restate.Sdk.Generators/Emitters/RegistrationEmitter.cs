@@ -46,24 +46,22 @@ internal static class RegistrationEmitter
         sb.AppendLine("        };");
         sb.AppendLine();
 
-        // Build the types array
-        sb.AppendLine("        var serviceTypes = new global::System.Type[]");
-        sb.AppendLine("        {");
+        // Call the public AddRestateAot method (definitions only — no Type[] needed)
+        sb.AppendLine("        global::Restate.Sdk.Hosting.RestateServiceCollectionExtensions.AddRestateAot(services, definitions);");
+        sb.AppendLine();
 
+        // Register each service with an explicit factory lambda (AOT-safe, no reflection)
         foreach (var service in services)
         {
             var fqClass = string.IsNullOrEmpty(service.Namespace)
                 ? $"global::{service.ClassName}"
                 : $"global::{service.Namespace}.{service.ClassName}";
 
-            sb.AppendLine($"            typeof({fqClass}),");
+            sb.AppendLine($"        global::Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddScoped<{fqClass}>(services);");
         }
 
-        sb.AppendLine("        };");
         sb.AppendLine();
-
-        // Call the public AddRestateAot method
-        sb.AppendLine("        return global::Restate.Sdk.Hosting.RestateServiceCollectionExtensions.AddRestateAot(services, definitions, serviceTypes);");
+        sb.AppendLine("        return services;");
         sb.AppendLine("    }");
         sb.AppendLine("}");
 

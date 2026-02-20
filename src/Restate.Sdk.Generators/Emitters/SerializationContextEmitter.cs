@@ -28,6 +28,7 @@ internal static class SerializationContextEmitter
         sb.AppendLine("using System.Runtime.CompilerServices;");
         sb.AppendLine("using System.Text.Json;");
         sb.AppendLine("using System.Text.Json.Serialization;");
+        sb.AppendLine("using System.Text.Json.Serialization.Metadata;");
         sb.AppendLine();
         sb.AppendLine("namespace Restate.Sdk.Generated;");
         sb.AppendLine();
@@ -57,6 +58,8 @@ internal static class SerializationContextEmitter
         sb.AppendLine("            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,");
         sb.AppendLine("            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,");
         sb.AppendLine("        };");
+        sb.AppendLine("        if (JsonSerializer.IsReflectionEnabledByDefault)");
+        sb.AppendLine("            options.TypeInfoResolver = new DefaultJsonTypeInfoResolver();");
         sb.AppendLine("        global::Restate.Sdk.JsonSerde.Configure(options);");
         sb.AppendLine("    }");
         sb.AppendLine("}");
