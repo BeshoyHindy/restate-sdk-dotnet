@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-02-23
+
+### Added
+
+- Retry policy support for `ctx.Run()` side effects with configurable exponential backoff (`RetryPolicy`)
+- Idempotency key support via `CallOptions` for service-to-service calls
+- `CancelInvocation(string invocationId)` API for cancelling running invocations
+- Native AOT support: `BuildAot()`, `AddRestateAot()`, `RegistrationEmitter` source generator
+- 5 new samples: FanOut, Saga, NativeAotGreeter, NativeAotCounter, NativeAotSaga
+- Mock context support for RetryPolicy, CallOptions, and CancelInvocation in `Restate.Sdk.Testing`
+- Interface conformance tests for new API surface
+
+### Fixed
+
+- `ProtocolReader` double-complete on dispose — idempotent guard prevents crash (contributed by @stevefan1999-personal)
+- `ProtocolWriter` double-complete on dispose — same idempotent guard pattern
+- Journal index misalignment after retry exhaustion when handler continues (saga compensation pattern)
+- Sample port conflicts — all 9 samples now have unique ports (9080–9089)
+- Solution file updated to include all new sample projects
+
+## [0.1.0-alpha.3] - 2026-02-12
+
+### Fixed
+
+- Lambda handler API: use generic `Bind<T>()` instead of `Action<Type>` for type-safe handler registration
+
 ## [0.1.0-alpha.2] - 2026-02-11
 
 ### Fixed

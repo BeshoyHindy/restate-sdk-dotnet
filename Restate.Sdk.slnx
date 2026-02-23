@@ -6,9 +6,14 @@
     </Configurations>
     <Folder Name="/samples/">
         <Project Path="samples/Counter/Counter.csproj"/>
+        <Project Path="samples/FanOut/FanOut.csproj"/>
         <Project Path="samples/Greeter/Greeter.csproj"/>
-        <Project Path="samples/TicketReservation/TicketReservation.csproj"/>
+        <Project Path="samples/NativeAotCounter/NativeAotCounter.csproj"/>
+        <Project Path="samples/NativeAotGreeter/NativeAotGreeter.csproj"/>
+        <Project Path="samples/NativeAotSaga/NativeAotSaga.csproj"/>
+        <Project Path="samples/Saga/Saga.csproj"/>
         <Project Path="samples/SignupWorkflow/SignupWorkflow.csproj"/>
+        <Project Path="samples/TicketReservation/TicketReservation.csproj"/>
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>

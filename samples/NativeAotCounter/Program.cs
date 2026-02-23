@@ -6,6 +6,6 @@ using Restate.Sdk.Hosting;
 // Publish with: dotnet publish -c Release
 await RestateHost
     .CreateBuilder()
-    .WithPort(9086)
+    .WithPort(9088)
     .BuildAot(services => services.AddRestateGenerated(AppJsonContext.Default))
     .RunAsync();
