@@ -37,12 +37,13 @@ public static class RestateEndpointRouteBuilderExtensions
         if (acceptHeader.Contains("*/*", StringComparison.Ordinal))
             return SupportedContentTypes[^1];
 
-        // Find the highest version we support that the client also supports
-        foreach (var supported in SupportedContentTypes)
-        {
-            if (acceptHeader.Contains(supported, StringComparison.OrdinalIgnoreCase))
-                return supported;
-        }
+        // Check version-specific substrings directly (highest priority first)
+        if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
+            return SupportedContentTypes[0];
+        if (acceptHeader.Contains("endpointmanifest.v2", StringComparison.OrdinalIgnoreCase))
+            return SupportedContentTypes[1];
+        if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
+            return SupportedContentTypes[2];
 
         return null; // No mutually supported version → 415
     }
