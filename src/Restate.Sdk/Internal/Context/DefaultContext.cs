@@ -58,6 +58,21 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return _stateMachine.RunAsync(name, () => action(runCtx), Aborted);
     }
 
+    public override ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy)
+    {
+        return _stateMachine.RunAsync(name, action, Aborted, retryPolicy);
+    }
+
+    public override ValueTask Run(string name, Func<Task> action, RetryPolicy retryPolicy)
+    {
+        return _stateMachine.RunAsync(name, action, Aborted, retryPolicy);
+    }
+
+    public override ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy)
+    {
+        return _stateMachine.RunAsync(name, () => Task.FromResult(action()), Aborted, retryPolicy);
+    }
+
     public override IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action)
     {
         var task = _stateMachine.RunFutureAsync(name, action, Aborted);
@@ -108,6 +123,23 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         object? request = null)
     {
         return _stateMachine.CallAsync<TResponse>(service, key, handler, request, Aborted);
+    }
+
+    public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
+        CallOptions options)
+    {
+        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey, Aborted);
+    }
+
+    public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
+        CallOptions options)
+    {
+        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey, Aborted);
+    }
+
+    public override ValueTask CancelInvocation(string invocationId)
+    {
+        return _stateMachine.CancelInvocationAsync(invocationId, Aborted);
     }
 
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,

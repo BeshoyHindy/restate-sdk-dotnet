@@ -19,7 +19,8 @@ internal enum JournalEntryType
     PeekPromise,
     CompletePromise,
     AttachInvocation,
-    GetInvocationOutput
+    GetInvocationOutput,
+    SendSignal
 }
 
 internal readonly struct JournalEntry

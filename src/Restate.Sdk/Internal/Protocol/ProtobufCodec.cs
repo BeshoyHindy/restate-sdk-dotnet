@@ -365,4 +365,31 @@ internal static class ProtobufCodec
             Message = message
         };
     }
+
+    /// <summary>
+    ///     Creates a SendSignalCommandMessage with the CANCEL built-in signal
+    ///     to cancel a running invocation identified by its invocation ID.
+    /// </summary>
+    public static Gen.SendSignalCommandMessage CreateCancelInvocationCommand(string targetInvocationId)
+    {
+        return new Gen.SendSignalCommandMessage
+        {
+            TargetInvocationId = targetInvocationId,
+            Idx = 1, // BuiltInSignal.CANCEL = 1
+            Void = new Gen.Void()
+        };
+    }
+
+    /// <summary>
+    ///     Creates a CallCommandMessage with an optional idempotency key.
+    /// </summary>
+    public static Gen.CallCommandMessage CreateCallCommandWithOptions(
+        string service, string handler, string? key,
+        ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx,
+        string? idempotencyKey)
+    {
+        var msg = CreateCallCommand(service, handler, key, parameter, completionId, invocationIdNotificationIdx);
+        if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
+        return msg;
+    }
 }

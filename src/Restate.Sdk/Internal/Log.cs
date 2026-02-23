@@ -83,4 +83,12 @@ internal static partial class Log
     [LoggerMessage(EventId = 109, Level = LogLevel.Trace,
         Message = "[{InvocationId}] State transition: {OldState} -> {NewState}")]
     public static partial void StateTransition(ILogger logger, string invocationId, string oldState, string newState);
+
+    [LoggerMessage(EventId = 110, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Side effect '{Name}' retrying (attempt {Attempt}, delay {Delay})")]
+    public static partial void SideEffectRetrying(ILogger logger, string name, int attempt, TimeSpan delay, string invocationId);
+
+    [LoggerMessage(EventId = 111, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Cancelling invocation '{TargetInvocationId}'")]
+    public static partial void CancellingInvocation(ILogger logger, string invocationId, string targetInvocationId);
 }

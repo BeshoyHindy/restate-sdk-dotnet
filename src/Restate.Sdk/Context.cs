@@ -37,12 +37,47 @@ public abstract class Context : IContext
     /// <summary>Executes an async void side effect with a restricted run context.</summary>
     public abstract ValueTask Run(string name, Func<IRunContext, Task> action);
 
+    /// <summary>
+    ///     Executes an async side effect durably with a custom retry policy.
+    ///     The SDK retries locally with exponential backoff before propagating failures.
+    /// </summary>
+    public abstract ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy);
+
+    /// <summary>
+    ///     Executes an async void side effect durably with a custom retry policy.
+    /// </summary>
+    public abstract ValueTask Run(string name, Func<Task> action, RetryPolicy retryPolicy);
+
+    /// <summary>
+    ///     Executes a synchronous side effect durably with a custom retry policy.
+    ///     The SDK retries locally with exponential backoff before propagating failures.
+    /// </summary>
+    public abstract ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy);
+
     /// <summary>Calls a handler on a stateless service and awaits its response.</summary>
     public abstract ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null);
 
     /// <summary>Calls a handler on a keyed virtual object or workflow and awaits its response.</summary>
     public abstract ValueTask<TResponse> Call<TResponse>(string service, string key, string handler,
         object? request = null);
+
+    /// <summary>
+    ///     Calls a handler on a stateless service with call options (e.g., idempotency key).
+    /// </summary>
+    public abstract ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
+        CallOptions options);
+
+    /// <summary>
+    ///     Calls a handler on a keyed virtual object or workflow with call options.
+    /// </summary>
+    public abstract ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
+        CallOptions options);
+
+    /// <summary>
+    ///     Cancels a running invocation by sending a cancel signal.
+    ///     The target invocation will be aborted with a cancellation error.
+    /// </summary>
+    public abstract ValueTask CancelInvocation(string invocationId);
 
     /// <summary>Sends a one-way invocation to a stateless service. Returns a handle to track the invocation.</summary>
     public abstract ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,

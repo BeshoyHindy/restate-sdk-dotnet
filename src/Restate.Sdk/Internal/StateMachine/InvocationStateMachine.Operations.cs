@@ -49,7 +49,8 @@ internal sealed partial class InvocationStateMachine
         return result;
     }
 
-    public async ValueTask<T> RunAsync<T>(string name, Func<Task<T>> action, CancellationToken ct)
+    public async ValueTask<T> RunAsync<T>(string name, Func<Task<T>> action, CancellationToken ct,
+        RetryPolicy? retryPolicy = null)
     {
         EnsureActive();
 
@@ -59,7 +60,12 @@ internal sealed partial class InvocationStateMachine
             return Deserialize<T>(replay.Result);
         }
 
-        var result = await action().ConfigureAwait(false);
+        T result;
+        if (retryPolicy is not null)
+            result = await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
+        else
+            result = await action().ConfigureAwait(false);
+
         var serialized = Serialize(result);
 
         WriteRunCommand(name);
@@ -73,7 +79,8 @@ internal sealed partial class InvocationStateMachine
         return result;
     }
 
-    public async ValueTask RunAsync(string name, Func<Task> action, CancellationToken ct)
+    public async ValueTask RunAsync(string name, Func<Task> action, CancellationToken ct,
+        RetryPolicy? retryPolicy = null)
     {
         EnsureActive();
 
@@ -83,7 +90,10 @@ internal sealed partial class InvocationStateMachine
             return;
         }
 
-        await action().ConfigureAwait(false);
+        if (retryPolicy is not null)
+            await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
+        else
+            await action().ConfigureAwait(false);
 
         WriteRunCommand(name);
         WriteRunProposal(ReadOnlySpan<byte>.Empty);
@@ -92,6 +102,90 @@ internal sealed partial class InvocationStateMachine
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+    }
+
+    // ------- Retry logic -------
+
+    private async Task<T> ExecuteWithRetryAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
+        CancellationToken ct)
+    {
+        var startTime = DateTimeOffset.UtcNow;
+        var attempt = 0;
+
+        while (true)
+        {
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (TerminalException)
+            {
+                throw; // Never retry terminal exceptions
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                var elapsed = DateTimeOffset.UtcNow - startTime;
+                if (!policy.ShouldRetry(attempt + 1, elapsed))
+                {
+                    // Exhausted retries — propose failure
+                    var completionId = (uint)_journal.Count;
+                    var failureMsg = ProtobufCodec.CreateRunProposalFailure(
+                        completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
+                    WriteRunCommand(name);
+                    WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
+                    await FlushAsync(ct).ConfigureAwait(false);
+
+                    throw new TerminalException(
+                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
+                }
+
+                var delay = policy.GetDelay(attempt);
+                Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                attempt++;
+            }
+        }
+    }
+
+    private async Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
+        CancellationToken ct)
+    {
+        var startTime = DateTimeOffset.UtcNow;
+        var attempt = 0;
+
+        while (true)
+        {
+            try
+            {
+                await action().ConfigureAwait(false);
+                return;
+            }
+            catch (TerminalException)
+            {
+                throw; // Never retry terminal exceptions
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                var elapsed = DateTimeOffset.UtcNow - startTime;
+                if (!policy.ShouldRetry(attempt + 1, elapsed))
+                {
+                    var completionId = (uint)_journal.Count;
+                    var failureMsg = ProtobufCodec.CreateRunProposalFailure(
+                        completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
+                    WriteRunCommand(name);
+                    WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
+                    await FlushAsync(ct).ConfigureAwait(false);
+
+                    throw new TerminalException(
+                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
+                }
+
+                var delay = policy.GetDelay(attempt);
+                Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                attempt++;
+            }
+        }
     }
 
     private void WriteRunCommand(string name)
@@ -722,6 +816,73 @@ internal sealed partial class InvocationStateMachine
         var completion = await tcs.Task.ConfigureAwait(false);
         var invocationIdStr = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
         return new InvocationHandle(invocationIdStr);
+    }
+
+    // ------- Cancel invocation -------
+
+    public async ValueTask CancelInvocationAsync(string targetInvocationId, CancellationToken ct)
+    {
+        EnsureActive();
+
+        if (State == InvocationState.Replaying)
+        {
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            return;
+        }
+
+        var msg = ProtobufCodec.CreateCancelInvocationCommand(targetInvocationId);
+        WriteCommand(MessageType.SendSignalCommand, msg);
+
+        _journal.Append(JournalEntry.Completed(JournalEntryType.SendSignal, ReadOnlyMemory<byte>.Empty));
+
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        Log.CancellingInvocation(Logger, InvocationId, targetInvocationId);
+    }
+
+    // ------- Calls with idempotency key -------
+
+    private void WriteCallCommandMessageWithOptions(string service, string handler, string? key,
+        ReadOnlyMemory<byte> requestBytes,
+        uint invocationIdNotificationIdx, uint completionId, string? idempotencyKey)
+    {
+        var msg = ProtobufCodec.CreateCallCommandWithOptions(
+            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx, idempotencyKey);
+        WriteCommand(MessageType.CallCommand, msg);
+    }
+
+    public async ValueTask<TResponse> CallAsync<TResponse>(
+        string service, string? key, string handler, object? request, string? idempotencyKey, CancellationToken ct)
+    {
+        EnsureActive();
+
+        if (State == InvocationState.Replaying)
+        {
+            var replay = await ReplayNextEntryAsync(JournalEntryType.Call, null, ct).ConfigureAwait(false);
+            return Deserialize<TResponse>(replay.Result);
+        }
+
+        var requestBytes = SerializeObject(request);
+
+        // BUG 1 FIX: Allocate dummy slot for invocation ID notification (SDK ignores it for calls)
+        var invocationIdNotificationIdx = (uint)_journal.Count;
+        _journal.Append(JournalEntry.Completed(JournalEntryType.Call, ReadOnlyMemory<byte>.Empty));
+        _completions.GetOrRegister((int)invocationIdNotificationIdx); // Register so CompletionManager doesn't complain
+
+        var completionId = (uint)_journal.Count;
+        // Register journal entry and TCS before flush to prevent race with incoming notifications.
+        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        var tcs = _completions.GetOrRegister(entryIndex);
+
+        WriteCallCommandMessageWithOptions(service, handler, key, requestBytes, invocationIdNotificationIdx,
+            completionId, idempotencyKey);
+
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        var completion = await tcs.Task.ConfigureAwait(false);
+        completion.ThrowIfFailure();
+        return Deserialize<TResponse>(completion.Value);
     }
 
     // ------- Output / Error -------
