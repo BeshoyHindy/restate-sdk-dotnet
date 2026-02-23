@@ -127,13 +127,17 @@ internal sealed partial class InvocationStateMachine
                 var elapsed = DateTimeOffset.UtcNow - startTime;
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
                 {
-                    // Exhausted retries — propose failure
+                    // Exhausted retries — propose failure and record journal entry
                     var completionId = (uint)_journal.Count;
                     var failureMsg = ProtobufCodec.CreateRunProposalFailure(
                         completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
                     WriteRunCommand(name);
                     WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
                     await FlushAsync(ct).ConfigureAwait(false);
+
+                    // Append journal entry so _journal.Count advances — subsequent operations
+                    // (e.g. saga compensations catching this TerminalException) use correct indices.
+                    _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
 
                     throw new TerminalException(
                         $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
@@ -175,6 +179,8 @@ internal sealed partial class InvocationStateMachine
                     WriteRunCommand(name);
                     WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
                     await FlushAsync(ct).ConfigureAwait(false);
+
+                    _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
 
                     throw new TerminalException(
                         $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);

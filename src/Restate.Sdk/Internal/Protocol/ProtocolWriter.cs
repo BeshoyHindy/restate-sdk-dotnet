@@ -11,6 +11,7 @@ internal sealed class ProtocolWriter : IDisposable
 {
     private readonly PipeWriter? _pipeWriter;
     private readonly IBufferWriter<byte> _writer;
+    private bool _completed;
 
     public ProtocolWriter(IBufferWriter<byte> writer)
     {
@@ -29,7 +30,7 @@ internal sealed class ProtocolWriter : IDisposable
 
     public void Dispose()
     {
-        Complete();
+        try { Complete(); } catch { /* stream may already be broken */ }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -84,6 +85,8 @@ internal sealed class ProtocolWriter : IDisposable
 
     public void Complete(Exception? exception = null)
     {
+        if (_completed) return;
+        _completed = true;
         _pipeWriter?.Complete(exception);
     }
 }
