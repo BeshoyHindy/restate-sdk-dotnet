@@ -78,9 +78,18 @@ internal sealed class ProtocolReader : IDisposable
             if (buffer.Length < MessageHeader.Size)
                 return false;
 
-            Span<byte> headerBytes = stackalloc byte[MessageHeader.Size];
-            buffer.Slice(0, MessageHeader.Size).CopyTo(headerBytes);
-            _pendingHeader = MessageHeader.Read(headerBytes);
+            // Fast path: single-segment buffer (common case with Kestrel)
+            if (buffer.FirstSpan.Length >= MessageHeader.Size)
+            {
+                _pendingHeader = MessageHeader.Read(buffer.FirstSpan);
+            }
+            else
+            {
+                Span<byte> headerBytes = stackalloc byte[MessageHeader.Size];
+                buffer.Slice(0, MessageHeader.Size).CopyTo(headerBytes);
+                _pendingHeader = MessageHeader.Read(headerBytes);
+            }
+
             buffer = buffer.Slice(MessageHeader.Size);
             _state = DecoderState.WaitingPayload;
         }
@@ -99,7 +108,12 @@ internal sealed class ProtocolReader : IDisposable
 
             var payloadSlice = buffer.Slice(0, _pendingHeader.Length);
             var rented = ArrayPool<byte>.Shared.Rent((int)_pendingHeader.Length);
-            payloadSlice.CopyTo(rented);
+
+            // Fast path: single-segment avoids ReadOnlySequence.CopyTo overhead
+            if (payloadSlice.IsSingleSegment)
+                payloadSlice.FirstSpan.CopyTo(rented);
+            else
+                payloadSlice.CopyTo(rented);
 
             message = RawMessage.Create(_pendingHeader, rented, (int)_pendingHeader.Length);
             buffer = buffer.Slice(_pendingHeader.Length);

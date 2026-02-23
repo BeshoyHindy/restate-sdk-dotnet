@@ -7,6 +7,7 @@ internal sealed class InvocationJournal : IDisposable
     private const int DefaultCapacity = 4;
 
     private JournalEntry[] _entries;
+    private List<byte[]>? _pooledBuffers;
 
     public InvocationJournal()
     {
@@ -28,8 +29,23 @@ internal sealed class InvocationJournal : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Tracks a pooled buffer (detached from RawMessage) for batch return on Dispose.
+    /// </summary>
+    public void TrackPooledBuffer(byte[] buffer)
+    {
+        (_pooledBuffers ??= new List<byte[]>(8)).Add(buffer);
+    }
+
     public void Dispose()
     {
+        if (_pooledBuffers is not null)
+        {
+            foreach (var buf in _pooledBuffers)
+                ArrayPool<byte>.Shared.Return(buf);
+            _pooledBuffers = null;
+        }
+
         if (_entries.Length > 0)
         {
             ArrayPool<JournalEntry>.Shared.Return(_entries, true);

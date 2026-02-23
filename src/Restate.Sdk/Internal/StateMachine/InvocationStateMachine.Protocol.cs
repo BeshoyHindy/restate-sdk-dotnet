@@ -73,10 +73,10 @@ internal sealed partial class InvocationStateMachine
 
             if (msg.Header.Type.IsCommand())
             {
-                var entry = JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type),
-                    msg.PayloadMemory.ToArray());
-                _journal.Append(entry);
+                var (detachedBuf, detachedMem) = msg.DetachPayload();
+                _journal.TrackPooledBuffer(detachedBuf);
+                _journal.Append(JournalEntry.Completed(
+                    MapMessageTypeToEntry(msg.Header.Type), detachedMem));
             }
             else if (msg.Header.Type.IsNotification())
             {
@@ -209,11 +209,10 @@ internal sealed partial class InvocationStateMachine
 
             if (msg.Header.Type.IsCommand())
             {
-                var entry = JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type),
-                    msg.PayloadMemory.ToArray(),
-                    name);
-                _journal.Append(entry);
+                var (detachedBuf, detachedMem) = msg.DetachPayload();
+                _journal.TrackPooledBuffer(detachedBuf);
+                _journal.Append(JournalEntry.Completed(
+                    MapMessageTypeToEntry(msg.Header.Type), detachedMem, name));
             }
             else if (msg.Header.Type.IsNotification())
             {

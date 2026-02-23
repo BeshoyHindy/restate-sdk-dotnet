@@ -23,8 +23,7 @@ internal sealed partial class InvocationStateMachine
         WriteRunProposal(serialized.Span);
 
         var flushTask = FlushAsync(ct);
-        // ToArray: serialized references _serializeBuffer which is reused across Serialize calls.
-        var serializedCopy = serialized.ToArray();
+        var serializedCopy = CopyToPooled(serialized);
         if (flushTask.IsCompletedSuccessfully)
         {
             _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
@@ -41,7 +40,7 @@ internal sealed partial class InvocationStateMachine
         return Deserialize<T>(replay.Result);
     }
 
-    private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, byte[] serializedCopy, string name)
+    private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, ReadOnlyMemory<byte> serializedCopy, string name)
     {
         await flushTask.ConfigureAwait(false);
         _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
@@ -73,8 +72,7 @@ internal sealed partial class InvocationStateMachine
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        // ToArray: serialized references _serializeBuffer which is reused across Serialize calls.
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serialized.ToArray(), name));
+        _journal.Append(JournalEntry.Completed(JournalEntryType.Run, CopyToPooled(serialized), name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
         return result;
     }
@@ -232,8 +230,7 @@ internal sealed partial class InvocationStateMachine
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        // ToArray: serialized references _serializeBuffer which is reused across Serialize calls.
-        var serializedCopy = serialized.ToArray();
+        var serializedCopy = CopyToPooled(serialized);
         _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
 
@@ -517,7 +514,7 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Completed(JournalEntryType.SetState, ReadOnlyMemory<byte>.Empty, key));
 
         _initialState ??= new Dictionary<string, ReadOnlyMemory<byte>>(4);
-        _initialState[key] = serialized.ToArray();
+        _initialState[key] = CopyToPooled(serialized);
     }
 
     public void ClearState(string key)
@@ -627,15 +624,20 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Builds an awakeable ID in the V4 signal format:
     ///     "sign_1" + Base64UrlSafe(rawInvocationId + BigEndian32(signalIndex))
+    ///     Uses System.Buffers.Text.Base64Url for single-allocation encoding (no intermediate strings).
     /// </summary>
     private string BuildAwakeableId(int signalIndex)
     {
         var rawId = RawInvocationId;
         var bufferLength = rawId.Length + 4;
-        Span<byte> buffer = bufferLength <= 256 ? stackalloc byte[bufferLength] : new byte[bufferLength];
-        rawId.CopyTo(buffer);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(buffer[rawId.Length..], (uint)signalIndex);
-        return $"sign_1{Convert.ToBase64String(buffer, Base64FormattingOptions.None).TrimEnd('=').Replace('+', '-').Replace('/', '_')}";
+        Span<byte> byteBuffer = bufferLength <= 256 ? stackalloc byte[bufferLength] : new byte[bufferLength];
+        rawId.CopyTo(byteBuffer);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(byteBuffer[rawId.Length..], (uint)signalIndex);
+
+        Span<char> charBuffer = stackalloc char[6 + System.Buffers.Text.Base64Url.GetEncodedLength(bufferLength)];
+        "sign_1".CopyTo(charBuffer);
+        System.Buffers.Text.Base64Url.EncodeToChars(byteBuffer, charBuffer[6..], out _, out int charsWritten);
+        return new string(charBuffer[..(6 + charsWritten)]);
     }
 
     public void ResolveAwakeable(string id, ReadOnlyMemory<byte> payload)

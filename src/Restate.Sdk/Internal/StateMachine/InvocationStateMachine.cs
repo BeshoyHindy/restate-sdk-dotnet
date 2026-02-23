@@ -41,6 +41,9 @@ internal sealed partial class InvocationStateMachine : IDisposable
     // Reset() is called before each use to point at _serializeBuffer.
     private Utf8JsonWriter? _jsonWriter;
 
+    // Tracks ArrayPool rentals from CopyToPooled for batch return on Dispose.
+    private List<byte[]>? _rentedBuffers;
+
     public InvocationStateMachine(ProtocolReader reader, ProtocolWriter writer,
         JsonSerializerOptions? jsonOptions = null, ILogger? logger = null)
     {
@@ -80,7 +83,27 @@ internal sealed partial class InvocationStateMachine : IDisposable
         _signalCompletions.CancelAll();
         _journal.Dispose();
         _jsonWriter?.Dispose();
+
+        if (_rentedBuffers is not null)
+        {
+            foreach (var buf in _rentedBuffers)
+                ArrayPool<byte>.Shared.Return(buf);
+            _rentedBuffers = null;
+        }
+
         State = InvocationState.Closed;
+    }
+
+    /// <summary>
+    ///     Copies serialized bytes to a pooled buffer, tracked for batch return on Dispose.
+    ///     Use instead of .ToArray() when the source references the reusable _serializeBuffer.
+    /// </summary>
+    private ReadOnlyMemory<byte> CopyToPooled(ReadOnlyMemory<byte> source)
+    {
+        var rented = ArrayPool<byte>.Shared.Rent(source.Length);
+        source.Span.CopyTo(rented);
+        (_rentedBuffers ??= new List<byte[]>(8)).Add(rented);
+        return rented.AsMemory(0, source.Length);
     }
 
     public void Initialize(string invocationId, string key, ulong randomSeed,
