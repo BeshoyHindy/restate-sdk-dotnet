@@ -6,8 +6,8 @@
     <!-- SourceLink (NuGet debugging) -->
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.103" />
     <!-- Roslyn (generator) -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.3.0-2.25625.1" />
     <!-- Logging abstractions (Restate.Sdk core) -->
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
     <!-- AWS Lambda -->
