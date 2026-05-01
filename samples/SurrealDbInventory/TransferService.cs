@@ -5,22 +5,24 @@ using SurrealDb.Net.Models;
 namespace SurrealDbInventory;
 
 /// <summary>
-///   Orchestrates durable inventory transfers between warehouses.
-///   Each step runs inside ctx.Run, so Restate journals the result and any
-///   crash mid-transfer resumes from the last completed step — no duplicate
-///   writes, no lost updates, no manual two-phase commit.
+///   Orchestrates durable inventory transfers between warehouses by routing
+///   each side of the transfer through the keyed WarehouseObject. The
+///   VirtualObject's per-key exclusive concurrency makes the typed
+///   Select/Upsert calls race-free without needing conditional SurrealQL.
+///   Restate journals each ctx.Call + ctx.Run, so a crash mid-transfer
+///   resumes from the last completed step — no duplicate writes.
 /// </summary>
 [Service]
 public sealed class TransferService(ISurrealDbClient db)
 {
   /// <summary>
   ///   Three durable steps:
-  ///     1. Atomic conditional deduct from source (TerminalException on insufficient stock)
-  ///     2. Read-and-add to destination
+  ///     1. Deduct from source via WarehouseObject (TerminalException on insufficient)
+  ///     2. Add to destination via WarehouseObject
   ///     3. Append audit record
-  ///   Each SurrealDB write is wrapped in ctx.Run so it executes exactly once
-  ///   across retries. The conditional UPDATE in step 1 is server-atomic,
-  ///   guarding against overdraw in a single statement.
+  ///   Each ctx.Call is journaled, so retries replay from the journal rather
+  ///   than re-invoking handlers. The audit RecordId comes from ctx.Random
+  ///   so it stays stable across replay.
   /// </summary>
   [Handler]
   public async Task<TransferResult> Transfer(Context ctx, TransferRequest request)
@@ -29,59 +31,25 @@ public sealed class TransferService(ISurrealDbClient db)
       $"Starting transfer: {request.Quantity}x {request.ProductName} " +
       $"from {request.SourceWarehouse} to {request.DestinationWarehouse}");
 
-    var sourceStockId = RecordId.From("stock",
-      $"{request.SourceWarehouse}_{request.ProductName}");
-    var destStockId = RecordId.From("stock",
-      $"{request.DestinationWarehouse}_{request.ProductName}");
+    var stockRequest = new AddStockRequest(request.ProductName, request.Quantity);
 
-    // Step 1: Conditional atomic deduct. SurrealDb.Net's typed CRUD
-    // (Update/Merge/Upsert) lacks a "decrement only if quantity >= qty"
-    // primitive, and a separate Select-then-Upsert would race under
-    // concurrent transfers from a stateless Service. The single-statement
-    // UPDATE ... WHERE ... RETURN AFTER guards overdraw at the DB layer;
-    // no row returned means insufficient stock, surfaced as a
-    // TerminalException so Restate doesn't retry.
-    var sourceRemaining = await ctx.Run("deduct-from-source", async () =>
-    {
-      var qty = request.Quantity;
-      var response = await db.Query(
-        $@"UPDATE {sourceStockId} SET Quantity -= {qty}
-           WHERE Quantity >= {qty}
-           RETURN AFTER");
-      response.EnsureAllOks();
+    // Step 1: deduct from source — handled inside WarehouseObject so the
+    // VirtualObject's exclusive lock per key prevents racing transfers.
+    var sourceLevel = await ctx.Call<StockLevel>(
+      "WarehouseObject", request.SourceWarehouse, "DeductStock", stockRequest);
 
-      var updated = response.GetValues<StockEntry>(0).FirstOrDefault();
-      if (updated is null)
-      {
-        throw new TerminalException(
-          $"Insufficient stock at {request.SourceWarehouse} for {request.ProductName}",
-          409);
-      }
-      return updated.Quantity;
-    });
+    ctx.Console.Log(
+      $"Deducted {request.Quantity} from source. Remaining: {sourceLevel.Quantity}");
 
-    ctx.Console.Log($"Deducted {request.Quantity} from source. Remaining: {sourceRemaining}");
+    // Step 2: add to destination — same exclusivity guarantee, different key.
+    var destinationLevel = await ctx.Call<StockLevel>(
+      "WarehouseObject", request.DestinationWarehouse, "AddStock", stockRequest);
 
-    // Step 2: Add to destination — read existing then upsert with new total.
-    var destinationTotal = await ctx.Run("add-to-destination", async () =>
-    {
-      var existing = await db.Select<StockEntry>(destStockId);
-      var total = (existing?.Quantity ?? 0) + request.Quantity;
+    ctx.Console.Log(
+      $"Added {request.Quantity} to destination. Total: {destinationLevel.Quantity}");
 
-      var updated = await db.Upsert(new StockEntry
-      {
-        Id = destStockId,
-        WarehouseId = request.DestinationWarehouse,
-        ProductName = request.ProductName,
-        Quantity = total,
-      });
-      return updated.Quantity;
-    });
-
-    ctx.Console.Log($"Added {request.Quantity} to destination. Total: {destinationTotal}");
-
-    // Step 3: Audit record. We pre-generate the RecordId via ctx.Random so the
-    // value is replay-safe and we avoid a server-side auto-id round-trip.
+    // Step 3: append audit row. Pre-generate the RecordId via ctx.Random so
+    // it's stable across replay; db.Create is the typed insert path.
     var auditUlid = ctx.Random.NextGuid().ToString("N");
     var transferId = $"transfer:{auditUlid}";
     await ctx.Run("record-transfer", async () =>
@@ -100,6 +68,7 @@ public sealed class TransferService(ISurrealDbClient db)
 
     ctx.Console.Log($"Transfer {transferId} completed successfully.");
 
-    return new TransferResult(transferId, "completed", sourceRemaining, destinationTotal);
+    return new TransferResult(
+      transferId, "completed", sourceLevel.Quantity, destinationLevel.Quantity);
   }
 }
