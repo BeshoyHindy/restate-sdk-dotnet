@@ -13,6 +13,8 @@ PIDS=()
 AOT_DIR=""
 RESTATE_IMAGE="docker.io/restatedev/restate:latest"
 RESTATE_CONTAINER="restate-ci"
+SURREALDB_IMAGE="surrealdb/surrealdb:v2.1.4"
+SURREALDB_CONTAINER="surrealdb-ci"
 
 cleanup() {
     echo "Cleaning up..."
@@ -23,6 +25,7 @@ cleanup() {
         rm -rf "$AOT_DIR"
     fi
     docker rm -f "$RESTATE_CONTAINER" 2>/dev/null || true
+    docker rm -f "$SURREALDB_CONTAINER" 2>/dev/null || true
     echo "Done."
 }
 trap cleanup EXIT
@@ -57,6 +60,17 @@ wait_for_restate() {
         sleep 1
     done
     fail "Restate admin not ready after $retries seconds"
+}
+
+wait_for_surrealdb() {
+    local retries=30
+    for ((i=1; i<=retries; i++)); do
+        if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    fail "SurrealDB not ready after $retries seconds"
 }
 
 register_deployment() {
@@ -134,6 +148,11 @@ echo "Starting Restate server..."
 docker run -d --name "$RESTATE_CONTAINER" --network host "$RESTATE_IMAGE"
 wait_for_restate
 echo "Restate server ready."
+
+echo "Starting SurrealDB server..."
+docker run -d --name "$SURREALDB_CONTAINER" --network host "$SURREALDB_IMAGE" start --user root --pass root
+wait_for_surrealdb
+echo "SurrealDB server ready."
 echo ""
 
 # 2. Build samples
@@ -159,11 +178,16 @@ echo "Starting SignupWorkflow on port 9084..."
 dotnet run --project "$ROOT_DIR/samples/SignupWorkflow" -c Release --no-build &
 PIDS+=($!)
 
+echo "Starting SurrealDbInventory on port 9088..."
+dotnet run --project "$ROOT_DIR/samples/SurrealDbInventory" -c Release --no-build &
+PIDS+=($!)
+
 echo "Waiting for services to start..."
 wait_for_port 9080
 wait_for_port 9081
 wait_for_port 9082
 wait_for_port 9084
+wait_for_port 9088
 echo "All services ready."
 echo ""
 
@@ -173,6 +197,7 @@ register_deployment 9080
 register_deployment 9081
 register_deployment 9082
 register_deployment 9084
+register_deployment 9088
 echo ""
 
 # Give Restate a moment to discover handlers
@@ -285,6 +310,54 @@ assert_void_response \
     "SignupWorkflow/GetStatus (query)" \
     "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
     "awaiting-verification"
+
+# --- SurrealDB Inventory (VirtualObject + Service with SurrealDB persistence) ---
+
+# Add stock to warehouse-east
+assert_response \
+    "WarehouseObject/AddStock (warehouse-east, widgets)" \
+    "http://localhost:8080/WarehouseObject/warehouse-east/AddStock" \
+    '{"productName":"widget","quantity":100}' \
+    '"quantity":100'
+
+# Add more stock (should accumulate)
+assert_response \
+    "WarehouseObject/AddStock (warehouse-east, widgets +50)" \
+    "http://localhost:8080/WarehouseObject/warehouse-east/AddStock" \
+    '{"productName":"widget","quantity":50}' \
+    '"quantity":150'
+
+# Query stock
+assert_void_response \
+    "WarehouseObject/GetStock (warehouse-east)" \
+    "http://localhost:8080/WarehouseObject/warehouse-east/GetStock" \
+    "widget"
+
+# Transfer 25 widgets from east to west
+assert_response \
+    "TransferService/Transfer (east to west)" \
+    "http://localhost:8080/TransferService/Transfer" \
+    '{"sourceWarehouse":"warehouse-east","destinationWarehouse":"warehouse-west","productName":"widget","quantity":25}' \
+    '"status":"completed"'
+
+# Verify source warehouse stock reduced
+assert_void_response \
+    "WarehouseObject/GetStock (warehouse-east after transfer)" \
+    "http://localhost:8080/WarehouseObject/warehouse-east/GetStock" \
+    '"quantity":125'
+
+# Verify destination warehouse has stock
+assert_void_response \
+    "WarehouseObject/GetStock (warehouse-west after transfer)" \
+    "http://localhost:8080/WarehouseObject/warehouse-west/GetStock" \
+    '"quantity":25'
+
+# Transfer more than available should fail with 409
+assert_status \
+    "TransferService/Transfer (insufficient stock 409)" \
+    "http://localhost:8080/TransferService/Transfer" \
+    '{"sourceWarehouse":"warehouse-west","destinationWarehouse":"warehouse-east","productName":"widget","quantity":999}' \
+    "409"
 
 echo ""
 echo "=== Regular Tests Passed ==="

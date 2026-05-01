@@ -14,6 +14,8 @@
     <PackageVersion Include="Amazon.Lambda.Core" Version="2.8.1" />
     <PackageVersion Include="Amazon.Lambda.APIGatewayEvents" Version="2.7.3" />
     <PackageVersion Include="Amazon.Lambda.Serialization.SystemTextJson" Version="2.4.5" />
+    <!-- SurrealDB -->
+    <PackageVersion Include="SurrealDb.Net" Version="0.10.2" />
     <!-- Protocol Buffers -->
     <PackageVersion Include="Google.Protobuf" Version="3.34.0" />
     <PackageVersion Include="Grpc.Tools" Version="2.78.0" />

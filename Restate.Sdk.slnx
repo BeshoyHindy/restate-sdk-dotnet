@@ -14,6 +14,8 @@
         <Project Path="samples/Saga/Saga.csproj"/>
         <Project Path="samples/SignupWorkflow/SignupWorkflow.csproj"/>
         <Project Path="samples/TicketReservation/TicketReservation.csproj"/>
+        <Project Path="samples/SurrealDbInventory/SurrealDbInventory.csproj"/>
+        <Project Path="samples/EmailPipeline/EmailPipeline.csproj"/>
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>

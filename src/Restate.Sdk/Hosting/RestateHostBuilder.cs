@@ -1,7 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Restate.Sdk.Hosting;
@@ -72,8 +70,7 @@ public sealed class RestateHostBuilder
     public WebApplication Build()
     {
         var builder = WebApplication.CreateBuilder();
-
-        ConfigureKestrel(builder);
+        builder.WebHost.ConfigureRestate(_port);
 
         var types = _serviceTypes;
         builder.Services.AddRestate(opts =>
@@ -100,8 +97,7 @@ public sealed class RestateHostBuilder
     public WebApplication BuildAot(Action<IServiceCollection> configureServices)
     {
         var builder = WebApplication.CreateSlimBuilder();
-
-        ConfigureKestrel(builder);
+        builder.WebHost.ConfigureRestate(_port);
 
         configureServices(builder.Services);
 
@@ -109,26 +105,5 @@ public sealed class RestateHostBuilder
         app.MapRestate();
 
         return app;
-    }
-
-    private void ConfigureKestrel(WebApplicationBuilder builder)
-    {
-        builder.WebHost.ConfigureKestrel(options =>
-        {
-            options.ListenAnyIP(_port, listenOptions => { listenOptions.Protocols = HttpProtocols.Http2; });
-
-            // Restate uses bidirectional streaming: the runtime sends the
-            // StartMessage then pauses while the SDK processes and sends commands.
-            // Kestrel's default MinRequestBodyDataRate would abort these pauses.
-            options.Limits.MinRequestBodyDataRate = null;
-
-            // Replay journals can be large for long-running workflows.
-            // Remove the default 30 MB limit to avoid truncation.
-            options.Limits.MaxRequestBodySize = null;
-
-            // Increase HTTP/2 flow control windows for faster streaming throughput.
-            options.Limits.Http2.InitialConnectionWindowSize = 1024 * 1024; // 1 MB
-            options.Limits.Http2.InitialStreamWindowSize = 512 * 1024; // 512 KB
-        });
     }
 }

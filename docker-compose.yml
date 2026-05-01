@@ -8,5 +8,15 @@ services:
     volumes:
       - restate-data:/restate-data
 
+  surrealdb:
+    image: surrealdb/surrealdb:v2.1.4
+    container_name: surrealdb-server
+    command: start --user root --pass root
+    ports:
+      - "8000:8000"
+    volumes:
+      - surrealdb-data:/data
+
 volumes:
   restate-data:
+  surrealdb-data:
