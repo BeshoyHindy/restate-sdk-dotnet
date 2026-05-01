@@ -36,20 +36,20 @@ builder.WebHost.ConfigureRestate(port: 9088);
 // HTTP scheme — single shared client is concurrent-safe across overlapping
 // Restate invocations. ws:// would enable v3 transactions and live queries,
 // but it serializes all calls on one connection which deadlocks under load.
+const string Namespace = "inventory";
+const string Database = "warehouse";
+
 var endpoint = Environment.GetEnvironmentVariable("SURREALDB_ENDPOINT")
   ?? "http://127.0.0.1:8000";
-var ns = Environment.GetEnvironmentVariable("SURREALDB_NS") ?? "test";
-var database = Environment.GetEnvironmentVariable("SURREALDB_DB") ?? "test";
 var user = Environment.GetEnvironmentVariable("SURREALDB_USER") ?? "root";
 var pass = Environment.GetEnvironmentVariable("SURREALDB_PASS") ?? "root";
 
-// Singleton lifetime keeps the HttpClient alive. NamingPolicy=CamelCase maps
-// C# PascalCase to SurrealDB camelCase columns. Auth and Use happen at
-// startup so we can DEFINE the namespace before switching into it.
-var connectionString =
-  $"Endpoint={endpoint};Username={user};Password={pass}";
-
-builder.Services.AddSurreal(connectionString, ServiceLifetime.Singleton);
+// Singleton lifetime keeps the HttpClient alive across overlapping
+// invocations. Auth happens automatically; Use() runs after DEFINE so the
+// namespace/database exist before we switch into them.
+builder.Services.AddSurreal(
+  $"Endpoint={endpoint};Username={user};Password={pass}",
+  ServiceLifetime.Singleton);
 
 builder.Services.AddRestate(opts =>
 {
@@ -59,21 +59,23 @@ builder.Services.AddRestate(opts =>
 
 var app = builder.Build();
 
-// SurrealDB v3 strict mode requires explicit NAMESPACE/DATABASE/TABLE
-// definitions. Run the bootstrap once at startup so handlers see a ready
-// schema (stock + transfer tables, and an index for warehouseId lookups).
+// SurrealDB v3 strict mode rejects SELECT against undefined tables and
+// won't auto-create namespaces, so DEFINE everything once at startup.
+// DDL statements take literal identifiers (not parameters), which is why
+// the namespace/database names are baked in as constants above rather than
+// flowed through env vars.
 var db = app.Services.GetRequiredService<ISurrealDbClient>();
-var bootstrap = await db.RawQuery($$"""
-  DEFINE NAMESPACE IF NOT EXISTS {{ns}};
-  USE NAMESPACE {{ns}};
-  DEFINE DATABASE IF NOT EXISTS {{database}};
-  USE DATABASE {{database}};
+var bootstrap = await db.Query($"""
+  DEFINE NAMESPACE IF NOT EXISTS {Namespace};
+  USE NAMESPACE {Namespace};
+  DEFINE DATABASE IF NOT EXISTS {Database};
+  USE DATABASE {Database};
   DEFINE TABLE IF NOT EXISTS stock SCHEMALESS;
   DEFINE TABLE IF NOT EXISTS transfer SCHEMALESS;
   DEFINE INDEX IF NOT EXISTS stock_warehouse ON stock FIELDS WarehouseId;
 """);
 bootstrap.EnsureAllOks();
-await db.Use(ns, database);
+await db.Use(Namespace, Database);
 
 app.MapRestate();
 await app.RunAsync();
