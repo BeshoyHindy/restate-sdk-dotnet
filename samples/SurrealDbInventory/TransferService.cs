@@ -34,9 +34,13 @@ public sealed class TransferService(ISurrealDbClient db)
     var destStockId = RecordId.From("stock",
       $"{request.DestinationWarehouse}_{request.ProductName}");
 
-    // Step 1: Conditional atomic deduct. The WHERE clause guards against
-    // overdraw at the database — UPDATE returns no row if stock is
-    // insufficient, which we surface as a TerminalException (no retry).
+    // Step 1: Conditional atomic deduct. SurrealDb.Net's typed CRUD
+    // (Update/Merge/Upsert) lacks a "decrement only if quantity >= qty"
+    // primitive, and a separate Select-then-Upsert would race under
+    // concurrent transfers from a stateless Service. The single-statement
+    // UPDATE ... WHERE ... RETURN AFTER guards overdraw at the DB layer;
+    // no row returned means insufficient stock, surfaced as a
+    // TerminalException so Restate doesn't retry.
     var sourceRemaining = await ctx.Run("deduct-from-source", async () =>
     {
       var qty = request.Quantity;

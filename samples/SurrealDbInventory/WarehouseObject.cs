@@ -52,11 +52,9 @@ public sealed class WarehouseObject(ISurrealDbClient db)
   {
     var warehouseId = ctx.Key;
 
-    var response = await db.Query(
-      $"SELECT * FROM stock WHERE WarehouseId = {warehouseId}");
-    response.EnsureAllOks();
-
-    return response.GetValues<StockEntry>(0)
+    var entries = await db.Select<StockEntry>("stock");
+    return entries
+      .Where(s => s.WarehouseId == warehouseId)
       .Select(s => new StockLevel(s.ProductName, s.Quantity))
       .ToArray();
   }
