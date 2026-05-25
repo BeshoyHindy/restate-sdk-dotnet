@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Context.Any<T>` future combinator — resolves with the first future to succeed, throwing an
+  `AggregateException` only if every future fails (`Promise.any` / shared-core
+  `FirstSucceededOrAllFailed`)
+- `Context.AllSettled<T>` future combinator — awaits every future and reports each outcome via the
+  new `DurableSettled<T>` result type without throwing (`Promise.allSettled` / shared-core
+  `AllCompleted`)
+
+### Changed
+
+- `Context.All<T>` now short-circuits on the first future to fail (in completion order) instead of
+  `Task.WhenAll`'s wait-for-all-then-throw, matching `Promise.all` / shared-core
+  `AllSucceededOrFirstFailed`
+- Protocol buffers are now generated from the pinned `restatedev/sdk-shared-core@v0.10.0` git
+  submodule (`third_party/sdk-shared-core`) instead of a hand-maintained `proto/` copy, keeping the
+  wire types synchronized with the released Restate service protocol
+
 ## [0.1.0-alpha.5] - 2026-02-23
 
 ### Changed

@@ -35,14 +35,15 @@ Mock contexts · Protocol **V5–V6**.
   (parse-only — not surfaced), terminal `Failure.metadata` (V6).
 - **Risk:** must keep V5/V6 behavior intact (negotiate down when server is older).
 
-### P1 — Protocol-correct future combinators (All / Any / Race / AllSettled)
-- `Context.All`/`Race`/`WaitAll` currently use `Task.WhenAll`/`WhenAny`/`WhenEach`
-  (`Context.cs:173-219`). **`Any` and `AllSettled` are missing.**
-- Model the 4 shared-core modes: `All`=AllSucceededOrFirstFailed, `Any`=FirstSucceededOrAllFailed,
-  `Race`=FirstCompleted, `AllSettled`=AllCompleted.
-- On suspension (all children pending), emit a combinator/`AwaitingOn` future tree (V7) describing
-  the awaited notification handles, instead of relying on naive task races. Preserve deterministic
-  replay ordering.
+### P1 — Protocol-correct future combinators (All / Any / Race / AllSettled) — ✅ DONE
+- All four modes implemented: `All`=AllSucceededOrFirstFailed (short-circuits first failure),
+  `Any`=FirstSucceededOrAllFailed (new), `Race`=FirstCompleted, `AllSettled`=AllCompleted (new,
+  returns `DurableSettled<T>[]`). `MockContext` carries deterministic overrides; tests exercise the
+  real base `Context` virtuals via `MockObjectContext`.
+- The V7 `AwaitingOn` combinator wire-tree is **not needed** in this SDK: it uses Restate's
+  bidirectional-streaming mode and never emits a `SuspensionMessage` — completions stream in and
+  resolve per-index `TaskCompletionSource`s, so combinators are pure SDK-side `Task` orchestration.
+  Replay-safe because journal order is fixed by future *creation*, not await order.
 
 ### P1 — Runtime-driven run retry + Pause
 - Today `ctx.Run(retryPolicy)` retries **in-process** (`ExecuteWithRetryAsync` + `Task.Delay`),
