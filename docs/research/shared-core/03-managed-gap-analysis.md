@@ -45,13 +45,18 @@ Mock contexts · Protocol **V5–V6**.
   resolve per-index `TaskCompletionSource`s, so combinators are pure SDK-side `Task` orchestration.
   Replay-safe because journal order is fixed by future *creation*, not await order.
 
-### P1 — Runtime-driven run retry + Pause
-- Today `ctx.Run(retryPolicy)` retries **in-process** (`ExecuteWithRetryAsync` + `Task.Delay`),
-  blocking the attempt and losing durability across process restarts.
-- Align with shared-core: pass the `RetryPolicy` to the runtime via `ProposeRunCompletion`
-  (`RunExitResult::RetryableFailure{attempt_duration,error}`) and let Restate schedule retries;
-  support `OnMaxAttempts::Pause` (V7). Keep the SDK-local mode available as a fallback/option.
-- **Behavioral decision required** (see Open Questions).
+### P1 — Runtime-driven run retry + next-retry-delay — ✅ DONE (Pause deferred to V7)
+- **Finding:** at v0.10.0/V6 the `ProposeRunCompletionMessage` carries no retry policy and
+  `ErrorMessage` has no `should_pause` field. Runtime-driven retry is achieved purely via
+  `ErrorMessage.next_retry_delay` + the server re-invoking. The SDK's *default* `Run` (no policy)
+  was **already** runtime-driven: failures bubble to a retryable `ErrorMessage` and Restate retries
+  durably — i.e. "defer to server when unset" was already the behavior.
+- **Added:** `RestateRetryableException` (public) → handler boundary maps it to
+  `FailAsync(code, message, nextRetryDelay)` → `ErrorMessage.next_retry_delay` (field 8). This is
+  shared-core's `Error::with_next_retry_delay_override`.
+- The in-process `Task.Delay` loop (`ctx.Run(.., RetryPolicy)`) remains the explicit **SDK-local
+  opt-in** for bounded retries within a single attempt.
+- **Deferred:** `OnMaxAttempts::Pause` / `should_pause` — V7-only (absent from the v0.10.0 proto).
 
 ### P2 — Request identity verification (Ed25519 JWT)
 - Entirely **absent** today. Implement `x-restate-signature-scheme`/`x-restate-jwt-v1`,

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Context.AllSettled<T>` future combinator — awaits every future and reports each outcome via the
   new `DurableSettled<T>` result type without throwing (`Promise.allSettled` / shared-core
   `AllCompleted`)
+- `RestateRetryableException` — fail the current attempt as retryable (the runtime re-invokes and
+  replays) with an optional next-retry-delay override, emitted as `ErrorMessage.next_retry_delay`
+  (shared-core's `Error::with_next_retry_delay_override`). `OnMaxAttempts::Pause` remains deferred
+  until the protocol pin advances to V7
 
 ### Changed
 
