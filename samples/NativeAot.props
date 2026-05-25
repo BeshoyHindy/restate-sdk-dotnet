@@ -33,4 +33,24 @@
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     </PropertyGroup>
 
+    <!--
+        Native MSBuild container support for the AOT samples. The publish output is a self-contained
+        native binary, so the image uses the small runtime-deps base (no .NET runtime layer):
+
+            dotnet publish -c Release -r linux-x64 /t:PublishContainer \
+              -p:ContainerRegistry=<registry> -p:ContainerRepository=<owner>/<name>
+
+        Multi-arch note: NativeAOT bakes a native binary, so linux-arm64 cannot be cross-compiled
+        from an x64 host without the aarch64 cross toolchain. Build each architecture on its own
+        native runner and assemble a multi-arch manifest (see the `aot-container` CI job). Hence
+        ContainerRuntimeIdentifiers is intentionally NOT set to both arches here — the target RID
+        comes from `-r` per build.
+    -->
+    <PropertyGroup>
+        <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
+        <ContainerRepository>restate-sample-$(MSBuildProjectName.ToLowerInvariant())</ContainerRepository>
+        <ContainerImageTag>1.0.0</ContainerImageTag>
+        <ContainerBaseImage>mcr.microsoft.com/dotnet/runtime-deps:10.0</ContainerBaseImage>
+    </PropertyGroup>
+
 </Project>

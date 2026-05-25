@@ -1,0 +1,24 @@
+<Project>
+
+    <!--
+        Shared native MSBuild container settings for the (non-AOT) deployable samples. Imported by
+        each sample's .csproj. Publish a multi-arch (amd64 + arm64) OCI image with:
+
+            dotnet publish -c Release /t:PublishContainer \
+              -p:ContainerRegistry=<registry> -p:ContainerRepository=<owner>/<name>
+
+        or write a local OCI archive with -p:ContainerArchiveOutputPath=<file>.tar.gz.
+        Registry-neutral by default (override ContainerRegistry/ContainerRepository at publish time).
+        https://learn.microsoft.com/dotnet/core/containers/sdk-publish
+    -->
+    <PropertyGroup>
+        <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
+        <ContainerRepository>restate-sample-$(MSBuildProjectName.ToLowerInvariant())</ContainerRepository>
+        <ContainerImageTag>1.0.0</ContainerImageTag>
+        <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0</ContainerBaseImage>
+        <!-- RuntimeIdentifiers drives restore (per-RID assets); ContainerRuntimeIdentifiers drives the multi-arch image. -->
+        <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+        <ContainerRuntimeIdentifiers>linux-x64;linux-arm64</ContainerRuntimeIdentifiers>
+    </PropertyGroup>
+
+</Project>
