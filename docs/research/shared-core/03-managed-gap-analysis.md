@@ -58,11 +58,19 @@ Mock contexts · Protocol **V5–V6**.
   opt-in** for bounded retries within a single attempt.
 - **Deferred:** `OnMaxAttempts::Pause` / `should_pause` — V7-only (absent from the v0.10.0 proto).
 
-### P2 — Request identity verification (Ed25519 JWT)
-- Entirely **absent** today. Implement `x-restate-signature-scheme`/`x-restate-jwt-v1`,
-  `publickeyv1_<base58>` Ed25519 keys, EdDSA, aud = normalized path, v1/unsigned schemes.
-- .NET has `System.Security.Cryptography` Ed25519 (net10) + a base58 dependency or hand-rolled.
-  Wire into the endpoint request pipeline + `RestateOptions`.
+### P2 — Request identity verification (Ed25519 JWT) — ✅ DONE
+- **Finding:** .NET 10 has **no** Ed25519 in the BCL, and NSec/libsodium is native (would break the
+  no-native-deps/AOT promise). Chose **BouncyCastle.Cryptography** (pure-managed) for Ed25519 and
+  **SimpleBase** for base58 — both managed.
+- **Layering (AOT-safe):** core (`Restate.Sdk`) gets the boundary abstraction
+  `IRequestIdentityVerifier` + `RequestIdentityResult` + a pass-through `NoOpRequestIdentityVerifier`
+  default, and `MapRestate` verifies on `/discover` + `/invoke` (→ 401 on rejection). The crypto
+  lives in a **new `Restate.Sdk.Identity` package** (`Ed25519RequestIdentityVerifier`,
+  `AddRestateRequestIdentity(keys)`), so core — and the Native AOT samples — take **no** crypto
+  dependency. Verifies scheme (`v1`/`unsigned`), JWT (EdDSA, required aud/exp/iat/nbf, leeway 0),
+  `aud` = normalized path, and Ed25519 signature against any configured `publickeyv1_<base58>` key.
+- Covered by unit tests (valid/expired/nbf/aud/wrong-key/tampered/unsigned/malformed-key) **and HTTP
+  E2E tests** via `TestServer` (`/discover` + `/invoke` accept/reject).
 
 ### P2 — Implicit cancellation of children
 - shared-core default auto-cancels tracked child calls on cancel signal. Managed has only manual

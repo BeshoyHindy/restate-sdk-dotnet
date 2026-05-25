@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replays) with an optional next-retry-delay override, emitted as `ErrorMessage.next_retry_delay`
   (shared-core's `Error::with_next_retry_delay_override`). `OnMaxAttempts::Pause` remains deferred
   until the protocol pin advances to V7
+- **Request-identity verification** — new `Restate.Sdk.Identity` package validating Restate's
+  Ed25519/JWT request signatures (`x-restate-signature-scheme: v1` / `x-restate-jwt-v1`,
+  `publickeyv1_<base58>` keys). Enable with `services.AddRestateRequestIdentity(publicKeys)`;
+  `/discover` and `/invoke` then reject unsigned or invalid requests with 401. Pure-managed crypto
+  (BouncyCastle + SimpleBase) — no native dependency, and core/Native-AOT take no crypto dependency.
+  Core defines the `IRequestIdentityVerifier` seam with a pass-through default.
 
 ### Changed
 
