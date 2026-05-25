@@ -30,10 +30,59 @@
         <PackageReference Include="Grpc.Tools" PrivateAssets="All"/>
     </ItemGroup>
 
+    <!--
+        Protocol buffers are generated from the pinned `sdk-shared-core` submodule so the wire
+        types stay byte-for-byte synchronized with the released Restate service protocol.
+        The upstream proto carries no `csharp_namespace`, so we inject it into a build-local copy
+        (under obj/) rather than editing the vendored submodule file. Bump the submodule pin to
+        adopt a newer protocol version — no manual proto edits required.
+    -->
+    <PropertyGroup>
+        <RestateSharedCoreProto>$(MSBuildThisFileDirectory)../../third_party/sdk-shared-core/service-protocol/dev/restate/service/protocol.proto</RestateSharedCoreProto>
+        <RestateSyncedProtoRoot>$(MSBuildProjectDirectory)/obj/restate-proto</RestateSyncedProtoRoot>
+        <RestateSyncedProto>$(RestateSyncedProtoRoot)/dev/restate/service/protocol.proto</RestateSyncedProto>
+        <RestateProtoNamespace>Restate.Sdk.Internal.Protocol.Generated</RestateProtoNamespace>
+    </PropertyGroup>
+
+    <UsingTask TaskName="InjectCSharpNamespace" TaskFactory="RoslynCodeTaskFactory"
+               AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+        <ParameterGroup>
+            <Source ParameterType="System.String" Required="true"/>
+            <Destination ParameterType="System.String" Required="true"/>
+            <Namespace ParameterType="System.String" Required="true"/>
+        </ParameterGroup>
+        <Task>
+            <Code Type="Fragment" Language="cs"><![CDATA[
+                var text = System.IO.File.ReadAllText(Source);
+                if (!text.Contains("csharp_namespace"))
+                {
+                    const string marker = "option go_package";
+                    var idx = text.IndexOf(marker, System.StringComparison.Ordinal);
+                    var eol = text.IndexOf('\n', idx);
+                    var option = "option csharp_namespace = \"" + Namespace + "\";\n";
+                    text = text.Substring(0, eol + 1) + option + text.Substring(eol + 1);
+                }
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Destination));
+                System.IO.File.WriteAllText(Destination, text);
+            ]]></Code>
+        </Task>
+    </UsingTask>
+
+    <Target Name="SyncRestateProto"
+            BeforeTargets="Protobuf_BeforeCompile;CollectProtobufReferences;CoreCompile"
+            Inputs="$(RestateSharedCoreProto)"
+            Outputs="$(RestateSyncedProto)">
+        <Error Condition="!Exists('$(RestateSharedCoreProto)')"
+               Text="shared-core submodule proto not found at '$(RestateSharedCoreProto)'. Run: git submodule update --init --recursive"/>
+        <InjectCSharpNamespace Source="$(RestateSharedCoreProto)"
+                               Destination="$(RestateSyncedProto)"
+                               Namespace="$(RestateProtoNamespace)"/>
+    </Target>
+
     <ItemGroup>
-        <Protobuf Include="../../proto/dev/restate/service/protocol.proto"
+        <Protobuf Include="$(RestateSyncedProto)"
                   GrpcServices="None"
-                  ProtoRoot="../../proto"/>
+                  ProtoRoot="$(RestateSyncedProtoRoot)"/>
     </ItemGroup>
 
     <ItemGroup>

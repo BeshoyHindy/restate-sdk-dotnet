@@ -1,0 +1,4 @@
+[submodule "third_party/sdk-shared-core"]
+	path = third_party/sdk-shared-core
+	url = https://github.com/restatedev/sdk-shared-core
+	ignore = dirty
