@@ -167,8 +167,11 @@ public abstract class Context : IContext
         object? request = null);
 
     /// <summary>
-    ///     Awaits all futures and returns their results in order.
-    ///     If any future fails, the first failure is thrown.
+    ///     Awaits all futures and returns their results in declaration order, resolving only when
+    ///     every future succeeds. Short-circuits on the first future to <em>fail</em> (rethrowing
+    ///     that failure), matching <c>Promise.all</c> / the shared-core
+    ///     <c>AllSucceededOrFirstFailed</c> combinator. Use <see cref="AllSettled{T}" /> to wait for
+    ///     every future regardless of failure.
     /// </summary>
     public virtual ValueTask<T[]> All<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -179,12 +182,59 @@ public abstract class Context : IContext
 
         static async ValueTask<T[]> AwaitAll(Task<T>[] tasks)
         {
-            return await Task.WhenAll(tasks).ConfigureAwait(false);
+            // Short-circuit on the first failure (in completion order, not array order) rather than
+            // Task.WhenAll's wait-for-all-then-throw, so a fast failure isn't blocked by a slow peer.
+            var pending = new List<Task<T>>(tasks);
+            while (pending.Count > 0)
+            {
+                var completed = await Task.WhenAny(pending).ConfigureAwait(false);
+                if (completed.IsFaulted)
+                    await completed.ConfigureAwait(false); // rethrow the first failure
+                pending.Remove(completed);
+            }
+
+            var results = new T[tasks.Length];
+            for (var i = 0; i < tasks.Length; i++)
+                results[i] = tasks[i].Result; // ordered; all completed successfully above
+            return results;
         }
     }
 
     /// <summary>
-    ///     Returns the result of the first future to complete.
+    ///     Resolves with the result of the first future to <em>succeed</em>. Fails only if every
+    ///     future fails, throwing an <see cref="AggregateException" /> of all failures. Matches
+    ///     <c>Promise.any</c> / the shared-core <c>FirstSucceededOrAllFailed</c> combinator.
+    /// </summary>
+    public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        if (futures.Length == 0)
+            throw new ArgumentException("Any requires at least one future.", nameof(futures));
+
+        var tasks = new Task<T>[futures.Length];
+        for (var i = 0; i < futures.Length; i++)
+            tasks[i] = futures[i].GetResult().AsTask();
+        return AwaitAny(tasks);
+
+        static async ValueTask<T> AwaitAny(Task<T>[] tasks)
+        {
+            var pending = new List<Task<T>>(tasks);
+            var failures = new List<Exception>(tasks.Length);
+            while (pending.Count > 0)
+            {
+                var completed = await Task.WhenAny(pending).ConfigureAwait(false);
+                pending.Remove(completed);
+                if (completed.IsCompletedSuccessfully)
+                    return completed.Result;
+                failures.Add(completed.Exception?.InnerException ?? completed.Exception!);
+            }
+
+            throw new AggregateException("All futures failed.", failures);
+        }
+    }
+
+    /// <summary>
+    ///     Returns the result of the first future to <em>settle</em> (success or failure). Matches
+    ///     <c>Promise.race</c> / the shared-core <c>FirstCompleted</c> combinator.
     /// </summary>
     public virtual ValueTask<T> Race<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -197,6 +247,36 @@ public abstract class Context : IContext
         {
             var winner = await Task.WhenAny(tasks).ConfigureAwait(false);
             return await winner.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Awaits every future and reports each outcome without throwing, in declaration order.
+    ///     Matches <c>Promise.allSettled</c> / the shared-core <c>AllCompleted</c> combinator.
+    /// </summary>
+    public virtual ValueTask<DurableSettled<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var tasks = new Task<T>[futures.Length];
+        for (var i = 0; i < futures.Length; i++)
+            tasks[i] = futures[i].GetResult().AsTask();
+        return AwaitAllSettled(tasks);
+
+        static async ValueTask<DurableSettled<T>[]> AwaitAllSettled(Task<T>[] tasks)
+        {
+            var results = new DurableSettled<T>[tasks.Length];
+            for (var i = 0; i < tasks.Length; i++)
+            {
+                try
+                {
+                    results[i] = DurableSettled<T>.Success(await tasks[i].ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    results[i] = DurableSettled<T>.Failure(ex);
+                }
+            }
+
+            return results;
         }
     }
 

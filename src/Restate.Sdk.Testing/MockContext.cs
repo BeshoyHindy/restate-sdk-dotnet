@@ -407,6 +407,57 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
+    public override ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        if (futures.Length == 0)
+            throw new ArgumentException("Any requires at least one future.", nameof(futures));
+
+        var futuresCopy = new IDurableFuture<T>[futures.Length];
+        futures.CopyTo(futuresCopy);
+        return AwaitAny(futuresCopy);
+
+        static async ValueTask<T> AwaitAny(IDurableFuture<T>[] items)
+        {
+            var failures = new List<Exception>(items.Length);
+            foreach (var item in items)
+                try
+                {
+                    return await item.GetResult().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(ex);
+                }
+
+            throw new AggregateException("All futures failed.", failures);
+        }
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<DurableSettled<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var futuresCopy = new IDurableFuture<T>[futures.Length];
+        futures.CopyTo(futuresCopy);
+        return AwaitAllSettled(futuresCopy);
+
+        static async ValueTask<DurableSettled<T>[]> AwaitAllSettled(IDurableFuture<T>[] items)
+        {
+            var results = new DurableSettled<T>[items.Length];
+            for (var i = 0; i < items.Length; i++)
+                try
+                {
+                    results[i] = DurableSettled<T>.Success(await items[i].GetResult().ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    results[i] = DurableSettled<T>.Failure(ex);
+                }
+
+            return results;
+        }
+    }
+
+    /// <inheritdoc />
     public override async IAsyncEnumerable<(IDurableFuture future, Exception? error)> WaitAll(
         params IDurableFuture[] futures)
     {
