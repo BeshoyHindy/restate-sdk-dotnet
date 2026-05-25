@@ -53,8 +53,8 @@ builder.Services.AddSurreal(
 
 builder.Services.AddRestate(opts =>
 {
-  opts.Bind<WarehouseObject>();
-  opts.Bind<TransferService>();
+    opts.Bind<WarehouseObject>();
+    opts.Bind<TransferService>();
 });
 
 var app = builder.Build();
