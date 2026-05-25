@@ -1,0 +1,36 @@
+<Project>
+
+    <!--
+        Hardened Native AOT settings shared by every NativeAot* sample. Together these turn any
+        trim / AOT / single-file incompatibility — in this project's own code AND anywhere in the
+        resolved dependency graph — into a build error, so an AOT-incompatible package can never
+        slip in unnoticed. Import this from each NativeAot* sample's .csproj.
+
+        Coverage:
+          - "hard-no"  → [RequiresDynamicCode] / IL3050 (needs runtime code-gen; impossible under AOT)
+          - "may"      → [RequiresUnreferencedCode] / IL2026 and per-assembly IL2104 (trimming may break)
+    -->
+    <PropertyGroup>
+        <PublishAot>true</PublishAot>
+
+        <!-- Roslyn analyzers — analyze THIS project's source. IsAotCompatible implies the three
+             below + IsTrimmable; listed explicitly to document intent. -->
+        <IsAotCompatible>true</IsAotCompatible>
+        <EnableTrimAnalyzer>true</EnableTrimAnalyzer>        <!-- IL2xxx  ("may") -->
+        <EnableAotAnalyzer>true</EnableAotAnalyzer>          <!-- IL3050  ("hard-no") -->
+        <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer> <!-- IL300x -->
+
+        <!-- Whole-graph ILC analysis at publish — this is the only stage that inspects DEPENDENCIES.
+             Expand every per-member warning instead of collapsing a library's findings into a single
+             IL2104 summary, and never let anything suppress them. -->
+        <TrimmerSingleWarn>false</TrimmerSingleWarn>
+        <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+        <SuppressAotAnalysisWarnings>false</SuppressAotAnalysisWarnings>
+
+        <!-- DENY: any trim/AOT warning (hard-no or may) fails the build. TreatWarningsAsErrors is
+             already true in the root Directory.Build.props; restated here so these samples stay
+             hardened independently of that. -->
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    </PropertyGroup>
+
+</Project>

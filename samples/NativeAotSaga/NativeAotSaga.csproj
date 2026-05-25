@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <!-- Hardened Native AOT settings: denies any AOT/trim-incompatible code or dependency. -->
+    <Import Project="../NativeAot.props"/>
+
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <IsPackable>false</IsPackable>
-        <PublishAot>true</PublishAot>
     </PropertyGroup>
 
     <ItemGroup>
