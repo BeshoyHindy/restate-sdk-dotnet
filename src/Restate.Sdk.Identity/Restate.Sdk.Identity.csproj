@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>Restate.Sdk.Identity</RootNamespace>
+        <AssemblyName>Restate.Sdk.Identity</AssemblyName>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <IsPackable>true</IsPackable>
+        <Description>Request-identity verification for the Restate .NET SDK. Validates Ed25519/JWT request signatures from the Restate runtime using pure-managed cryptography (no native dependencies).</Description>
+        <PackageTags>$(PackageTags);security;identity;jwt;ed25519</PackageTags>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="../../README.md" Pack="true" PackagePath="/"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BouncyCastle.Cryptography"/>
+        <PackageReference Include="SimpleBase"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Restate.Sdk/Restate.Sdk.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Restate.Sdk.Tests"/>
+    </ItemGroup>
+
+</Project>

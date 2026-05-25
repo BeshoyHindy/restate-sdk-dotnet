@@ -28,6 +28,28 @@ public static class RestateEndpointRouteBuilderExtensions
         "application/vnd.restate.endpointmanifest.v1+json",
     ];
 
+    /// <summary>
+    ///     Runs request-identity verification. On rejection, writes a 401 response and returns false;
+    ///     the caller must then stop processing the request.
+    /// </summary>
+    private static async ValueTask<bool> VerifyIdentityAsync(HttpContext context, IRequestIdentityVerifier verifier)
+    {
+        var result = verifier.Verify(
+            name =>
+            {
+                var values = context.Request.Headers[name];
+                return values.Count > 0 ? values.ToString() : null;
+            },
+            context.Request.Path.ToString());
+
+        if (result.IsVerified)
+            return true;
+
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsync(result.RejectionReason ?? "Request identity verification failed");
+        return false;
+    }
+
     internal static string? NegotiateVersion(string? acceptHeader)
     {
         if (string.IsNullOrEmpty(acceptHeader))
@@ -61,6 +83,7 @@ public static class RestateEndpointRouteBuilderExtensions
     {
         var registry = endpoints.ServiceProvider.GetRequiredService<ServiceRegistry>();
         var handler = endpoints.ServiceProvider.GetRequiredService<InvocationHandler>();
+        var identityVerifier = endpoints.ServiceProvider.GetRequiredService<IRequestIdentityVerifier>();
 
         // Cache the discovery manifest as a byte[] — it never changes after startup.
         // Uses source-generated DiscoveryJsonContext for AOT compatibility.
@@ -69,6 +92,9 @@ public static class RestateEndpointRouteBuilderExtensions
 
         endpoints.MapGet("/discover", async context =>
         {
+            if (!await VerifyIdentityAsync(context, identityVerifier))
+                return;
+
             var selectedContentType = NegotiateVersion(context.Request.Headers.Accept.ToString());
 
             if (selectedContentType is null)
@@ -85,6 +111,9 @@ public static class RestateEndpointRouteBuilderExtensions
 
         endpoints.MapPost("/invoke/{service}/{handlerName}", async context =>
         {
+            if (!await VerifyIdentityAsync(context, identityVerifier))
+                return;
+
             var serviceName = context.Request.RouteValues["service"]?.ToString();
             var handlerName = context.Request.RouteValues["handlerName"]?.ToString();
 

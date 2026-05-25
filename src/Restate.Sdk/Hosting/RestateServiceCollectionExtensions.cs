@@ -32,6 +32,7 @@ public static class RestateServiceCollectionExtensions
         var registry = ServiceRegistry.FromTypes(options.ServiceTypes);
         services.AddSingleton(registry);
         services.TryAddSingleton<InvocationHandler>();
+        services.TryAddSingleton<IRequestIdentityVerifier>(NoOpRequestIdentityVerifier.Instance);
 
         foreach (var type in options.ServiceTypes)
             services.TryAddScoped(type);
@@ -60,6 +61,7 @@ public static class RestateServiceCollectionExtensions
 
         services.AddSingleton(registry);
         services.TryAddSingleton<InvocationHandler>();
+        services.TryAddSingleton<IRequestIdentityVerifier>(NoOpRequestIdentityVerifier.Instance);
 
         return services;
     }
