@@ -12,6 +12,13 @@ public sealed class TripBookingService
     [Handler]
     public async Task<TripBookingResult> Book(Context ctx, TripBookingRequest request)
     {
+        // Validate input up front. A malformed request (missing sub-bookings) is a deterministic
+        // client error: throw TerminalException so Restate fails the invocation immediately instead
+        // of treating a NullReferenceException as a transient error and retrying it forever.
+        if (request is null || request.Flight is null || request.Hotel is null || request.CarRental is null)
+            throw new TerminalException(
+                "TripBookingRequest must include tripId, flight, hotel, and carRental.", 400);
+
         var compensations = new List<Func<Context, Task>>();
 
         try
