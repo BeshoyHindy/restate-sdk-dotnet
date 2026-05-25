@@ -930,16 +930,21 @@ internal sealed partial class InvocationStateMachine
 
     /// <summary>
     ///     Sends a transient error as an ErrorMessage.
-    ///     Restate treats this as retryable — the invocation will be retried.
+    ///     Restate treats this as retryable — the invocation will be retried. An optional
+    ///     <paramref name="nextRetryDelay" /> overrides the runtime's delay before the next retry.
     /// </summary>
-    public async ValueTask FailAsync(ushort code, string message, CancellationToken ct)
+    public async ValueTask FailAsync(ushort code, string message, CancellationToken ct,
+        TimeSpan? nextRetryDelay = null)
     {
         if (State == InvocationState.Closed)
             return;
 
         State = InvocationState.Closed;
 
-        WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message));
+        var nextRetryDelayMs = nextRetryDelay is { } delay && delay > TimeSpan.Zero
+            ? (ulong)delay.TotalMilliseconds
+            : (ulong?)null;
+        WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message, nextRetryDelayMs));
 
         _writer.WriteHeaderOnly(MessageType.End);
         await FlushAsync(ct).ConfigureAwait(false);

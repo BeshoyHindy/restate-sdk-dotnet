@@ -357,13 +357,17 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.ErrorMessage CreateErrorMessage(uint code, string message)
+    public static Gen.ErrorMessage CreateErrorMessage(uint code, string message,
+        ulong? nextRetryDelayMs = null)
     {
-        return new Gen.ErrorMessage
+        var error = new Gen.ErrorMessage
         {
             Code = code,
             Message = message
         };
+        if (nextRetryDelayMs.HasValue)
+            error.NextRetryDelay = nextRetryDelayMs.Value;
+        return error;
     }
 
     /// <summary>

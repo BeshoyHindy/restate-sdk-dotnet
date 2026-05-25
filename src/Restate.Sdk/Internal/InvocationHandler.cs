@@ -86,6 +86,14 @@ internal sealed class InvocationHandler
             try { await sm.FailAsync(500, ex.Message, CancellationToken.None).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
+        catch (RestateRetryableException ex)
+        {
+            // Retryable failure with an optional next-retry-delay override — the runtime re-invokes.
+            Log.InvocationFailed(logger, ex, sm.InvocationId);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None, ex.NextRetryDelay).ConfigureAwait(false); }
+            catch { /* Stream already broken */ }
+        }
         catch (Exception ex)
         {
             Log.InvocationFailed(logger, ex, sm.InvocationId);

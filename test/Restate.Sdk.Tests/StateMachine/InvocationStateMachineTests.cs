@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Text.Json;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Tests.StateMachine;
 
@@ -295,6 +296,44 @@ public class InvocationStateMachineTests : IDisposable
         await sm.FailAsync(500, "something broke", CancellationToken.None);
 
         Assert.Equal(InvocationState.Closed, sm.State);
+    }
+
+    [Fact]
+    public async Task FailAsync_WithNextRetryDelay_EmitsRetryableErrorCarryingDelay()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await sm.FailAsync(503, "retry me", CancellationToken.None, TimeSpan.FromMilliseconds(2500));
+
+        var error = await ReadFirstErrorAsync();
+        Assert.Equal(503u, error.Code);
+        Assert.Equal("retry me", error.Message);
+        Assert.True(error.HasNextRetryDelay);
+        Assert.Equal(2500ul, error.NextRetryDelay);
+    }
+
+    [Fact]
+    public async Task FailAsync_WithoutDelay_EmitsErrorWithoutDelayOverride()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await sm.FailAsync(500, "boom", CancellationToken.None);
+
+        var error = await ReadFirstErrorAsync();
+        Assert.False(error.HasNextRetryDelay);
+    }
+
+    private async Task<Gen.ErrorMessage> ReadFirstErrorAsync()
+    {
+        var reader = new ProtocolReader(_outbound.Reader);
+        var message = await reader.ReadMessageAsync(CancellationToken.None)
+                      ?? throw new InvalidOperationException("No message emitted");
+        Assert.Equal(MessageType.Error, message.Header.Type);
+        var parsed = Gen.ErrorMessage.Parser.ParseFrom(message.Payload);
+        message.Dispose();
+        return parsed;
     }
 
     // ------- Replay -------

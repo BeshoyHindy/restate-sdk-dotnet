@@ -8,6 +8,24 @@ namespace Restate.Sdk.Tests.Protocol;
 public class ProtobufCodecTests
 {
     [Fact]
+    public void CreateErrorMessage_WithNextRetryDelay_SetsField()
+    {
+        var msg = ProtobufCodec.CreateErrorMessage(503, "retry me", 2500);
+
+        Assert.Equal(503u, msg.Code);
+        Assert.True(msg.HasNextRetryDelay);
+        Assert.Equal(2500ul, msg.NextRetryDelay);
+    }
+
+    [Fact]
+    public void CreateErrorMessage_WithoutDelay_LeavesFieldUnset()
+    {
+        var msg = ProtobufCodec.CreateErrorMessage(500, "boom");
+
+        Assert.False(msg.HasNextRetryDelay);
+    }
+
+    [Fact]
     public void ParseStartMessage_ExtractsAllFields()
     {
         var msg = new Gen.StartMessage
