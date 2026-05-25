@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -53,6 +55,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -70,6 +74,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -83,3 +89,44 @@ jobs:
         run: |
           chmod +x .github/scripts/integration-test.sh
           .github/scripts/integration-test.sh
+
+  aot-deny-gate:
+    name: Native AOT Deny-Gate
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.102'
+
+      - name: Install AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      # AOT-publishes every NativeAot* sample. The hardened samples/NativeAot.props promotes any
+      # trim/AOT incompatibility — in SDK code OR anywhere in the dependency graph — to an error
+      # (TrimmerSingleWarn=false expands per-member "may" warnings from dependencies). A new
+      # AOT-incompatible dependency reaching these samples therefore fails CI here.
+      - name: AOT-publish every NativeAot* sample (deny on any trim/AOT warning)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          published=0
+          for proj in samples/NativeAot*/*.csproj; do
+            echo "::group::AOT publish $proj"
+            dotnet publish "$proj" -c Release -r linux-x64 \
+              -p:TrimmerSingleWarn=false -p:TreatWarningsAsErrors=true
+            echo "::endgroup::"
+            published=$((published + 1))
+          done
+          if [ "$published" -eq 0 ]; then
+            echo "No NativeAot* samples found — expected at least one." >&2
+            exit 1
+          fi
+          echo "AOT deny-gate passed for $published sample(s)."
