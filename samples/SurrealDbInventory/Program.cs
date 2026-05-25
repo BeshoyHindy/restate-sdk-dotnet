@@ -59,13 +59,16 @@ builder.Services.AddRestate(opts =>
 
 var app = builder.Build();
 
-// SurrealDB v3 strict mode rejects SELECT against undefined tables and
-// won't auto-create namespaces, so DEFINE everything once at startup.
+// SurrealDB strict mode rejects SELECT against undefined tables and won't
+// auto-create namespaces, so DEFINE everything once at startup.
 // DDL statements take literal identifiers (not parameters), which is why
 // the namespace/database names are baked in as constants above rather than
-// flowed through env vars.
+// flowed through env vars. Use RawQuery, not Query($"..."): Query treats an
+// interpolated FormattableString's holes as bound parameters, so
+// `DEFINE NAMESPACE {Namespace}` would send `DEFINE NAMESPACE $p0` and
+// SurrealDB rejects it ("expected an identifier"). RawQuery sends literal text.
 var db = app.Services.GetRequiredService<ISurrealDbClient>();
-var bootstrap = await db.Query($"""
+var bootstrap = await db.RawQuery($"""
   DEFINE NAMESPACE IF NOT EXISTS {Namespace};
   USE NAMESPACE {Namespace};
   DEFINE DATABASE IF NOT EXISTS {Database};
