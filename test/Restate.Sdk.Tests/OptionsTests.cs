@@ -45,10 +45,48 @@ public class OptionsTests
     // ── InvocationHandle ──
 
     [Fact]
-    public void InvocationHandle_StoresId()
+    public async Task InvocationHandle_EagerCtor_ResolvesSynchronously()
     {
         var handle = new InvocationHandle("inv-abc-123");
-        Assert.Equal("inv-abc-123", handle.InvocationId);
+        var id = await handle.GetInvocationIdAsync();
+        Assert.Equal("inv-abc-123", id);
+    }
+
+    [Fact]
+    public async Task InvocationHandle_ThunkCtor_ResolvesLazilyExactlyOnce()
+    {
+        // §4.5 case 6: the resolve thunk must NOT run at construction (an eager task would park
+        // the awaiting set and spuriously suspend a send-then-return handler); it runs on the
+        // first GetInvocationIdAsync and is cached thereafter (Lazy<Task<string>>).
+        var invocations = 0;
+        var handle = new InvocationHandle(() =>
+        {
+            invocations++;
+            return Task.FromResult("inv-lazy-1");
+        });
+        Assert.Equal(0, invocations);
+
+        var first = await handle.GetInvocationIdAsync();
+        Assert.Equal(1, invocations);
+        Assert.Equal("inv-lazy-1", first);
+    }
+
+    [Fact]
+    public async Task InvocationHandle_RepeatedAwaits_ReturnSameValue()
+    {
+        // §4.5 case 7: repeated awaits return the cached resolution without re-invoking the thunk.
+        var invocations = 0;
+        var handle = new InvocationHandle(() =>
+        {
+            invocations++;
+            return Task.FromResult("inv-cached");
+        });
+
+        var first = await handle.GetInvocationIdAsync();
+        var second = await handle.GetInvocationIdAsync();
+        Assert.Equal("inv-cached", first);
+        Assert.Equal(first, second);
+        Assert.Equal(1, invocations);
     }
 
     // ── RestateOptions ──

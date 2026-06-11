@@ -61,12 +61,18 @@ internal sealed class InvocationHandler
             var serviceInstance = service.Factory(serviceProvider);
             var result = await handler.Invoker(serviceInstance, context, input, handlerToken).ConfigureAwait(false);
 
-            var output = result is not null
-                ? sm.SerializeObject(result)
-                : ReadOnlyMemory<byte>.Empty;
-            await sm.CompleteAsync(output, ct).ConfigureAwait(false);
+            // The result is serialized INSIDE CompleteAsync's _commandLock so it can no longer be
+            // torn by a straggler Run proposal sharing _serializeBuffer (2.7.5/2.8).
+            await sm.CompleteAsync(result, ct).ConfigureAwait(false);
 
             Log.InvocationCompleted(logger, sm.InvocationId);
+        }
+        catch (SuspendedException)
+        {
+            // The state machine already wrote the SuspensionMessage and closed the output
+            // (protocol.proto:88-97). No Output/Error frame may follow. This arm MUST precede every
+            // wire-writing arm so a suspension never gets an Error frame written after it.
+            Log.InvocationSuspended(logger, sm.InvocationId);
         }
         catch (TerminalException ex)
         {
@@ -122,6 +128,13 @@ internal sealed class InvocationHandler
                 catch (OperationCanceledException ex)
                 {
                     Log.IncomingReaderStopped(logger, ex, sm.InvocationId);
+                }
+                catch (Exception ex)
+                {
+                    // Pump fault (ProtocolException, parse/IO error) already surfaced to the handler
+                    // through the faulted TCSs (FailAll) and was reported via the catch arms above —
+                    // log only, never rethrow from finally into Kestrel after the response ended.
+                    Log.IncomingReaderFaulted(logger, ex, sm.InvocationId);
                 }
 
             try { reader.Complete(); } catch { /* already completed or broken */ }

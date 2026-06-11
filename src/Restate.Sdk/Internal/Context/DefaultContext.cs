@@ -75,22 +75,14 @@ internal sealed class DefaultContext : Restate.Sdk.Context
 
     public override IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action)
     {
-        var task = _stateMachine.RunFutureAsync(name, action, Aborted);
-        if (task.IsCompletedSuccessfully)
-        {
-            var (_, result) = task.Result;
-            return DurableFuture<T>.Completed(result);
-        }
-
-        return new LazyRunFuture<T>(task);
+        var resolve = _stateMachine.RunFutureAsync(name, action, Aborted);
+        return new LazyRunFuture<T>(resolve, _stateMachine.JsonOptions);
     }
 
     public override IDurableFuture Timer(TimeSpan duration)
     {
-        var task = _stateMachine.SleepFutureAsync(duration, Aborted);
-        if (task.IsCompletedSuccessfully)
-            return new VoidDurableFuture(task.Result);
-        return new LazyTimerFuture(task);
+        var resolve = _stateMachine.SleepFutureAsync(duration, Aborted);
+        return new LazyTimerFuture(resolve);
     }
 
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler,
@@ -108,10 +100,8 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     private IDurableFuture<TResponse> CallFutureInternal<TResponse>(string service, string? key, string handler,
         object? request)
     {
-        var task = _stateMachine.CallFutureAsync(service, key, handler, request, Aborted);
-        if (task.IsCompletedSuccessfully)
-            return new DurableFuture<TResponse>(task.Result, _stateMachine.JsonOptions);
-        return new LazyCallFuture<TResponse>(task, _stateMachine.JsonOptions);
+        var resolve = _stateMachine.CallFutureAsync(service, key, handler, request, Aborted);
+        return new LazyCallFuture<TResponse>(resolve, _stateMachine.JsonOptions);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
@@ -214,21 +204,25 @@ internal sealed class DefaultContext : Restate.Sdk.Context
 
     public override Awakeable<T> Awakeable<T>(ISerde<T>? serde = null)
     {
-        var (id, tcs) = _stateMachine.Awakeable();
-        // Flush any pending writes so the server processes prior commands before we block.
-        var flushTask = _stateMachine.FlushAsync(Aborted);
+        var (id, signalId) = _stateMachine.Awakeable();
+        // Flush any pending writes (gated, so it can't race a detached Run proposal's flush) so the
+        // server processes prior commands before we block.
+        var flushTask = _stateMachine.FlushPendingAsync(Aborted);
         return new Awakeable<T>
         {
             Id = id,
-            Value = FlushThenAwaitAwakeable(flushTask, tcs, serde)
+            Value = FlushThenAwaitAwakeable(flushTask, signalId, serde)
         };
     }
 
     private async ValueTask<T> FlushThenAwaitAwakeable<T>(
-        ValueTask flushTask, TaskCompletionSource<CompletionResult> tcs, ISerde<T>? serde = null)
+        ValueTask flushTask, uint signalId, ISerde<T>? serde = null)
     {
         await flushTask.ConfigureAwait(false);
-        var result = await tcs.Task.ConfigureAwait(false);
+        // Park through the SM's single await point (suspension/replay-guard aware).
+        var result = await _stateMachine
+            .AwaitNotificationAsync(signalId, InvocationStateMachine.NotificationKind.Signal)
+            .ConfigureAwait(false);
         result.ThrowIfFailure();
         if (serde is not null)
             return serde.Deserialize(new ReadOnlySequence<byte>(result.Value));

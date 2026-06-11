@@ -9,7 +9,8 @@ internal readonly record struct StartMessageFields(
     string? Key,
     uint KnownEntries,
     ulong RandomSeed,
-    Dictionary<string, ReadOnlyMemory<byte>>? EagerState);
+    Dictionary<string, ReadOnlyMemory<byte>?> EagerState,   // ALWAYS materialized (may be empty)
+    bool PartialState);                                      // StartMessage field 5 — no longer discarded
 
 /// <summary>
 ///     Parsed completion notification fields from the Restate protocol.

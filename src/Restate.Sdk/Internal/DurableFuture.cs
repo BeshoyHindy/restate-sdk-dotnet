@@ -13,14 +13,24 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>
     private readonly T? _completedValue;
     private readonly bool _isPreCompleted;
     private readonly JsonSerializerOptions? _jsonOptions;
-    private readonly TaskCompletionSource<CompletionResult>? _tcs;
+    // The resolve thunk: the state-machine park API (or, in tests, a TCS task). First GetResult
+    // invokes and caches it — no bare CompletionManager TCS ever crosses the API boundary.
+    private readonly Func<ValueTask<CompletionResult>>? _resolve;
+    private Task<CompletionResult>? _resolved;
 
-    internal DurableFuture(TaskCompletionSource<CompletionResult> tcs, JsonSerializerOptions jsonOptions,
+    internal DurableFuture(Func<ValueTask<CompletionResult>> resolve, JsonSerializerOptions jsonOptions,
         string? invocationId = null)
     {
-        _tcs = tcs;
+        _resolve = resolve;
         _jsonOptions = jsonOptions;
         InvocationId = invocationId;
+    }
+
+    /// <summary>TCS-backed constructor retained for combinator tests; adapts the TCS to a thunk.</summary>
+    internal DurableFuture(TaskCompletionSource<CompletionResult> tcs, JsonSerializerOptions jsonOptions,
+        string? invocationId = null)
+        : this(() => new ValueTask<CompletionResult>(tcs.Task), jsonOptions, invocationId)
+    {
     }
 
     private DurableFuture(T value)
@@ -30,14 +40,14 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>
     }
 
     /// <summary>Internal access to the underlying task for combinator implementations.</summary>
-    internal Task<CompletionResult>? Task => _tcs?.Task;
+    internal Task<CompletionResult>? Task => _isPreCompleted ? null : (_resolved ??= _resolve!().AsTask());
 
     public string? InvocationId { get; }
 
     public async ValueTask<T> GetResult()
     {
         if (_isPreCompleted) return _completedValue!;
-        var result = await _tcs!.Task.ConfigureAwait(false);
+        var result = await (_resolved ??= _resolve!().AsTask()).ConfigureAwait(false);
         result.ThrowIfFailure();
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions!)!;
@@ -63,22 +73,28 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>
 /// </summary>
 internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
 {
-    private static readonly VoidDurableFuture CachedCompleted = CreateCompleted();
-    private readonly TaskCompletionSource<CompletionResult> _tcs;
+    private readonly Func<ValueTask<CompletionResult>> _resolve;
+    private Task<CompletionResult>? _resolved;
 
-    internal VoidDurableFuture(TaskCompletionSource<CompletionResult> tcs)
+    internal VoidDurableFuture(Func<ValueTask<CompletionResult>> resolve)
     {
-        _tcs = tcs;
+        _resolve = resolve;
+    }
+
+    /// <summary>TCS-backed constructor retained for combinator tests; adapts the TCS to a thunk.</summary>
+    internal VoidDurableFuture(TaskCompletionSource<CompletionResult> tcs)
+        : this(() => new ValueTask<CompletionResult>(tcs.Task))
+    {
     }
 
     /// <summary>Internal access to the underlying task for combinator implementations.</summary>
-    internal Task<CompletionResult> Task => _tcs.Task;
+    internal Task<CompletionResult> Task => _resolved ??= _resolve().AsTask();
 
     public string? InvocationId => null;
 
     public async ValueTask<bool> GetResult()
     {
-        var result = await _tcs.Task.ConfigureAwait(false);
+        var result = await (_resolved ??= _resolve().AsTask()).ConfigureAwait(false);
         result.ThrowIfFailure();
         return true;
     }
@@ -88,39 +104,36 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
         await GetResult().ConfigureAwait(false);
         return null;
     }
-
-    internal static VoidDurableFuture Completed()
-    {
-        return CachedCompleted;
-    }
-
-    private static VoidDurableFuture CreateCompleted()
-    {
-        var tcs = new TaskCompletionSource<CompletionResult>();
-        tcs.SetResult(CompletionResult.Success(ReadOnlyMemory<byte>.Empty));
-        return new VoidDurableFuture(tcs);
-    }
 }
 
 /// <summary>
-///     Lazy wrapper for RunAsync futures where the state machine operation itself is async.
-///     Awaits the state machine's ValueTask, then provides the result as a completed future.
+///     Run future: parks through the state-machine resolve thunk and returns the locally computed
+///     value source via the notification (the ack barrier).
 /// </summary>
+[UnconditionalSuppressMessage("AOT", "IL2026:RequiresUnreferencedCode",
+    Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
+[UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
+    Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 internal sealed class LazyRunFuture<T> : IDurableFuture<T>
 {
-    private readonly ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> _initTask;
+    private readonly Func<ValueTask<CompletionResult>> _resolve;
+    private readonly JsonSerializerOptions _jsonOptions;
 
-    internal LazyRunFuture(ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> initTask)
+    internal LazyRunFuture(Func<ValueTask<CompletionResult>> resolve, JsonSerializerOptions jsonOptions)
     {
-        _initTask = initTask;
+        _resolve = resolve;
+        _jsonOptions = jsonOptions;
     }
 
     public string? InvocationId => null;
 
     public async ValueTask<T> GetResult()
     {
-        var (_, result) = await _initTask.ConfigureAwait(false);
-        return result;
+        var result = await _resolve().ConfigureAwait(false);
+        result.ThrowIfFailure();
+        if (result.Value.IsEmpty) return default!;
+        var reader = new Utf8JsonReader(result.Value.Span);
+        return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions)!;
     }
 
     async ValueTask<object?> IDurableFuture.GetResult()
@@ -130,28 +143,27 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>
 }
 
 /// <summary>
-///     Lazy wrapper for Timer (non-blocking sleep) futures.
+///     Timer (non-blocking sleep) future. Parks through the state-machine resolve thunk.
 /// </summary>
 internal sealed class LazyTimerFuture : IDurableFuture
 {
-    private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
+    private readonly Func<ValueTask<CompletionResult>> _resolve;
 
-    internal LazyTimerFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask)
+    internal LazyTimerFuture(Func<ValueTask<CompletionResult>> resolve)
     {
-        _initTask = initTask;
+        _resolve = resolve;
     }
 
     public async ValueTask<object?> GetResult()
     {
-        var tcs = await _initTask.ConfigureAwait(false);
-        var result = await tcs.Task.ConfigureAwait(false);
+        var result = await _resolve().ConfigureAwait(false);
         result.ThrowIfFailure();
         return null;
     }
 }
 
 /// <summary>
-///     Lazy wrapper for CallFuture operations where the state machine setup is async.
+///     CallFuture: parks through the state-machine resolve thunk and deserializes the response.
 /// </summary>
 [UnconditionalSuppressMessage("AOT", "IL2026:RequiresUnreferencedCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
@@ -159,13 +171,12 @@ internal sealed class LazyTimerFuture : IDurableFuture
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 internal sealed class LazyCallFuture<T> : IDurableFuture<T>
 {
-    private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
+    private readonly Func<ValueTask<CompletionResult>> _resolve;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    internal LazyCallFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
-        JsonSerializerOptions jsonOptions)
+    internal LazyCallFuture(Func<ValueTask<CompletionResult>> resolve, JsonSerializerOptions jsonOptions)
     {
-        _initTask = initTask;
+        _resolve = resolve;
         _jsonOptions = jsonOptions;
     }
 
@@ -173,8 +184,7 @@ internal sealed class LazyCallFuture<T> : IDurableFuture<T>
 
     public async ValueTask<T> GetResult()
     {
-        var tcs = await _initTask.ConfigureAwait(false);
-        var result = await tcs.Task.ConfigureAwait(false);
+        var result = await _resolve().ConfigureAwait(false);
         result.ThrowIfFailure();
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions)!;

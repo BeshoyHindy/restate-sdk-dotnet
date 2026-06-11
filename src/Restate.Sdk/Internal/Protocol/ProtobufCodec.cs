@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
+using Restate.Sdk.Internal.Journal;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Internal.Protocol;
@@ -39,17 +40,18 @@ internal static class ProtobufCodec
 
     // ── Parsing (incoming messages → SDK types) ───────────────────────
 
+    /// <summary>The reserved built-in CANCEL signal id (protocol.proto BuiltInSignal.CANCEL = 1).</summary>
+    public const uint CancelSignalId = 1;
+
     public static StartMessageFields ParseStartMessage(ReadOnlySpan<byte> payload)
     {
         var msg = Gen.StartMessage.Parser.ParseFrom(payload);
 
-        Dictionary<string, ReadOnlyMemory<byte>>? eagerState = null;
-        if (!msg.PartialState)
-        {
-            eagerState = new Dictionary<string, ReadOnlyMemory<byte>>(msg.StateMap.Count);
-            foreach (var entry in msg.StateMap)
-                eagerState[entry.Key.ToStringUtf8()] = entry.Value.Memory;
-        }
+        // Always materialize the state map (commands re-read it even on partial start) and surface
+        // the partial flag — Rust EagerState{ is_partial, values } (vm/context.rs:373-435).
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>?>(msg.StateMap.Count);
+        foreach (var entry in msg.StateMap)
+            eagerState[entry.Key.ToStringUtf8()] = entry.Value.Memory;
 
         return new StartMessageFields(
             msg.Id.ToByteArray(),
@@ -57,7 +59,214 @@ internal static class ProtobufCodec
             msg.Key.Length > 0 ? msg.Key : null,
             msg.KnownEntries,
             msg.RandomSeed,
-            eagerState);
+            eagerState,
+            msg.PartialState);
+    }
+
+    /// <summary>
+    ///     Preflight decoder: decodes one replayed COMMAND wire frame into a <see cref="ReplayCommand" />
+    ///     using the generated protobuf parsers (AOT-safe, no reflection). The command's result is NOT
+    ///     read here — completable results arrive in *CompletionNotification messages keyed by
+    ///     result_completion_id; only the eager-state commands carry their result inline (Rust SysStateGet
+    ///     journals the observed eager value, journal.rs:325-340).
+    /// </summary>
+    public static ReplayCommand ParseReplayCommand(MessageType type, ReadOnlySpan<byte> payload)
+    {
+        switch (type)
+        {
+            case MessageType.OutputCommand:
+                return new ReplayCommand { MessageType = type, EntryType = JournalEntryType.Output };
+            case MessageType.GetLazyStateCommand:
+                {
+                    var m = Gen.GetLazyStateCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetState,
+                        Name = m.Key.ToStringUtf8(),
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.GetEagerStateCommand:
+                {
+                    var m = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetState,
+                        Name = m.Key.ToStringUtf8(),
+                        HasEagerResult = true,
+                        EagerIsVoid = m.ResultCase == Gen.GetEagerStateCommandMessage.ResultOneofCase.Void,
+                        EagerValue = m.ResultCase == Gen.GetEagerStateCommandMessage.ResultOneofCase.Value
+                            ? m.Value.Content.Memory : ReadOnlyMemory<byte>.Empty
+                    };
+                }
+            case MessageType.GetLazyStateKeysCommand:
+                {
+                    var m = Gen.GetLazyStateKeysCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetStateKeys,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.GetEagerStateKeysCommand:
+                {
+                    var m = Gen.GetEagerStateKeysCommandMessage.Parser.ParseFrom(payload);
+                    // Re-encode keys as JSON string[] — same convention as the StateKeys notification.
+                    var keyCount = m.Value?.Keys.Count ?? 0;
+                    var keys = new string[keyCount];
+                    for (var i = 0; i < keyCount; i++) keys[i] = m.Value!.Keys[i].ToStringUtf8();
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetStateKeys,
+                        HasEagerResult = true,
+                        EagerValue = (ReadOnlyMemory<byte>)JsonSerializer.SerializeToUtf8Bytes(keys)
+                    };
+                }
+            case MessageType.SetStateCommand:
+                {
+                    var m = Gen.SetStateCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.SetState,
+                        Name = m.Key.ToStringUtf8()
+                    };
+                }
+            case MessageType.ClearStateCommand:
+                {
+                    var m = Gen.ClearStateCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.ClearState,
+                        Name = m.Key.ToStringUtf8()
+                    };
+                }
+            case MessageType.ClearAllStateCommand:
+                return new ReplayCommand { MessageType = type, EntryType = JournalEntryType.ClearAllState };
+            case MessageType.SleepCommand:
+                {
+                    var m = Gen.SleepCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.Sleep,
+                        Name = m.Name,
+                        ResultCompletionId = m.ResultCompletionId   // name = proto field 12
+                    };
+                }
+            case MessageType.CallCommand:
+                {
+                    var m = Gen.CallCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.Call,
+                        Name = m.Name,                                            // proto field 12
+                        TargetService = m.ServiceName,
+                        TargetHandler = m.HandlerName,
+                        TargetKey = m.Key,
+                        ResultCompletionId = m.ResultCompletionId,
+                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
+                    };
+                }
+            case MessageType.OneWayCallCommand:
+                {
+                    var m = Gen.OneWayCallCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.OneWayCall,
+                        Name = m.Name,
+                        TargetService = m.ServiceName,
+                        TargetHandler = m.HandlerName,
+                        TargetKey = m.Key,
+                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
+                    };
+                }
+            case MessageType.SendSignalCommand:
+                {
+                    var m = Gen.SendSignalCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.SendSignal,
+                        Name = m.EntryName                                         // entry_name, proto field 12
+                    };
+                }
+            case MessageType.RunCommand:
+                {
+                    var m = Gen.RunCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.Run,
+                        Name = m.Name,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.GetPromiseCommand:
+                {
+                    var m = Gen.GetPromiseCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetPromise,
+                        Name = m.Key,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.PeekPromiseCommand:
+                {
+                    var m = Gen.PeekPromiseCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.PeekPromise,
+                        Name = m.Key,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.CompletePromiseCommand:
+                {
+                    var m = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.CompletePromise,
+                        Name = m.Key,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.AttachInvocationCommand:
+                {
+                    var m = Gen.AttachInvocationCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.AttachInvocation,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.GetInvocationOutputCommand:
+                {
+                    var m = Gen.GetInvocationOutputCommandMessage.Parser.ParseFrom(payload);
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.GetInvocationOutput,
+                        ResultCompletionId = m.ResultCompletionId
+                    };
+                }
+            case MessageType.CompleteAwakeableCommand:
+                return new ReplayCommand { MessageType = type, EntryType = JournalEntryType.CompleteAwakeable };
+            default:
+                throw new ProtocolException($"Unknown replayed command type: {type}");
+        }
     }
 
     public static (ReadOnlyMemory<byte> Input, Dictionary<string, string>? Headers) ParseInputCommand(ReadOnlySpan<byte> payload)
@@ -281,6 +490,40 @@ internal static class ProtobufCodec
         };
     }
 
+    /// <summary>
+    ///     Journals an eager-state hit (B7 — journal.rs:325-340). value == null → Void result
+    ///     (known-absent/cleared); otherwise Value result.
+    /// </summary>
+    public static Gen.GetEagerStateCommandMessage CreateGetEagerStateCommand(string key, ReadOnlyMemory<byte>? value)
+    {
+        var msg = new Gen.GetEagerStateCommandMessage { Key = ByteString.CopyFromUtf8(key) };
+        if (value is null) msg.Void = new Gen.Void();
+        else msg.Value = new Gen.Value { Content = ByteString.CopyFrom(value.Value.Span) };
+        return msg;
+    }
+
+    public static Gen.GetEagerStateKeysCommandMessage CreateGetEagerStateKeysCommand(IEnumerable<string> keys)
+    {
+        var sk = new Gen.StateKeys();
+        foreach (var k in keys) sk.Keys.Add(ByteString.CopyFromUtf8(k));
+        return new Gen.GetEagerStateKeysCommandMessage { Value = sk };
+    }
+
+    /// <summary>
+    ///     Builds the SuspensionMessage (B8). waiting_named_signals (proto field 3) is INTENTIONALLY
+    ///     never populated: this fork does not consume named signals (§5 non-goal); Rust fills it
+    ///     from NotificationId::SignalName (terminal.rs:43-46). Whoever implements named-signal waits
+    ///     must extend this factory or the runtime will never resume a named-signal park.
+    /// </summary>
+    public static Gen.SuspensionMessage CreateSuspensionMessage(
+        IReadOnlyCollection<uint> waitingCompletions, IReadOnlyCollection<uint> waitingSignals)
+    {
+        var msg = new Gen.SuspensionMessage();
+        foreach (var id in waitingCompletions) msg.WaitingCompletions.Add(id);
+        foreach (var id in waitingSignals) msg.WaitingSignals.Add(id);
+        return msg;
+    }
+
     public static Gen.CompleteAwakeableCommandMessage CreateCompleteAwakeableSuccess(string id, ReadOnlySpan<byte> value)
     {
         return new Gen.CompleteAwakeableCommandMessage
@@ -379,7 +622,7 @@ internal static class ProtobufCodec
         return new Gen.SendSignalCommandMessage
         {
             TargetInvocationId = targetInvocationId,
-            Idx = 1, // BuiltInSignal.CANCEL = 1
+            Idx = CancelSignalId, // BuiltInSignal.CANCEL = 1
             Void = new Gen.Void()
         };
     }

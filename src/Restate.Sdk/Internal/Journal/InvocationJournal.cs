@@ -1,82 +1,94 @@
-using System.Buffers;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Internal.Journal;
 
-internal sealed class InvocationJournal : IDisposable
+/// <summary>
+///     Command accounting + buffered replay queue. Mirrors sdk-shared-core's Journal counters
+///     (vm/context.rs) and State::Replaying{ commands } (vm/transitions/journal.rs):
+///     replay is driven exclusively by the queue buffered during StartAsync, ends when the
+///     queue empties, and never reads the wire.
+///
+///     THREAD-SAFETY: this class is intentionally NOT self-synchronizing. Every member —
+///     EnqueueReplay (preflight only), DequeueReplay, RecordCommand, the counters — is invoked
+///     exclusively inside the state machine's _commandLock, the same domain as the completion id
+///     counters, so id-allocation order, journal order, and dequeue order coincide by construction.
+/// </summary>
+internal sealed class InvocationJournal
 {
-    private const int DefaultCapacity = 4;
+    private readonly Queue<ReplayCommand> _replayCommands = new();
 
-    private JournalEntry[] _entries;
-    private List<byte[]>? _pooledBuffers;
-
-    public InvocationJournal()
-    {
-        _entries = ArrayPool<JournalEntry>.Shared.Rent(DefaultCapacity);
-    }
-
+    /// <summary>StartMessage.known_entries — commands + notifications. Preflight loop bound + logging ONLY.</summary>
     public int KnownEntries { get; private set; }
+
+    /// <summary>Total commands recorded (replayed-consumed + live-written). Entry 0 is Input.</summary>
     public int Count { get; private set; }
 
-    public bool IsReplaying => Count < KnownEntries;
+    public int CommandIndex => Count - 1;
 
-    public JournalEntry this[int index]
+    /// <summary>Last recorded command metadata — Rust current_entry_ty/current_entry_name, for error messages.</summary>
+    public JournalEntryType LastCommandType { get; private set; } = JournalEntryType.Input;
+    public string? LastCommandName { get; private set; }
+
+    /// <summary>Replay is in progress while buffered commands remain — Rust !commands.is_empty().</summary>
+    public bool IsReplaying => _replayCommands.Count > 0;
+
+    public void Initialize(int knownEntries) => KnownEntries = knownEntries;
+
+    public void EnqueueReplay(in ReplayCommand command) => _replayCommands.Enqueue(command);
+
+    /// <summary>Records a live command write (the Processing-path analogue of DequeueReplay).</summary>
+    public void RecordCommand(JournalEntryType type, string? name = null)
     {
-        get
-        {
-            if ((uint)index >= (uint)Count)
-                throw new ArgumentOutOfRangeException(nameof(index));
-            return _entries[index];
-        }
+        Count++;
+        LastCommandType = type;
+        LastCommandName = name;
     }
 
     /// <summary>
-    ///     Tracks a pooled buffer (detached from RawMessage) for batch return on Dispose.
+    ///     Pops the next buffered replay command, validating type and name STRICTLY — the
+    ///     analogues of UnavailableEntryError, CommandTypeMismatchError and
+    ///     check_entry_header_match/CommandMismatchError in vm/transitions/journal.rs:887-902.
+    ///     Rust compares the whole expected command, so name comparison is unconditional:
+    ///     null normalizes to "" and journaled-nonempty vs expected-empty (or vice versa) is a
+    ///     MISMATCH. (This fork's journals are self-produced — pre-release, no foreign-journal
+    ///     leniency.)
     /// </summary>
-    public void TrackPooledBuffer(byte[] buffer)
+    public ReplayCommand DequeueReplay(JournalEntryType expectedType, string? expectedName = null)
     {
-        (_pooledBuffers ??= new List<byte[]>(8)).Add(buffer);
-    }
+        if (_replayCommands.Count == 0)
+            throw new ProtocolException(
+                $"Unavailable entry during replay at command index {Count}: expected {expectedType}");
 
-    public void Dispose()
-    {
-        if (_pooledBuffers is not null)
-        {
-            foreach (var buf in _pooledBuffers)
-                ArrayPool<byte>.Shared.Return(buf);
-            _pooledBuffers = null;
-        }
+        var command = _replayCommands.Dequeue();
+        if (command.EntryType != expectedType)
+            throw new ProtocolException(
+                $"Command type mismatch at command index {Count}: replayed {command.EntryType}, expected {expectedType}");
+        if (!string.Equals(command.Name ?? "", expectedName ?? "", StringComparison.Ordinal))
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count}: replayed '{command.Name}', expected '{expectedName}'");
 
-        if (_entries.Length > 0)
-        {
-            ArrayPool<JournalEntry>.Shared.Return(_entries, true);
-            _entries = [];
-            Count = 0;
-        }
-    }
-
-    public void Initialize(int knownEntries)
-    {
-        KnownEntries = knownEntries;
-        if (knownEntries > _entries.Length)
-            Grow(knownEntries);
-    }
-
-    public int Append(JournalEntry entry)
-    {
-        if (Count == _entries.Length)
-            Grow(_entries.Length * 2);
-
-        var index = Count;
-        _entries[index] = entry;
         Count++;
-        return index;
+        LastCommandType = command.EntryType;
+        LastCommandName = command.Name;
+        return command;
     }
 
-    private void Grow(int minCapacity)
+    /// <summary>
+    ///     Call/OneWayCall replay validation — type/name PLUS the target triple, so two swapped
+    ///     calls with identical id shapes fail loudly instead of cross-wiring values
+    ///     (check_entry_header_match compares service_name/handler_name/key too).
+    /// </summary>
+    public ReplayCommand DequeueReplay(JournalEntryType expectedType, string? expectedName,
+        string expectedService, string expectedHandler, string? expectedKey)
     {
-        var newArray = ArrayPool<JournalEntry>.Shared.Rent(minCapacity);
-        _entries.AsSpan(0, Count).CopyTo(newArray);
-        ArrayPool<JournalEntry>.Shared.Return(_entries, true);
-        _entries = newArray;
+        var command = DequeueReplay(expectedType, expectedName);
+        if (!string.Equals(command.TargetService ?? "", expectedService, StringComparison.Ordinal)
+            || !string.Equals(command.TargetHandler ?? "", expectedHandler, StringComparison.Ordinal)
+            || !string.Equals(command.TargetKey ?? "", expectedKey ?? "", StringComparison.Ordinal))
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count - 1}: replayed target " +
+                $"'{command.TargetService}/{command.TargetHandler}' key '{command.TargetKey}', " +
+                $"expected '{expectedService}/{expectedHandler}' key '{expectedKey}'");
+        return command;
     }
 }

@@ -1,4 +1,3 @@
-using System.Text;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
 
@@ -35,7 +34,8 @@ internal sealed partial class InvocationStateMachine
             fields.Key ?? "",
             fields.RandomSeed,
             (int)fields.KnownEntries,
-            fields.EagerState);
+            fields.EagerState,
+            fields.PartialState);
 
         // The InputCommand always follows StartMessage (regardless of known_entries).
         Log.ReadingMessage(Logger, InvocationId);
@@ -59,39 +59,33 @@ internal sealed partial class InvocationStateMachine
             input = ReadOnlyMemory<byte>.Empty;
         }
 
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Input, input));
+        _journal.RecordCommand(JournalEntryType.Input);
         inputMsg.Dispose();
 
-        // Read remaining known entries (replayed commands and notifications).
-        // known_entries includes the InputCommand (entry 0), so we start from 1.
+        // Read remaining known entries: buffer commands into the replay queue, route notifications
+        // into the CompletionManager by WIRE id (early-completion slots). known_entries counts BOTH
+        // commands and notifications (protocol.proto:60-61) — Rust input.rs:79-148 PostReceiveEntry.
         for (var i = 1; i < (int)fields.KnownEntries; i++)
         {
             Log.ReadingMessage(Logger, InvocationId);
             var msg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
-                      ?? throw new ProtocolException("Stream ended during replay");
+                      ?? throw new ProtocolException("Stream ended while reading known entries");
             Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
 
             if (msg.Header.Type.IsCommand())
-            {
-                var (detachedBuf, detachedMem) = msg.DetachPayload();
-                _journal.TrackPooledBuffer(detachedBuf);
-                _journal.Append(JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type), detachedMem));
-            }
+                _journal.EnqueueReplay(ProtobufCodec.ParseReplayCommand(msg.Header.Type, msg.Payload));
             else if (msg.Header.Type.IsNotification())
-            {
                 HandleIncomingMessage(msg);
-            }
+            else
+                throw new ProtocolException(
+                    $"Unexpected {msg.Header.Type} inside the known-entries replay batch");
 
             msg.Dispose();
         }
 
-        // After reading all known entries, transition to Processing
-        if (!_journal.IsReplaying)
-        {
-            State = InvocationState.Processing;
-            Log.ReplayCompleted(Logger, InvocationId);
-        }
+        // Replay is in progress iff buffered commands remain — Rust !commands.is_empty().
+        State = _journal.IsReplaying ? InvocationState.Replaying : InvocationState.Processing;
+        if (State == InvocationState.Processing) Log.ReplayCompleted(Logger, InvocationId);
 
         return new StartInfo(
             fields.InvocationId,
@@ -103,20 +97,42 @@ internal sealed partial class InvocationStateMachine
 
     public async Task ProcessIncomingMessagesAsync(CancellationToken ct)
     {
-        while (State != InvocationState.Closed)
+        try
         {
-            Log.ReadingMessage(Logger, InvocationId);
-            var message = await _reader.ReadMessageAsync(ct).ConfigureAwait(false);
-            if (message is null)
+            while (State != InvocationState.Closed)
             {
-                Log.StreamEnded(Logger, InvocationId);
-                break;
-            }
+                Log.ReadingMessage(Logger, InvocationId);
+                var message = await _reader.ReadMessageAsync(ct).ConfigureAwait(false);
+                if (message is null)
+                {
+                    Log.StreamEnded(Logger, InvocationId);
+                    MarkInputClosed();
+                    await TrySuspendAsync().ConfigureAwait(false);   // EOF-after-park trigger site
+                    break;
+                }
 
-            var msg = message.Value;
-            Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
-            HandleIncomingMessage(msg);
-            msg.Dispose();
+                var msg = message.Value;
+                Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
+                HandleIncomingMessage(msg);
+                msg.Dispose();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // RST_STREAM / teardown: unpark any waiter so HandleAsync can unwind (defensive leak-stop).
+            _completions.FailAll(new OperationCanceledException(ct));
+            _signalCompletions.FailAll(new OperationCanceledException(ct));
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Pump death (ProtocolException from the command-after-preflight guard, parse error,
+            // reader IO failure) must fault every parked waiter — Rust parity: any do_transition
+            // error moves the VM to a terminal error state observed by every subsequent poll. The
+            // handler unwinds with this exception and HandleAsync's catch arms emit the ErrorMessage.
+            _completions.FailAll(ex);
+            _signalCompletions.FailAll(ex);
+            throw;
         }
     }
 
@@ -126,6 +142,10 @@ internal sealed partial class InvocationStateMachine
 
         if (type == MessageType.EntryAck)
             return;
+
+        // A command-typed message after preflight is a protocol violation (previously dropped silently).
+        if (type.IsCommand())
+            throw new ProtocolException($"Unexpected command {type} outside the replay batch");
 
         // Signal notifications (awakeable completions delivered via the signal mechanism)
         if (type == MessageType.SignalNotification)
@@ -137,6 +157,15 @@ internal sealed partial class InvocationStateMachine
             if (signal.Idx is not null)
             {
                 var signalIndex = (int)signal.Idx.Value;
+
+                // Reserved built-in range (1..16) is not consumed as a user signal — CANCEL handling
+                // and named-signal consumption remain out of scope; log-and-ignore (§5 divergence).
+                if (signalIndex < FirstUserSignalId)
+                {
+                    Log.BuiltInSignalIgnored(Logger, InvocationId, signalIndex);
+                    return;
+                }
+
                 Log.NotificationReceived(Logger, InvocationId, MessageType.SignalNotification, signalIndex, signal.IsFailure);
 
                 if (signal.IsFailure)
@@ -153,6 +182,10 @@ internal sealed partial class InvocationStateMachine
 
                 Log.CompletionReceived(Logger, InvocationId, signalIndex);
             }
+            else
+            {
+                Log.BuiltInSignalIgnored(Logger, InvocationId, -1);   // named signal — not yet consumed
+            }
 
             return;
         }
@@ -163,109 +196,82 @@ internal sealed partial class InvocationStateMachine
                 return;
 
             var notification = ProtobufCodec.ParseCompletionNotification(message.Payload);
-            var entryIndex = (int)notification.CompletionId;
-            Log.NotificationReceived(Logger, InvocationId, type, entryIndex, notification.IsFailure);
+            var completionId = (int)notification.CompletionId;
+            Log.NotificationReceived(Logger, InvocationId, type, completionId, notification.IsFailure);
 
             // Invocation ID notification (field 16) — complete with the ID as UTF-8 bytes
             if (notification.InvocationId is not null)
             {
-                _completions.TryComplete(entryIndex,
+                _completions.TryComplete(completionId,
                     CompletionResult.SuccessString(notification.InvocationId));
-                Log.CompletionReceived(Logger, InvocationId, entryIndex);
+                Log.CompletionReceived(Logger, InvocationId, completionId);
                 return;
             }
 
             if (notification.IsFailure)
             {
-                _completions.TryFail(entryIndex, notification.FailureCode!.Value, notification.FailureMessage!);
+                _completions.TryFail(completionId, notification.FailureCode!.Value, notification.FailureMessage!);
             }
             else
             {
                 var result = notification.Value is not null
                     ? CompletionResult.Success(notification.Value.Value)
                     : CompletionResult.Success(ReadOnlyMemory<byte>.Empty);
-                _completions.TryComplete(entryIndex, result);
+                _completions.TryComplete(completionId, result);
             }
 
-            Log.CompletionReceived(Logger, InvocationId, entryIndex);
+            Log.CompletionReceived(Logger, InvocationId, completionId);
         }
     }
 
     /// <summary>
-    ///     Reads messages until the next journal command is appended at the expected index.
-    ///     Notifications (completions, acks) are handled inline but don't advance the journal —
-    ///     the loop continues until a Command message arrives or the stream ends.
-    ///     Cancellation token guards against indefinite waits.
+    ///     Synchronous replay-buffer pop (the B3 fix — no wire access). Pops + validates one
+    ///     buffered command and flips State to Processing when the queue drains. Caller MUST hold
+    ///     _commandLock (id alloc, dequeue, and the State flip are one atomic section).
     /// </summary>
-    private async ValueTask<JournalEntry> ReplayNextEntryAsync(
-        JournalEntryType expectedType, string? name, CancellationToken ct)
+    private ReplayCommand DequeueReplayCommand(JournalEntryType expectedType, string? expectedName = null)
     {
-        var index = _journal.Count;
-
-        while (index >= _journal.Count)
-        {
-            var msg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
-                      ?? throw new ProtocolException("Stream ended during replay");
-
-            if (msg.Header.Type.IsCommand())
-            {
-                var (detachedBuf, detachedMem) = msg.DetachPayload();
-                _journal.TrackPooledBuffer(detachedBuf);
-                _journal.Append(JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type), detachedMem, name));
-            }
-            else if (msg.Header.Type.IsNotification())
-            {
-                HandleIncomingMessage(msg);
-            }
-
-            msg.Dispose();
-        }
-
-        var replayEntry = _journal[index];
-
+        var command = _journal.DequeueReplay(expectedType, expectedName);
         if (!_journal.IsReplaying)
         {
             State = InvocationState.Processing;
             Log.ReplayCompleted(Logger, InvocationId);
         }
 
-        return replayEntry;
+        return command;
     }
 
-    private void AdvanceReplayIndex(JournalEntryType type)
+    /// <summary>Call/OneWayCall replay-pop with target-triple validation. Caller MUST hold _commandLock.</summary>
+    private ReplayCommand DequeueReplayCommand(JournalEntryType expectedType, string? expectedName,
+        string expectedService, string expectedHandler, string? expectedKey)
     {
-        _journal.Append(JournalEntry.Completed(type, ReadOnlyMemory<byte>.Empty));
+        var command = _journal.DequeueReplay(expectedType, expectedName, expectedService, expectedHandler, expectedKey);
         if (!_journal.IsReplaying)
         {
             State = InvocationState.Processing;
             Log.ReplayCompleted(Logger, InvocationId);
         }
+
+        return command;
     }
 
-    private static JournalEntryType MapMessageTypeToEntry(MessageType type)
+    /// <summary>
+    ///     Non-determinism check: a replayed command's wire id must equal the locally re-allocated
+    ///     one (counters advance identically across attempts). STRICT: every completable V4 command
+    ///     carries an id &gt;= 1 — counters start at 1 precisely so 0 means field-unset
+    ///     (context.rs:106-107) and Rust's header_eq compares the field unconditionally. This is
+    ///     only called for completable commands, so replayed == 0 means a corrupted/foreign journal,
+    ///     never a benign skip.
+    /// </summary>
+    private void ValidateReplayCompletionId(uint replayed, uint allocated)
     {
-        return type switch
-        {
-            MessageType.InputCommand => JournalEntryType.Input,
-            MessageType.OutputCommand => JournalEntryType.Output,
-            MessageType.GetLazyStateCommand or MessageType.GetEagerStateCommand => JournalEntryType.GetState,
-            MessageType.SetStateCommand => JournalEntryType.SetState,
-            MessageType.ClearStateCommand => JournalEntryType.ClearState,
-            MessageType.ClearAllStateCommand => JournalEntryType.ClearAllState,
-            MessageType.GetLazyStateKeysCommand or MessageType.GetEagerStateKeysCommand =>
-                JournalEntryType.GetStateKeys,
-            MessageType.SleepCommand => JournalEntryType.Sleep,
-            MessageType.CallCommand => JournalEntryType.Call,
-            MessageType.OneWayCallCommand => JournalEntryType.OneWayCall,
-            MessageType.CompleteAwakeableCommand => JournalEntryType.CompleteAwakeable,
-            MessageType.RunCommand => JournalEntryType.Run,
-            MessageType.GetPromiseCommand => JournalEntryType.GetPromise,
-            MessageType.PeekPromiseCommand => JournalEntryType.PeekPromise,
-            MessageType.CompletePromiseCommand => JournalEntryType.CompletePromise,
-            MessageType.AttachInvocationCommand => JournalEntryType.AttachInvocation,
-            MessageType.GetInvocationOutputCommand => JournalEntryType.GetInvocationOutput,
-            _ => throw new ProtocolException($"Unknown command type: {type}")
-        };
+        if (replayed == 0)
+            throw new ProtocolException(
+                $"Corrupt journal at command index {_journal.CommandIndex}: " +
+                "completable command missing its completion id");
+        if (replayed != allocated)
+            throw new ProtocolException(
+                $"Non-deterministic replay at command index {_journal.CommandIndex}: " +
+                $"journaled completion id {replayed}, locally allocated {allocated}");
     }
 }

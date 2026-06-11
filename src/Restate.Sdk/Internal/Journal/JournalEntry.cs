@@ -1,3 +1,5 @@
+using Restate.Sdk.Internal.Protocol;
+
 namespace Restate.Sdk.Internal.Journal;
 
 internal enum JournalEntryType
@@ -23,33 +25,48 @@ internal enum JournalEntryType
     SendSignal
 }
 
-internal readonly struct JournalEntry
+/// <summary>
+///     One buffered replayed command, parsed during StartAsync preflight.
+///     The C# analogue of one element of Rust's State::Replaying{ commands: VecDeque&lt;RawMessage&gt; }
+///     (vm/transitions/journal.rs), pre-decoded so replay never re-parses or re-reads the wire.
+/// </summary>
+internal readonly struct ReplayCommand
 {
-    public JournalEntryType Type { get; }
-    public string? Name { get; }
-    public ReadOnlyMemory<byte> Result { get; }
-    public bool IsCompleted { get; }
+    public MessageType MessageType { get; init; }
+    public JournalEntryType EntryType { get; init; }
 
-    private JournalEntry(JournalEntryType type, string? name, ReadOnlyMemory<byte> result, bool completed)
-    {
-        Type = type;
-        Name = name;
-        Result = result;
-        IsCompleted = completed;
-    }
+    /// <summary>
+    ///     Run name / state key / promise key / the proto <c>name</c> field of Call, OneWayCall,
+    ///     Sleep (field 12) and SendSignal (<c>entry_name</c>, field 12) — used for non-determinism
+    ///     validation. Rust's check_entry_header_match compares the WHOLE expected command;
+    ///     name is part of that comparison, so empty-vs-nonempty is a MISMATCH.
+    /// </summary>
+    public string? Name { get; init; }
 
-    public static JournalEntry Completed(JournalEntryType type, ReadOnlyMemory<byte> result, string? name = null)
-    {
-        return new JournalEntry(type, name, result, true);
-    }
+    /// <summary>
+    ///     result_completion_id parsed from the command. Every completable V4 command written by
+    ///     a conformant SDK carries an id &gt;= 1 (counters start at 1 precisely so 0 means
+    ///     field-unset, context.rs:106-107); 0 on a completable command is a corrupt/foreign
+    ///     journal and ValidateReplayCompletionId rejects it.
+    /// </summary>
+    public uint ResultCompletionId { get; init; }
 
-    public static JournalEntry Pending(JournalEntryType type, string? name = null)
-    {
-        return new JournalEntry(type, name, ReadOnlyMemory<byte>.Empty, false);
-    }
+    /// <summary>invocation_id_notification_idx (Call/OneWayCall). Always set by a conformant SDK.</summary>
+    public uint InvocationIdNotificationIdx { get; init; }
 
-    public JournalEntry WithCompletion(ReadOnlyMemory<byte> result)
-    {
-        return new JournalEntry(Type, Name, result, true);
-    }
+    /// <summary>
+    ///     Call/OneWayCall target triple (service_name/handler_name/key) — replay-validated against
+    ///     the live call's target so swapped calls with identical id shapes fail loudly instead of
+    ///     cross-wiring values (check_entry_header_match parity).
+    /// </summary>
+    public string? TargetService { get; init; }
+    public string? TargetHandler { get; init; }
+    public string? TargetKey { get; init; }
+
+    /// <summary>GetEagerStateCommand / GetEagerStateKeysCommand carry the result inline.</summary>
+    public bool HasEagerResult { get; init; }
+    public bool EagerIsVoid { get; init; }
+
+    /// <summary>Eager value bytes; for GetEagerStateKeys this is the keys re-encoded as JSON string[].</summary>
+    public ReadOnlyMemory<byte> EagerValue { get; init; }
 }

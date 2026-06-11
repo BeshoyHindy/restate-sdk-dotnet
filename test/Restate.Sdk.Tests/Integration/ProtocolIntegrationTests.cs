@@ -35,6 +35,25 @@ public class FailingService
 }
 
 /// <summary>
+///     A service with a single side effect, used for the resumed-invocation end-to-end (§4.9).
+///     On replay the journaled RunCommand carries a buffered RunCompletion, so the closure must NOT
+///     execute and the handler result must come from the notification. The closure deliberately
+///     returns a sentinel that would FAIL the assertion if it ran — proving the value is
+///     notification-derived (blueprint §1.7 case 1).
+/// </summary>
+[Service(Name = "ResumableService")]
+public class ResumableService
+{
+    internal const string ClosureSentinel = "closure-executed-on-replay-BUG";
+
+    [Handler]
+    public async Task<string> Compute(Context ctx, string input)
+    {
+        return await ctx.Run("step", () => ClosureSentinel);
+    }
+}
+
+/// <summary>
 ///     Integration tests that exercise the full Restate binary protocol flow:
 ///     construct a proper binary stream (StartMessage + InputCommand),
 ///     send it to InvocationHandler via in-memory streams,
@@ -273,6 +292,76 @@ public class ProtocolIntegrationTests
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);
+    }
+
+    /// <summary>
+    ///     Resumed-invocation end-to-end (blueprint §4.9): a journal of
+    ///     Start{known_entries=3} + Input + RunCommand{id=1} + RunCompletion{id=1, value} replays the
+    ///     side effect WITHOUT re-executing its closure. The RunCommand is the replay frontier and a
+    ///     buffered completion exists, so the handler resolves the run from the notification (§1.7
+    ///     case 1). The emitted Output must equal the notification-derived value — never the closure's
+    ///     sentinel — and no RunCommand or ProposeRunCompletion may be re-emitted on the wire.
+    ///     Pre-fix (B1/B2) this path either re-derived the wrong completion id or fed the replayed
+    ///     protobuf command bytes into the JSON deserializer; both surface here.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public async Task HandleAsync_ResumedInvocation_OutputEqualsNotificationValue()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("ignored");
+        // known_entries = Input(1) + RunCommand(command) + RunCompletion(notification) = 3.
+        var startPayload = BuildStartMessagePayload("inv-resumed", 3, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        // The journaled RunCommand and its buffered completion. The completion carries the durable
+        // result the runtime stored on the first attempt — distinct from the closure sentinel.
+        var notificationValue = JsonSerializer.SerializeToUtf8Bytes("resumed-from-notification");
+        var runCommandPayload = new Gen.RunCommandMessage { Name = "step", ResultCompletionId = 1 }.ToByteArray();
+        var runCompletionPayload = new Gen.RunCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Value = new Gen.Value { Content = ByteString.CopyFrom(notificationValue) }
+        }.ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.RunCommand, runCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.RunCompletion, runCompletionPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(ResumableService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Compute");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new ResumableService()),
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var responseData = responseStream.ToArray();
+        Assert.True(responseData.Length > 0, "Response stream should not be empty");
+
+        // Walk every frame: the Output must carry the notification value, and the journaled RunCommand
+        // must NOT be re-emitted (replay consumed it) nor a proposal generated (closure never ran).
+        var offset = 0;
+        string? outputJson = null;
+        while (offset < responseData.Length)
+        {
+            var (header, payload) = ReadFramedMessage(responseData, ref offset);
+            Assert.NotEqual(MessageType.RunCommand, header.Type);
+            Assert.NotEqual(MessageType.ProposeRunCompletion, header.Type);
+            if (header.Type == MessageType.OutputCommand)
+                outputJson = Encoding.UTF8.GetString(ExtractOutputContent(payload));
+        }
+
+        Assert.Equal("\"resumed-from-notification\"", outputJson);
+        Assert.DoesNotContain(ResumableService.ClosureSentinel, outputJson);
     }
 
     private sealed class FuncServiceProvider(Func<Type, object> factory) : IServiceProvider

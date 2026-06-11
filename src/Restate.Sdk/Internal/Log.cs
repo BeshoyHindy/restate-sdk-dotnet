@@ -91,4 +91,16 @@ internal static partial class Log
     [LoggerMessage(EventId = 111, Level = LogLevel.Debug,
         Message = "[{InvocationId}] Cancelling invocation '{TargetInvocationId}'")]
     public static partial void CancellingInvocation(ILogger logger, string invocationId, string targetInvocationId);
+
+    [LoggerMessage(EventId = 112, Level = LogLevel.Information,
+        Message = "Invocation suspended: invocationId={InvocationId}")]
+    public static partial void InvocationSuspended(ILogger logger, string invocationId);
+
+    [LoggerMessage(EventId = 113, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Built-in/reserved signal ignored (idx {SignalIndex})")]
+    public static partial void BuiltInSignalIgnored(ILogger logger, string invocationId, int signalIndex);
+
+    [LoggerMessage(EventId = 114, Level = LogLevel.Debug,
+        Message = "Incoming message reader faulted: invocationId={InvocationId}")]
+    public static partial void IncomingReaderFaulted(ILogger logger, Exception exception, string invocationId);
 }

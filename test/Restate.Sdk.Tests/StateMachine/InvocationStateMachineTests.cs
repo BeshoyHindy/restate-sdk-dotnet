@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text.Json;
+using Google.Protobuf;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
@@ -42,10 +43,10 @@ public class InvocationStateMachineTests : IDisposable
     }
 
     [Fact]
-    public void Initialize_WithNoKnownEntries_TransitionsToProcessing()
+    public void Initialize_WithInputOnly_TransitionsToProcessing()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-123", "my-key", 42, 0);
+        sm.Initialize("inv-123", "my-key", 42, 1);   // 1 = the Input entry only
 
         Assert.Equal(InvocationState.Processing, sm.State);
         Assert.Equal("inv-123", sm.InvocationId);
@@ -54,22 +55,30 @@ public class InvocationStateMachineTests : IDisposable
     }
 
     [Fact]
-    public void Initialize_WithKnownEntries_TransitionsToReplaying()
+    public void Initialize_WithReplayBatch_TransitionsToReplaying()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-123", "my-key", 42, 3);
+        sm.Initialize("inv-123", "my-key", 42, 3);   // Input + 2 entries → provisional Replaying
 
         Assert.Equal(InvocationState.Replaying, sm.State);
+    }
+
+    [Fact]
+    public void Initialize_KnownEntriesZero_Throws()
+    {
+        using var sm = CreateSm();
+        Assert.Throws<ProtocolException>(() =>
+            sm.Initialize("inv-123", "my-key", 42, 0));   // KNOWN_ENTRIES_IS_ZERO parity
     }
 
     [Fact]
     public void Initialize_ThrowsWhenCalledTwice()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         Assert.Throws<InvalidOperationException>(() =>
-            sm.Initialize("inv-2", "", 0, 0));
+            sm.Initialize("inv-2", "", 0, 1));
     }
 
     [Fact]
@@ -101,61 +110,92 @@ public class InvocationStateMachineTests : IDisposable
     public async Task RunAsync_ThrowsInClosedState()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
-        await sm.CompleteAsync(Array.Empty<byte>(), CancellationToken.None);
+        sm.Initialize("inv-1", "", 0, 1);
+        await sm.CompleteAsync(null, CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await sm.RunAsync("test", () => Task.FromResult(1), CancellationToken.None));
     }
 
     // ------- Side effects -------
+    // A blocking RunAsync parks on the RunCompletionNotification (the ack barrier); the closure runs
+    // synchronously, the proposal is flushed, then we deliver the notification so the await resolves.
 
     [Fact]
-    public async Task RunAsync_InProcessingMode_ExecutesAction()
+    public async Task RunAsync_InProcessingMode_ExecutesActionAndResolvesFromNotification()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
+
+        // The blocking Run parks on the RunCompletionNotification (the ack barrier). Start the SM's
+        // pump so the notification we write to the inbound pipe routes into the completion table.
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var executed = false;
-        var result = await sm.RunAsync("test", async () =>
+        var runTask = sm.RunAsync("test", async () =>
         {
             executed = true;
             await Task.CompletedTask;
             return 42;
         }, CancellationToken.None);
 
+        // Run command id starts at 1 (FirstCompletionId). Deliver the ack so the await resolves.
+        await WriteRunCompletionAsync(1, JsonSerializer.SerializeToUtf8Bytes(42));
+        var result = await runTask.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
+
         Assert.True(executed);
         Assert.Equal(42, result);
     }
 
     [Fact]
-    public async Task RunAsync_Void_InProcessingMode_ExecutesAction()
+    public async Task RunAsync_Void_InProcessingMode_ExecutesActionAndResolvesFromNotification()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
+
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var executed = false;
-        await sm.RunAsync("test", async () =>
+        var runTask = sm.RunAsync("test", async () =>
         {
             executed = true;
             await Task.CompletedTask;
         }, CancellationToken.None);
 
+        await WriteRunCompletionAsync(1, ReadOnlyMemory<byte>.Empty);
+        await runTask.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
+
         Assert.True(executed);
+    }
+
+    // Writes one RunCompletionNotification to the inbound pipe; the SM's pump routes it.
+    private async Task WriteRunCompletionAsync(uint completionId, ReadOnlyMemory<byte> value)
+    {
+        var notification = new Gen.RunCompletionNotificationMessage { CompletionId = completionId };
+        // RunCompletionNotification has no Void result; an unset result oneof reads as empty success.
+        if (!value.IsEmpty) notification.Value = new Gen.Value { Content = ByteString.CopyFrom(value.Span) };
+
+        var writer = new ProtocolWriter(_inbound.Writer);
+        writer.WriteMessage(MessageType.RunCompletion, notification.ToByteArray());
+        await writer.FlushAsync(CancellationToken.None);
+        _inbound.Writer.Complete();   // EOF after the single notification
     }
 
     // ------- Calls -------
 
     [Fact]
-    public async Task Send_InProcessingMode_WritesCommand()
+    public async Task Send_InProcessingMode_ReturnsHandleAfterFlush()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
-        // SendAsync now awaits a completion — we can't test it without a protocol writer that sends back the invocation ID
-        // Just verify it doesn't throw synchronously for now
-        var task = sm.SendAsync("Greeter", null, "Greet", (object?)"hello", null, null, CancellationToken.None);
-        Assert.False(task.IsCompleted); // awaiting invocation ID notification
+        // SendAsync flushes then returns a lazy handle immediately (fire-and-forget); resolving the
+        // id is a separate suspension point, so the send itself completes quickly.
+        var handle = await sm.SendAsync("Greeter", null, "Greet", (object?)"hello", null, null, CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(handle);
     }
 
     // ------- State -------
@@ -164,7 +204,7 @@ public class InvocationStateMachineTests : IDisposable
     public void SetState_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0);
+        sm.Initialize("inv-1", "key-1", 0, 1);
 
         sm.SetState("count", 42);
     }
@@ -173,7 +213,7 @@ public class InvocationStateMachineTests : IDisposable
     public void ClearState_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0);
+        sm.Initialize("inv-1", "key-1", 0, 1);
 
         sm.SetState("count", 42);
         sm.ClearState("count");
@@ -183,7 +223,7 @@ public class InvocationStateMachineTests : IDisposable
     public void ClearAllState_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0);
+        sm.Initialize("inv-1", "key-1", 0, 1);
 
         sm.SetState("a", 1);
         sm.SetState("b", 2);
@@ -193,54 +233,67 @@ public class InvocationStateMachineTests : IDisposable
     [Fact]
     public async Task GetStateAsync_WithEagerState_ReturnsWithoutWire()
     {
-        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>?>
         {
             ["count"] = JsonSerializer.SerializeToUtf8Bytes(42)
         };
 
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
+        sm.Initialize("inv-1", "key-1", 0, 1, eagerState, partialState: true);
 
-        var value = await sm.GetStateAsync<int>("count", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("count", CancellationToken.None).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(42, value);
     }
 
     [Fact]
-    public async Task GetStateAsync_WithEmptyEagerState_ReturnsDefault()
+    public async Task GetStateAsync_WithEmptyEagerValue_ReturnsDefault()
     {
-        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>?>
         {
             ["empty"] = ReadOnlyMemory<byte>.Empty
         };
 
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
+        sm.Initialize("inv-1", "key-1", 0, 1, eagerState, partialState: true);
 
-        var value = await sm.GetStateAsync<int>("empty", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("empty", CancellationToken.None).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, value);
     }
 
     // ------- Awakeable -------
 
     [Fact]
-    public void Awakeable_InProcessingMode_ReturnsIdAndTcs()
+    public void Awakeable_InProcessingMode_ReturnsIdAndSignalId()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", [0xAB, 0xCD], "", 0, 0);
+        sm.Initialize("inv-1", [0xAB, 0xCD], "", 0, 1);
 
-        var (id, tcs) = sm.Awakeable();
+        var (id, signalId) = sm.Awakeable();
 
-        // Format: "sign_1" + Base64UrlSafe(rawId + BigEndian32(signalIndex))
+        // Format: "sign_1" + Base64UrlSafe(rawId + BigEndian32(signalId)); first signal id = 17 (B4).
         Assert.StartsWith("sign_1", id);
-        Assert.NotNull(tcs);
-        Assert.False(tcs.Task.IsCompleted);
+        Assert.Equal(17u, signalId);
+    }
+
+    [Fact]
+    public void Awakeable_SignalIdsStartAt17AndIncrement()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB, 0xCD], "", 0, 1);
+
+        var (_, first) = sm.Awakeable();
+        var (_, second) = sm.Awakeable();
+        Assert.Equal(17u, first);
+        Assert.Equal(18u, second);
     }
 
     [Fact]
     public void ResolveAwakeable_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         sm.ResolveAwakeable("some-id", new byte[] { 1, 2, 3 });
     }
@@ -249,7 +302,7 @@ public class InvocationStateMachineTests : IDisposable
     public void RejectAwakeable_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         sm.RejectAwakeable("some-id", "timeout");
     }
@@ -260,7 +313,7 @@ public class InvocationStateMachineTests : IDisposable
     public void ResolvePromise_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0);
+        sm.Initialize("inv-1", "key-1", 0, 1);
 
         sm.ResolvePromise("approval", new { Approved = true });
     }
@@ -269,7 +322,7 @@ public class InvocationStateMachineTests : IDisposable
     public void RejectPromise_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "key-1", 0, 0);
+        sm.Initialize("inv-1", "key-1", 0, 1);
 
         sm.RejectPromise("approval", "denied");
     }
@@ -280,7 +333,7 @@ public class InvocationStateMachineTests : IDisposable
     public async Task CompleteAsync_TransitionsToClosed()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         await sm.CompleteAsync(new byte[] { 1, 2 }, CancellationToken.None);
 
@@ -291,7 +344,7 @@ public class InvocationStateMachineTests : IDisposable
     public async Task FailAsync_TransitionsToClosed()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         await sm.FailAsync(500, "something broke", CancellationToken.None);
 
@@ -302,7 +355,7 @@ public class InvocationStateMachineTests : IDisposable
     public async Task FailAsync_WithNextRetryDelay_EmitsRetryableErrorCarryingDelay()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         await sm.FailAsync(503, "retry me", CancellationToken.None, TimeSpan.FromMilliseconds(2500));
 
@@ -317,7 +370,7 @@ public class InvocationStateMachineTests : IDisposable
     public async Task FailAsync_WithoutDelay_EmitsErrorWithoutDelayOverride()
     {
         using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         await sm.FailAsync(500, "boom", CancellationToken.None);
 
@@ -336,113 +389,13 @@ public class InvocationStateMachineTests : IDisposable
         return parsed;
     }
 
-    // ------- Replay -------
-
-    [Fact]
-    public void Send_InReplayMode_AdvancesIndexAndTransitions()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 3);
-
-        Assert.Equal(InvocationState.Replaying, sm.State);
-
-        // During replay, SendAsync reads the next journal entry synchronously (already loaded)
-        // These won't complete because ReplayNextEntryAsync tries to read from the protocol reader
-        // which has no data. The replay-mode Send test needs protocol-level test infrastructure.
-        // For now, verify the state machine is in the right state.
-        Assert.Equal(InvocationState.Replaying, sm.State);
-    }
-
-    [Fact]
-    public void SetState_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
-
-        sm.SetState("count", 1);
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void ClearState_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
-
-        sm.ClearState("count");
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void ClearAllState_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
-
-        sm.ClearAllState();
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void ResolveAwakeable_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 1);
-
-        sm.ResolveAwakeable("id", ReadOnlyMemory<byte>.Empty);
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void RejectAwakeable_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 1);
-
-        sm.RejectAwakeable("id", "reason");
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void ResolvePromise_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
-
-        sm.ResolvePromise("name", "value");
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
-    [Fact]
-    public void RejectPromise_InReplayMode_AdvancesIndex()
-    {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
-
-        sm.RejectPromise("name", "reason");
-        Assert.Equal(InvocationState.Processing, sm.State);
-    }
-
     // ------- Disposal -------
-
-    [Fact]
-    public void Dispose_CancelsAllPendingCompletions()
-    {
-        var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
-
-        var (_, tcs) = sm.Awakeable();
-        Assert.False(tcs.Task.IsCompleted);
-
-        sm.Dispose();
-        Assert.True(tcs.Task.IsCanceled);
-    }
 
     [Fact]
     public void Dispose_TransitionsToClosed()
     {
         var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 0);
+        sm.Initialize("inv-1", "", 0, 1);
 
         sm.Dispose();
         Assert.Equal(InvocationState.Closed, sm.State);

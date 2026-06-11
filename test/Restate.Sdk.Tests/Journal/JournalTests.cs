@@ -1,103 +1,137 @@
 using Restate.Sdk.Internal.Journal;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Tests.Journal;
 
 public class InvocationJournalTests
 {
-    [Fact]
-    public void Append_IncreasesCount()
+    private static ReplayCommand Run(string? name = null, uint id = 1) => new()
     {
-        using var journal = new InvocationJournal();
+        MessageType = MessageType.RunCommand,
+        EntryType = JournalEntryType.Run,
+        Name = name,
+        ResultCompletionId = id
+    };
+
+    [Fact]
+    public void RecordCommand_IncreasesCount()
+    {
+        var journal = new InvocationJournal();
         Assert.Equal(0, journal.Count);
 
-        journal.Append(JournalEntry.Completed(JournalEntryType.Input, new byte[] { 1, 2, 3 }));
+        journal.RecordCommand(JournalEntryType.Input);
         Assert.Equal(1, journal.Count);
 
-        journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        journal.RecordCommand(JournalEntryType.Run, "side-effect");
         Assert.Equal(2, journal.Count);
+        Assert.Equal(JournalEntryType.Run, journal.LastCommandType);
+        Assert.Equal("side-effect", journal.LastCommandName);
+        Assert.Equal(1, journal.CommandIndex);
     }
 
     [Fact]
-    public void Append_ReturnsEntryIndex()
+    public void Initialize_SetsKnownEntries_WithoutImplyingReplay()
     {
-        using var journal = new InvocationJournal();
-        Assert.Equal(0, journal.Append(JournalEntry.Completed(JournalEntryType.Input, Array.Empty<byte>())));
-        Assert.Equal(1, journal.Append(JournalEntry.Pending(JournalEntryType.Call)));
-        Assert.Equal(2, journal.Append(JournalEntry.Pending(JournalEntryType.Sleep)));
-    }
-
-    [Fact]
-    public void Indexer_ReturnsCorrectEntry()
-    {
-        using var journal = new InvocationJournal();
-        var data = new byte[] { 10, 20, 30 };
-        journal.Append(JournalEntry.Completed(JournalEntryType.Run, data, "side-effect"));
-
-        var entry = journal[0];
-        Assert.Equal(JournalEntryType.Run, entry.Type);
-        Assert.Equal("side-effect", entry.Name);
-        Assert.True(entry.IsCompleted);
-        Assert.Equal(data, entry.Result.ToArray());
-    }
-
-    [Fact]
-    public void Indexer_ThrowsOnOutOfRange()
-    {
-        using var journal = new InvocationJournal();
-        Assert.Throws<ArgumentOutOfRangeException>(() => journal[0]);
-    }
-
-    [Fact]
-    public void Initialize_SetsKnownEntries()
-    {
-        using var journal = new InvocationJournal();
+        var journal = new InvocationJournal();
         journal.Initialize(5);
 
         Assert.Equal(5, journal.KnownEntries);
-        Assert.True(journal.IsReplaying);
-    }
-
-    [Fact]
-    public void IsReplaying_FalseWhenCountReachesKnownEntries()
-    {
-        using var journal = new InvocationJournal();
-        journal.Initialize(2);
-
-        Assert.True(journal.IsReplaying);
-
-        journal.Append(JournalEntry.Completed(JournalEntryType.Input, Array.Empty<byte>()));
-        Assert.True(journal.IsReplaying);
-
-        journal.Append(JournalEntry.Completed(JournalEntryType.Run, Array.Empty<byte>()));
+        // Replay status is driven by the buffered command queue, not by KnownEntries.
         Assert.False(journal.IsReplaying);
     }
 
     [Fact]
-    public void IsReplaying_FalseWhenKnownEntriesIsZero()
-    {
-        using var journal = new InvocationJournal();
-        journal.Initialize(0);
-        Assert.False(journal.IsReplaying);
-    }
-
-    [Fact]
-    public void Grows_BeyondInitialCapacity()
-    {
-        using var journal = new InvocationJournal();
-
-        for (var i = 0; i < 64; i++)
-            journal.Append(JournalEntry.Completed(JournalEntryType.Run, new[] { (byte)i }));
-
-        Assert.Equal(64, journal.Count);
-        Assert.Equal(63, journal[63].Result.Span[0]);
-    }
-
-    [Fact]
-    public void Dispose_IsIdempotent()
+    public void IsReplaying_TrueWhileBufferedCommandsRemain()
     {
         var journal = new InvocationJournal();
-        journal.Append(JournalEntry.Completed(JournalEntryType.Input, Array.Empty<byte>()));
-        journal.Dispose();
-        journal.Dispose();
+        Assert.False(journal.IsReplaying);
+
+        journal.EnqueueReplay(Run("a", 1));
+        journal.EnqueueReplay(Run("b", 2));
+        Assert.True(journal.IsReplaying);
+
+        journal.DequeueReplay(JournalEntryType.Run, "a");
+        Assert.True(journal.IsReplaying);
+
+        journal.DequeueReplay(JournalEntryType.Run, "b");
+        Assert.False(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void DequeueReplay_AdvancesCountAndMetadata()
+    {
+        var journal = new InvocationJournal();
+        journal.RecordCommand(JournalEntryType.Input);   // entry 0
+        journal.EnqueueReplay(Run("x", 1));
+
+        var cmd = journal.DequeueReplay(JournalEntryType.Run, "x");
+        Assert.Equal(JournalEntryType.Run, cmd.EntryType);
+        Assert.Equal(1u, cmd.ResultCompletionId);
+        Assert.Equal(2, journal.Count);
+        Assert.Equal(JournalEntryType.Run, journal.LastCommandType);
+        Assert.Equal("x", journal.LastCommandName);
+    }
+
+    [Fact]
+    public void DequeueReplay_EmptyQueue_ThrowsUnavailableEntry()
+    {
+        var journal = new InvocationJournal();
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.Run, "x"));
+        Assert.Contains("Unavailable entry", ex.Message);
+    }
+
+    [Fact]
+    public void DequeueReplay_TypeMismatch_Throws()
+    {
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Run("x", 1));
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.Sleep, "x"));
+        Assert.Contains("type mismatch", ex.Message);
+    }
+
+    [Fact]
+    public void DequeueReplay_NameMismatch_Throws()
+    {
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Run("a", 1));
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.Run, "b"));
+        Assert.Contains("Command mismatch", ex.Message);
+    }
+
+    [Fact]
+    public void DequeueReplay_NullNameNormalizesToEmpty()
+    {
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(new ReplayCommand
+        {
+            MessageType = MessageType.ClearAllStateCommand,
+            EntryType = JournalEntryType.ClearAllState
+        });
+        // Null replayed name vs null expected name → match (both normalize to "").
+        var cmd = journal.DequeueReplay(JournalEntryType.ClearAllState);
+        Assert.Equal(JournalEntryType.ClearAllState, cmd.EntryType);
+    }
+
+    [Fact]
+    public void DequeueReplay_TargetTripleValidation()
+    {
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(new ReplayCommand
+        {
+            MessageType = MessageType.CallCommand,
+            EntryType = JournalEntryType.Call,
+            TargetService = "Svc",
+            TargetHandler = "Handler",
+            TargetKey = "k",
+            ResultCompletionId = 2,
+            InvocationIdNotificationIdx = 1
+        });
+
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.Call, null, "Other", "Handler", "k"));
+        Assert.Contains("target", ex.Message);
     }
 }

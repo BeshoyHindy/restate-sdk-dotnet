@@ -71,14 +71,14 @@ public class ProtobufCodecTests
         Assert.Equal("inv-1", fields.InvocationId);
         Assert.Equal(1u, fields.KnownEntries);
         Assert.Equal(99ul, fields.RandomSeed);
-        Assert.NotNull(fields.EagerState);
-        Assert.Equal(2, fields.EagerState!.Count);
-        Assert.Equal(new byte[] { 42 }, fields.EagerState["count"].ToArray());
-        Assert.Equal("hello", Encoding.UTF8.GetString(fields.EagerState["name"].Span));
+        Assert.False(fields.PartialState);
+        Assert.Equal(2, fields.EagerState.Count);
+        Assert.Equal(new byte[] { 42 }, fields.EagerState["count"]!.Value.ToArray());
+        Assert.Equal("hello", Encoding.UTF8.GetString(fields.EagerState["name"]!.Value.Span));
     }
 
     [Fact]
-    public void ParseStartMessage_PartialState_ReturnsNullEagerState()
+    public void ParseStartMessage_PartialState_MaterializesEmptyMapAndSurfacesFlag()
     {
         var msg = new Gen.StartMessage
         {
@@ -86,8 +86,11 @@ public class ProtobufCodecTests
             PartialState = true
         };
 
+        // The eager-state map is always materialized now (may be empty); the partial flag is
+        // surfaced so GetState can distinguish Unknown (partial) from Empty (complete).
         var fields = ProtobufCodec.ParseStartMessage(msg.ToByteArray());
-        Assert.Null(fields.EagerState);
+        Assert.True(fields.PartialState);
+        Assert.Empty(fields.EagerState);
     }
 
     [Fact]

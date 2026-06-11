@@ -79,15 +79,6 @@ public class DurableFutureTests
     }
 
     [Fact]
-    public async Task VoidFuture_Completed_IsImmediate()
-    {
-        var future = VoidDurableFuture.Completed();
-
-        var result = await future.GetResult();
-        Assert.True(result);
-    }
-
-    [Fact]
     public async Task VoidFuture_ThrowsOnFailure()
     {
         var tcs = new TaskCompletionSource<CompletionResult>();
