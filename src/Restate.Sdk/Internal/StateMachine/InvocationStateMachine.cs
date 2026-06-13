@@ -81,6 +81,21 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private uint _nextCompletionId = FirstCompletionId;
     private uint _nextSignalId = FirstUserSignalId;
 
+    // G1/G2/G3 — durable retry accounting. These are the StartInfo.retry_count_since_last_stored_entry
+    // / duration_since_last_stored_entry seeds (StartMessage fields 7/8); they are consumed by
+    // InferEntryRetryInfo for the FIRST journaled entry committed after replay only. _processingFirstEntry
+    // is the .NET twin of Rust's State::Processing{ processing_first_entry } flag (vm/transitions/journal.rs):
+    // it starts true and is cleared by the FIRST journaled command of ANY type (state-get/get-keys/set/
+    // call/send/sleep/awakeable/promise/run), matching Rust which sets processing_first_entry = false at
+    // the top of every Processing-arm journal transition (journal.rs:309/498/878). So only the FIRST entry
+    // re-uses the StartInfo seeds; every later run in the same invocation seeds from zero. The clear runs in
+    // RecordCommandLocked for every non-Run command; a Run that is itself the first entry defers its clear
+    // to proposal time so its retry loop reads the seed FIRST (RunWithRetryCoreAsync), then clears. Guarded
+    // by _commandLock (set in Initialize, read in InferEntryRetryInfoLocked, cleared at the record/proposal).
+    private uint _retryCountSinceLastStoredEntry;
+    private ulong _durationSinceLastStoredEntryMillis;
+    private bool _processingFirstEntry = true;
+
     // Plain (non-Interlocked) BY DESIGN: both counters are only ever touched inside _commandLock,
     // the same section that journals/dequeues the command — that is what makes id order == journal
     // order under fan-out. Rust next_completion_notification_id()/next_signal_notification_id().
@@ -201,6 +216,27 @@ internal sealed partial class InvocationStateMachine : IDisposable
     internal IReadOnlyDictionary<string, string>? OutgoingFailureMetadata(TerminalException? ex) =>
         ex is { Metadata.Count: > 0 } && SupportsErrorMetadata ? ex.Metadata : null;
 
+    /// <summary>
+    ///     The shared-core <c>Context::infer_entry_retry_info</c> analogue (vm/context.rs:461-479). While
+    ///     <see cref="_processingFirstEntry" /> is still set (no journaled command of any type has yet
+    ///     consumed the seed), the retry loop resumes from the runtime's cumulative StartMessage seeds; once
+    ///     any first entry has cleared the flag every later run starts at zero.
+    ///     Mirrors Rust's quirk: when retry_count == 0 the duration seed is forced to zero (it then measures
+    ///     the gap between the last stored entry and resume, which is irrelevant to the retry policy). Caller
+    ///     MUST hold <see cref="_commandLock" /> so the first-entry flag is read coherently.
+    /// </summary>
+    private EntryRetryInfo InferEntryRetryInfoLocked()
+    {
+        if (!_processingFirstEntry)
+            return EntryRetryInfo.Zero;
+
+        var retryCount = (int)_retryCountSinceLastStoredEntry;
+        var loopDuration = _retryCountSinceLastStoredEntry == 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromMilliseconds(_durationSinceLastStoredEntryMillis);
+        return new EntryRetryInfo(retryCount, loopDuration);
+    }
+
     public void Dispose()
     {
         _completions.CancelAll();
@@ -234,12 +270,15 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     public void Initialize(string invocationId, string key, ulong randomSeed,
         int knownEntries, Dictionary<string, ReadOnlyMemory<byte>?>? eagerState = null,
-        bool partialState = true) =>
-        Initialize(invocationId, [], key, randomSeed, knownEntries, eagerState, partialState);
+        bool partialState = true, uint retryCountSinceLastStoredEntry = 0,
+        ulong durationSinceLastStoredEntryMillis = 0) =>
+        Initialize(invocationId, [], key, randomSeed, knownEntries, eagerState, partialState,
+            retryCountSinceLastStoredEntry, durationSinceLastStoredEntryMillis);
 
     public void Initialize(string invocationId, byte[] rawInvocationId, string key, ulong randomSeed,
         int knownEntries, Dictionary<string, ReadOnlyMemory<byte>?>? eagerState = null,
-        bool partialState = true)
+        bool partialState = true, uint retryCountSinceLastStoredEntry = 0,
+        ulong durationSinceLastStoredEntryMillis = 0)
     {
         if (State != InvocationState.WaitingStart)
             ThrowInvalidState(State, "initialize");
@@ -253,6 +292,10 @@ internal sealed partial class InvocationStateMachine : IDisposable
         RawInvocationId = rawInvocationId;
         Key = key;
         RandomSeed = randomSeed;
+        // G2/G3 — stash the durable retry-loop seeds so the first run committed after replay can resume
+        // the retry accounting from the runtime's cumulative count/duration (G1, InferEntryRetryInfo).
+        _retryCountSinceLastStoredEntry = retryCountSinceLastStoredEntry;
+        _durationSinceLastStoredEntryMillis = durationSinceLastStoredEntryMillis;
         if (eagerState is not null)
             foreach (var pair in eagerState)
                 _eagerState[pair.Key] = pair.Value;

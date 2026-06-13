@@ -82,6 +82,20 @@ public class MockContextRunRetryPolicyTests
         );
     }
 
+    [Fact]
+    public async Task RunFutureAsync_WithRetryPolicy_DefaultBody_DelegatesToNoPolicy()
+    {
+        // Covers the Context.RunAsync(name, action, RetryPolicy) detached-future virtual default body
+        // (G14): a context that does NOT override it ignores the policy and delegates to the no-policy
+        // RunAsync future. The MockContext resolves the future inline.
+        var ctx = new MockContext();
+
+        var future = ctx.RunAsync("future-run", () => Task.FromResult(123), RetryPolicy.Default);
+        var result = await future.GetResult();
+
+        Assert.Equal(123, result);
+    }
+
     #endregion
 
     #region Keyed contexts

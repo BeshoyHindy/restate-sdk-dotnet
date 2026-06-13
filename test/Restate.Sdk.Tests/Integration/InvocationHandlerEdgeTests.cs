@@ -131,6 +131,50 @@ public class InvocationHandlerEdgeTests
     }
 
     [Fact(Timeout = WatchdogMs)]
+    public async Task RunRedrive_NoPolicy_NonTerminalFailure_EmitsRetryableErrorWithoutDelay()
+    {
+        // G15/G16/G17 — a ctx.Run with NO policy (Infinite default) whose closure fails non-terminally
+        // unwinds the handler with RunRedriveException; HandleAsync's RunRedrive arm emits a RETRYABLE
+        // Error frame so the runtime re-drives. The Infinite policy defers the delay to the invoker, so
+        // next_retry_delay is UNSET (vm/transitions/journal.rs:756-766, Retry(None)).
+        var frames = await RunHandlerAsync(Service(ServiceType.Service,
+            async (_, ctx, _, _) =>
+            {
+                await ctx.Run<int>("redrive-run",
+                    async () => { await Task.Yield(); throw new InvalidOperationException("transient"); });
+                return null;
+            }));
+
+        var error = frames.Single(f => f.Header.Type == MessageType.Error);
+        var parsed = Gen.ErrorMessage.Parser.ParseFrom(error.Payload);
+        Assert.Equal(500u, parsed.Code);
+        Assert.False(parsed.HasNextRetryDelay);   // Infinite → runtime picks the backoff
+        Assert.Contains("transient", parsed.Message);
+    }
+
+    [Fact(Timeout = WatchdogMs)]
+    public async Task RunRedrive_UnboundedBackoffPolicy_EmitsRetryableErrorWithPolicyDelay()
+    {
+        // G16 — an UNBOUNDED policy with a positive InitialDelay computes a concrete next-retry delay
+        // that rides the redrive Error frame (error.next_retry_delay), rather than deferring to the
+        // runtime. First failure ⇒ retry_count 1 ⇒ GetDelay(0) = InitialDelay = 250ms.
+        var policy = new RetryPolicy { InitialDelay = TimeSpan.FromMilliseconds(250) };
+        var frames = await RunHandlerAsync(Service(ServiceType.Service,
+            async (_, ctx, _, _) =>
+            {
+                await ctx.Run<int>("backoff-run",
+                    async () => { await Task.Yield(); throw new InvalidOperationException("transient"); }, policy);
+                return null;
+            }));
+
+        var error = frames.Single(f => f.Header.Type == MessageType.Error);
+        var parsed = Gen.ErrorMessage.Parser.ParseFrom(error.Payload);
+        Assert.Equal(500u, parsed.Code);
+        Assert.True(parsed.HasNextRetryDelay);
+        Assert.Equal(250ul, parsed.NextRetryDelay);
+    }
+
+    [Fact(Timeout = WatchdogMs)]
     public async Task GenericException_AfterJournaledCommand_EnrichesErrorWithRelatedIndexAndStacktrace()
     {
         // G21/G22 — a handler that journals a command (SetState advances the command index to 1) then

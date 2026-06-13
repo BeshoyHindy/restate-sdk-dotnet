@@ -35,7 +35,9 @@ internal sealed partial class InvocationStateMachine
             fields.RandomSeed,
             (int)fields.KnownEntries,
             fields.EagerState,
-            fields.PartialState);
+            fields.PartialState,
+            fields.RetryCountSinceLastStoredEntry,
+            fields.DurationSinceLastStoredEntryMillis);
 
         // The InputCommand always follows StartMessage (regardless of known_entries).
         Log.ReadingMessage(Logger, InvocationId);

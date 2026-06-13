@@ -323,7 +323,8 @@ internal static class ProtocolTestHarness
     /// </summary>
     public static Gen.StartMessage CreateStartMessage(string invocationId, uint knownEntries,
         string? key = null, ulong randomSeed = 0, bool partialState = true,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? eagerState = null)
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? eagerState = null,
+        uint retryCountSinceLastStoredEntry = 0, ulong durationSinceLastStoredEntryMillis = 0)
     {
         var msg = new Gen.StartMessage
         {
@@ -332,7 +333,10 @@ internal static class ProtocolTestHarness
             KnownEntries = knownEntries,
             Key = key ?? string.Empty,
             RandomSeed = randomSeed,
-            PartialState = partialState
+            PartialState = partialState,
+            // G2/G3 — durable retry accounting seeds (StartMessage fields 7/8).
+            RetryCountSinceLastStoredEntry = retryCountSinceLastStoredEntry,
+            DurationSinceLastStoredEntry = durationSinceLastStoredEntryMillis
         };
         if (eagerState is not null)
             foreach (var (entryKey, entryValue) in eagerState)

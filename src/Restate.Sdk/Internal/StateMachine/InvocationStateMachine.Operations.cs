@@ -80,7 +80,10 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteRunCommand(name, completionId);
-                _journal.RecordCommand(JournalEntryType.Run, name);
+                // Run is the ONE command that does NOT clear the first-entry seed at record time: a
+                // Run that is itself the first entry must read InferEntryRetryInfoLocked first in its
+                // retry loop, then clear at proposal time (RecordCommandLocked skips the clear for Run).
+                RecordCommandLocked(JournalEntryType.Run, name);
             }
         }
 
@@ -104,7 +107,10 @@ internal sealed partial class InvocationStateMachine
 
     /// <summary>
     ///     Executes the closure and proposes its outcome. NEVER rethrows TerminalException — the
-    ///     failure travels through the proposal → notification → ThrowIfFailure path (1.7).
+    ///     failure travels through the proposal → notification → ThrowIfFailure path (1.7). A
+    ///     non-terminal failure is routed through <see cref="ExecuteWithRetryAsync{T}" />, which either
+    ///     retries in-process (bounded fast path) or asks the runtime to re-drive
+    ///     (<see cref="RunRedriveException" /> → retryable Error frame), per the HYBRID model.
     /// </summary>
     private async Task<(bool HasValue, T Value)> ExecuteAndProposeRunAsync<T>(string name,
         Func<Task<T>> action, uint completionId, RetryPolicy? retryPolicy, CancellationToken ct)
@@ -115,9 +121,8 @@ internal sealed partial class InvocationStateMachine
             T value;
             try
             {
-                value = retryPolicy is not null
-                    ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false)
-                    : await action().ConfigureAwait(false);
+                value = await ExecuteWithRetryAsync(name, action, EffectiveRunPolicy(retryPolicy), ct)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_cancelled)
             {
@@ -131,15 +136,7 @@ internal sealed partial class InvocationStateMachine
             {
                 // Terminal failure (thrown directly or via retry exhaustion): propose FAILURE and
                 // fall through — the caller's notification await re-raises after durability.
-                lock (_commandLock)
-                {
-                    ThrowIfClosedLocked();
-                    // G11: ride V6 Failure.metadata on the run's terminal proposal (gated to sub-V6 drop).
-                    WriteCommand(MessageType.ProposeRunCompletion,
-                        ProtobufCodec.CreateRunProposalFailure(
-                            completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex)));
-                }
-
+                ProposeRunFailureLocked(completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex));
                 await FlushGatedAsync(ct).ConfigureAwait(false);
                 return (false, default!);
             }
@@ -148,6 +145,7 @@ internal sealed partial class InvocationStateMachine
             lock (_commandLock)
             {
                 ThrowIfClosedLocked();
+                ClearProcessingFirstEntryLocked();   // first-entry Run consumes the seed here → later runs seed from zero
                 var serialized = Serialize(value);
                 WriteRunProposal(completionId, serialized.Span);
             }
@@ -172,10 +170,8 @@ internal sealed partial class InvocationStateMachine
         {
             try
             {
-                if (retryPolicy is not null)
-                    await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
-                else
-                    await action().ConfigureAwait(false);
+                await ExecuteWithRetryAsync(name, action, EffectiveRunPolicy(retryPolicy), ct)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_cancelled)
             {
@@ -185,15 +181,7 @@ internal sealed partial class InvocationStateMachine
             }
             catch (TerminalException ex)
             {
-                lock (_commandLock)
-                {
-                    ThrowIfClosedLocked();
-                    // G11: ride V6 Failure.metadata on the run's terminal proposal (gated to sub-V6 drop).
-                    WriteCommand(MessageType.ProposeRunCompletion,
-                        ProtobufCodec.CreateRunProposalFailure(
-                            completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex)));
-                }
-
+                ProposeRunFailureLocked(completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex));
                 await FlushGatedAsync(ct).ConfigureAwait(false);
                 return;
             }
@@ -201,6 +189,7 @@ internal sealed partial class InvocationStateMachine
             lock (_commandLock)
             {
                 ThrowIfClosedLocked();
+                ClearProcessingFirstEntryLocked();
                 WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
             }
 
@@ -213,16 +202,93 @@ internal sealed partial class InvocationStateMachine
         }
     }
 
-    // ------- Retry logic -------
-    //
-    // On exhaustion these throw TerminalException; ExecuteAndProposeRun* catches it and proposes the
-    // failure with the captured id (the command itself is already journaled by the prefix).
+    /// <summary>
+    ///     G17 — a <c>ctx.Run</c> with NO explicit policy resolves to <see cref="RetryPolicy.DefaultForRun" />
+    ///     (Infinite), matching shared-core's <c>RetryPolicy::default()</c>. A no-policy failing run is
+    ///     therefore re-driven by the runtime indefinitely rather than collapsing to a single attempt.
+    /// </summary>
+    private static RetryPolicy EffectiveRunPolicy(RetryPolicy? retryPolicy) =>
+        retryPolicy ?? RetryPolicy.DefaultForRun;
 
-    private async Task<T> ExecuteWithRetryAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
+    /// <summary>
+    ///     Writes a ProposeRunCompletion FAILURE under <see cref="_commandLock" /> and marks the first
+    ///     entry consumed. The first-entry flag is cleared here too: when a Run IS the first journaled
+    ///     command its own RecordCommand deliberately does NOT clear the flag (so its retry loop can read
+    ///     the StartMessage seed first), so this proposal is where that Run finally consumes the seed —
+    ///     every later run in the same invocation then seeds from zero. (Matches Rust, where the RunCommand
+    ///     journaling clears processing_first_entry and the proposal reads infer_entry_retry_info only while
+    ///     the flag is still set — the replay-frontier case.)
+    /// </summary>
+    private void ProposeRunFailureLocked(uint completionId, ushort code, string message,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        lock (_commandLock)
+        {
+            ThrowIfClosedLocked();
+            ClearProcessingFirstEntryLocked();
+            // G11: ride V6 Failure.metadata on the run's terminal proposal (gated to sub-V6 drop).
+            WriteCommand(MessageType.ProposeRunCompletion,
+                ProtobufCodec.CreateRunProposalFailure(completionId, code, message, metadata));
+        }
+    }
+
+    /// <summary>Caller MUST hold <see cref="_commandLock" />. One-shot clear of the first-entry seed flag.</summary>
+    private void ClearProcessingFirstEntryLocked() => _processingFirstEntry = false;
+
+    /// <summary>
+    ///     The single Processing-state journal-record chokepoint. Records the live command on the journal
+    ///     AND clears the first-entry retry seed for EVERY command type except <see cref="JournalEntryType.Run" />,
+    ///     so the seed is consumed by the FIRST journaled command of ANY kind — matching shared-core, which
+    ///     sets <c>processing_first_entry = false</c> at the top of the Processing arm of every journaled
+    ///     entry (vm/transitions/journal.rs:309 SysStateGet, :498 SysStateGetKeys, :878 PopOrWriteJournalEntry —
+    ///     the latter covers set/clear/call/send/sleep/awakeable/promise/run). Run is the deliberate exception:
+    ///     its RunCommand record must NOT clear the flag here, because a Run that is itself the first entry has
+    ///     to read <see cref="InferEntryRetryInfoLocked" /> (the StartMessage seed) FIRST in its retry loop; the
+    ///     Run then clears the flag at proposal time (<see cref="ClearProcessingFirstEntryLocked" />), so the
+    ///     seed-read-before-clear ordering is preserved and later runs seed from zero. Caller MUST hold
+    ///     <see cref="_commandLock" />.
+    /// </summary>
+    private void RecordCommandLocked(JournalEntryType type, string? name = null)
+    {
+        _journal.RecordCommand(type, name);
+        if (type != JournalEntryType.Run)
+            ClearProcessingFirstEntryLocked();
+    }
+
+    // ------- Retry logic (HYBRID model) -------
+    //
+    // Two retry paths, both seeded by InferEntryRetryInfo so MaxAttempts/MaxDuration are CUMULATIVE
+    // across runtime re-drives (G1):
+    //   * BOUNDED policy → in-process fast path (Task.Delay + re-run) until a bound is hit, then a
+    //     TerminalException is thrown; ExecuteAndProposeRun* proposes the terminal failure.
+    //   * UNBOUNDED/Infinite policy → cannot loop forever in-process, so the first non-terminal failure
+    //     throws RunRedriveException carrying the policy-computed next_retry_delay (null = defer to the
+    //     invoker); the run-future caller turns that into a retryable Error frame so the RUNTIME re-drives
+    //     (journal replays). This is the shared-core-faithful, crash-safe path (G15/G16/G17).
+    // A TerminalException is never retried in either path.
+
+    private Task<T> ExecuteWithRetryAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
+        CancellationToken ct) =>
+        RunWithRetryCoreAsync(name, action, policy, ct);
+
+    private Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
+        CancellationToken ct) =>
+        // Adapt the void closure to the generic core so both share ONE retry/redrive decision path.
+        RunWithRetryCoreAsync<object?>(name, async () => { await action().ConfigureAwait(false); return null; },
+            policy, ct);
+
+    private async Task<T> RunWithRetryCoreAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
         CancellationToken ct)
     {
+        // Seed the loop from the durable accounting (G1): on the first run after replay this resumes the
+        // cumulative count/duration from the StartMessage; on later runs it is zero. The seed is the
+        // BASELINE; each in-process attempt adds to it so MaxAttempts/MaxDuration are CUMULATIVE across
+        // runtime re-drives (a re-driven invocation resumes the count where the prior leader left off).
+        EntryRetryInfo seed;
+        lock (_commandLock) seed = InferEntryRetryInfoLocked();
+
         var startTime = DateTimeOffset.UtcNow;
-        var attempt = 0;
+        var localAttempts = 0;   // attempts made by THIS in-process loop (added on top of the seed)
 
         while (true)
         {
@@ -236,47 +302,29 @@ internal sealed partial class InvocationStateMachine
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                var elapsed = DateTimeOffset.UtcNow - startTime;
-                if (!policy.ShouldRetry(attempt + 1, elapsed))
+                // Accumulate this just-failed attempt into the cumulative retry info, then consult the
+                // policy — exactly mirroring shared-core's retry_count += 1 / retry_loop_duration +=
+                // attempt_duration before next_retry (vm/transitions/journal.rs:753-756).
+                localAttempts++;
+                var elapsed = seed.RetryLoopDuration + (DateTimeOffset.UtcNow - startTime);
+                var retryInfo = new EntryRetryInfo(seed.RetryCount + localAttempts, elapsed);
+                var decision = policy.NextRetry(retryInfo);
+
+                if (!decision.ShouldRetry)
                     throw new TerminalException(
-                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
+                        $"Run '{name}' failed after {retryInfo.RetryCount} attempt(s): {ex.Message}", 500);
 
-                var delay = policy.GetDelay(attempt);
-                Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
+                // Unbounded/Infinite (or any policy that defers the delay to the runtime): hand the failure
+                // back to the runtime for a durable re-drive instead of an unbounded in-process loop.
+                if (policy.IsUnbounded || decision.Delay is null)
+                    throw new RunRedriveException(name, ex.Message, decision.Delay);
+
+                // Bounded fast path: sleep the SDK-computed delay and retry in-process. Task.Delay
+                // accepts a zero delay (a fixed-delay-of-zero policy retries immediately), so there is
+                // no separate zero-delay branch to keep this fully covered.
+                var delay = decision.Delay.Value;
+                Log.SideEffectRetrying(Logger, name, retryInfo.RetryCount, delay, InvocationId);
                 await Task.Delay(delay, ct).ConfigureAwait(false);
-                attempt++;
-            }
-        }
-    }
-
-    private async Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
-        CancellationToken ct)
-    {
-        var startTime = DateTimeOffset.UtcNow;
-        var attempt = 0;
-
-        while (true)
-        {
-            try
-            {
-                await action().ConfigureAwait(false);
-                return;
-            }
-            catch (TerminalException)
-            {
-                throw; // Never retry terminal exceptions
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                var elapsed = DateTimeOffset.UtcNow - startTime;
-                if (!policy.ShouldRetry(attempt + 1, elapsed))
-                    throw new TerminalException(
-                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
-
-                var delay = policy.GetDelay(attempt);
-                Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
-                await Task.Delay(delay, ct).ConfigureAwait(false);
-                attempt++;
             }
         }
     }
@@ -321,10 +369,12 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Fully synchronous journaling prefix (so fan-out creation order == journal order even when
     ///     the closure runs detached); the closure executes on a detached task; the future ALWAYS
-    ///     resolves from the notification (the ack barrier) via the returned resolve thunk.
+    ///     resolves from the notification (the ack barrier) via the returned resolve thunk. G14 — an
+    ///     optional <paramref name="retryPolicy" /> drives the SAME HYBRID retry/redrive decision the
+    ///     blocking Run uses; null resolves to Infinite (G17) just like the blocking path.
     /// </summary>
     public Func<ValueTask<CompletionResult>> RunFutureAsync<T>(
-        string name, Func<Task<T>> action, CancellationToken ct)
+        string name, Func<Task<T>> action, CancellationToken ct, RetryPolicy? retryPolicy = null)
     {
         EnsureActive();
         var (completionId, executesLocally, _) = RunPrefix(name);
@@ -347,7 +397,18 @@ internal sealed partial class InvocationStateMachine
             {
                 try
                 {
-                    await ExecuteAndProposeRunAsync(name, action, completionId, null, ct).ConfigureAwait(false);
+                    await ExecuteAndProposeRunAsync(name, action, completionId, retryPolicy, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (RunRedriveException redrive)
+                {
+                    // G14/G15 — a DETACHED (fan-out) run cannot unwind the handler to ask the runtime to
+                    // re-drive (it runs off the handler's stack), so the redrive surfaces through THIS
+                    // run's own completion slot instead: the future's awaiter observes a retryable failure
+                    // (TerminalException 500), keeping the detached task's exception observed. The blocking
+                    // ctx.Run is the canonical redrive path (it unwinds the handler → retryable Error
+                    // frame); detached redrive degrades to a per-future failure — a documented scope limit.
+                    _completions.TryFail((int)completionId, 500, redrive.Reason);
                 }
                 catch (Exception ex)
                 {
@@ -437,13 +498,13 @@ internal sealed partial class InvocationStateMachine
                 // through the options writer; each default-absent when null so the command stays minimal.
                 WriteCallCommandMessageWithOptions(service, handler, key, requestBytes,
                     invocationIdCompletionId, resultCompletionId, idempotencyKey, headers, name);
-                _journal.RecordCommand(JournalEntryType.Call, name);
+                RecordCommandLocked(JournalEntryType.Call, name);
             }
             else
             {
                 WriteCallCommandMessage(service, handler, key, requestBytes,
                     invocationIdCompletionId, resultCompletionId);
-                _journal.RecordCommand(JournalEntryType.Call);
+                RecordCommandLocked(JournalEntryType.Call);
             }
 
             // Track this child for implicit cancel-on-CANCEL — Rust sys_call gates this push on
@@ -629,7 +690,7 @@ internal sealed partial class InvocationStateMachine
             {
                 WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
                     invocationIdCompletionId, headers, name);
-                _journal.RecordCommand(JournalEntryType.OneWayCall, name);
+                RecordCommandLocked(JournalEntryType.OneWayCall, name);
             }
 
             // One-way (Send) children are NOT tracked: VMOptions::default sets
@@ -696,7 +757,7 @@ internal sealed partial class InvocationStateMachine
             {
                 var wakeUpTime = (ulong)DateTimeOffset.UtcNow.Add(duration).ToUnixTimeMilliseconds();
                 WriteCommand(MessageType.SleepCommand, ProtobufCodec.CreateSleepCommand(wakeUpTime, completionId));
-                _journal.RecordCommand(JournalEntryType.Sleep);
+                RecordCommandLocked(JournalEntryType.Sleep);
             }
         }
 
@@ -776,7 +837,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(wireType, create(completionId));
-                _journal.RecordCommand(type, name);
+                RecordCommandLocked(type, name);
             }
         }
 
@@ -816,21 +877,21 @@ internal sealed partial class InvocationStateMachine
             {
                 WriteCommand(MessageType.GetEagerStateCommand,
                     ProtobufCodec.CreateGetEagerStateCommand(key, eager));
-                _journal.RecordCommand(JournalEntryType.GetState, key);
+                RecordCommandLocked(JournalEntryType.GetState, key);
                 eagerHit = (eager is null, eager ?? ReadOnlyMemory<byte>.Empty);
             }
             else if (!_eagerStateIsPartial)                          // complete map: absent == known-empty
             {
                 WriteCommand(MessageType.GetEagerStateCommand,
                     ProtobufCodec.CreateGetEagerStateCommand(key, null));
-                _journal.RecordCommand(JournalEntryType.GetState, key);
+                RecordCommandLocked(JournalEntryType.GetState, key);
                 eagerHit = (true, ReadOnlyMemory<byte>.Empty);
             }
             else                                                     // Unknown under partial → real roundtrip
             {
                 WriteCommand(MessageType.GetLazyStateCommand,
                     ProtobufCodec.CreateGetStateCommand(key, completionId));
-                _journal.RecordCommand(JournalEntryType.GetState, key);
+                RecordCommandLocked(JournalEntryType.GetState, key);
                 wroteLazy = true;
             }
         }
@@ -861,7 +922,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(MessageType.SetStateCommand, ProtobufCodec.CreateSetStateCommand(key, serialized.Span));
-                _journal.RecordCommand(JournalEntryType.SetState, key);
+                RecordCommandLocked(JournalEntryType.SetState, key);
             }
         }
     }
@@ -880,7 +941,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(MessageType.ClearStateCommand, ProtobufCodec.CreateClearStateCommand(key));
-                _journal.RecordCommand(JournalEntryType.ClearState, key);
+                RecordCommandLocked(JournalEntryType.ClearState, key);
             }
         }
     }
@@ -900,7 +961,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(MessageType.ClearAllStateCommand, ProtobufCodec.CreateClearAllStateCommand());
-                _journal.RecordCommand(JournalEntryType.ClearAllState);
+                RecordCommandLocked(JournalEntryType.ClearAllState);
             }
         }
     }
@@ -933,12 +994,12 @@ internal sealed partial class InvocationStateMachine
                 eagerKeys = _eagerState.Keys.Order(StringComparer.Ordinal).ToArray();
                 WriteCommand(MessageType.GetEagerStateKeysCommand,
                     ProtobufCodec.CreateGetEagerStateKeysCommand(eagerKeys));
-                _journal.RecordCommand(JournalEntryType.GetStateKeys);
+                RecordCommandLocked(JournalEntryType.GetStateKeys);
             }
             else
             {
                 WriteCommand(MessageType.GetLazyStateKeysCommand, ProtobufCodec.CreateGetStateKeysCommand(completionId));
-                _journal.RecordCommand(JournalEntryType.GetStateKeys);
+                RecordCommandLocked(JournalEntryType.GetStateKeys);
                 wroteLazy = true;
             }
         }
@@ -1001,7 +1062,7 @@ internal sealed partial class InvocationStateMachine
 
             WriteCommand(MessageType.CompleteAwakeableCommand,
                 ProtobufCodec.CreateCompleteAwakeableSuccess(id, payload.Span));
-            _journal.RecordCommand(JournalEntryType.CompleteAwakeable);
+            RecordCommandLocked(JournalEntryType.CompleteAwakeable);
         }
     }
 
@@ -1026,7 +1087,7 @@ internal sealed partial class InvocationStateMachine
 
             WriteCommand(MessageType.CompleteAwakeableCommand,
                 ProtobufCodec.CreateCompleteAwakeableFailure(id, code, reason));
-            _journal.RecordCommand(JournalEntryType.CompleteAwakeable);
+            RecordCommandLocked(JournalEntryType.CompleteAwakeable);
         }
     }
 
@@ -1111,7 +1172,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(MessageType.CompletePromiseCommand, create(completionId));
-                _journal.RecordCommand(JournalEntryType.CompletePromise, name);
+                RecordCommandLocked(JournalEntryType.CompletePromise, name);
             }
         }
 
@@ -1136,7 +1197,7 @@ internal sealed partial class InvocationStateMachine
 
             WriteCommand(MessageType.SendSignalCommand,
                 ProtobufCodec.CreateCancelInvocationCommand(targetInvocationId));
-            _journal.RecordCommand(JournalEntryType.SendSignal);
+            RecordCommandLocked(JournalEntryType.SendSignal);
         }
 
         await FlushGatedAsync(ct).ConfigureAwait(false);
@@ -1173,7 +1234,7 @@ internal sealed partial class InvocationStateMachine
                 ? ProtobufCodec.CreateSendNamedSignalFailure(targetInvocationId, name, f.Code, f.Message)
                 : ProtobufCodec.CreateSendNamedSignalSuccess(targetInvocationId, name, value.Span);
             WriteCommand(MessageType.SendSignalCommand, command);
-            _journal.RecordCommand(JournalEntryType.SendSignal);
+            RecordCommandLocked(JournalEntryType.SendSignal);
         }
 
         await FlushGatedAsync(ct).ConfigureAwait(false);
@@ -1300,7 +1361,9 @@ internal sealed partial class InvocationStateMachine
         {
             WriteCommand(MessageType.SendSignalCommand,
                 ProtobufCodec.CreateCancelInvocationCommand(childId));
-            _journal.RecordCommand(JournalEntryType.SendSignal);
+            // Terminal child-cancel unwind path: clearing the seed here is inert (the invocation is
+            // ending), but routing through the chokepoint keeps the parity invariant uniform.
+            RecordCommandLocked(JournalEntryType.SendSignal);
         }
     }
 

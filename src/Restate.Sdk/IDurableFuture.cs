@@ -12,7 +12,7 @@ public interface IDurableFuture
 
 /// <summary>
 ///     A typed durable future representing the result of a non-blocking Restate operation.
-///     Returned by non-blocking variants like <see cref="Context.RunAsync{T}" />,
+///     Returned by non-blocking variants like <see cref="Context.RunAsync{T}(string, Func{Task{T}})" />,
 ///     <see cref="Context.Timer" />, and future-returning typed client methods.
 /// </summary>
 public interface IDurableFuture<T> : IDurableFuture

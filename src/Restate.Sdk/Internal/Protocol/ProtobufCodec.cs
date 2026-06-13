@@ -60,7 +60,12 @@ internal static class ProtobufCodec
             msg.KnownEntries,
             msg.RandomSeed,
             eagerState,
-            msg.PartialState);
+            msg.PartialState,
+            // G2/G3 — retry_count_since_last_stored_entry (field 7) + duration_since_last_stored_entry
+            // (field 8, milliseconds). Both default to 0 when the runtime omits them (fresh invocation
+            // or sub-field-7 runtime), which is exactly the "no prior retry loop" seed.
+            msg.RetryCountSinceLastStoredEntry,
+            msg.DurationSinceLastStoredEntry);
     }
 
     /// <summary>

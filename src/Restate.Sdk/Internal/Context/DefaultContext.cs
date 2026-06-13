@@ -79,6 +79,13 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return new LazyRunFuture<T>(resolve, _stateMachine.JsonOptions);
     }
 
+    public override IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy)
+    {
+        // G14 — thread the policy into the detached future path so a fan-out run honors retries/redrive.
+        var resolve = _stateMachine.RunFutureAsync(name, action, Aborted, retryPolicy);
+        return new LazyRunFuture<T>(resolve, _stateMachine.JsonOptions);
+    }
+
     public override IDurableFuture Timer(TimeSpan duration)
     {
         var resolve = _stateMachine.SleepFutureAsync(duration, Aborted);

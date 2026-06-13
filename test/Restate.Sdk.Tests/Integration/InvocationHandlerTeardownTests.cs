@@ -167,6 +167,30 @@ public class InvocationHandlerTeardownTests
             faulting);
     }
 
+    [Fact(Timeout = WatchdogMs)]
+    public async Task RunRedrive_WithBrokenFlush_SwallowsSecondaryFailure()
+    {
+        // The RunRedriveException arm's FailAsync flush throws; the inner catch swallows it (G15/G16/G17).
+        // A no-policy ctx.Run that fails non-terminally journals a RunCommand (prefix flush) then unwinds
+        // with RunRedriveException; we let the prefix flush through and break the TERMINAL FailAsync flush
+        // so the redrive arm's "stream already broken" inner catch runs.
+        var response = new Pipe();
+        // On the blocking redrive path the RunCommand stays BUFFERED (the closure throws RunRedriveException
+        // before any proposal/flush), so the FIRST and only flush is the terminal FailAsync flush — break it
+        // (throwAfterFlushes=0) so the redrive arm's "stream already broken" inner catch runs, exactly like
+        // the other Fail*Async-broken-flush arms above.
+        var faulting = new FlushFaultingPipeWriter(response.Writer, throwAfterFlushes: 0);
+
+        await RunHandlerAsync(
+            Service(ServiceType.Service, async (_, ctx, _, _) =>
+            {
+                await ctx.Run<int>("redrive-run",
+                    async () => { await Task.Yield(); throw new InvalidOperationException("transient"); });
+                return null;
+            }),
+            faulting);
+    }
+
     // ---- Pump-fault arm in the finally (incoming task faults non-cancellation) ---------------
 
     [Fact(Timeout = WatchdogMs)]

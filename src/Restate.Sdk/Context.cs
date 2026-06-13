@@ -226,6 +226,15 @@ public abstract class Context : IContext
     public abstract IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action);
 
     /// <summary>
+    ///     G14 — executes an async side effect under a <paramref name="retryPolicy" /> and returns a
+    ///     non-blocking future. The default body ignores the policy and delegates to
+    ///     <see cref="RunAsync{T}(string, Func{Task{T}})" /> so mock/test contexts keep working unchanged;
+    ///     the durable runtime context overrides it to thread the policy through.
+    /// </summary>
+    public virtual IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy) =>
+        RunAsync(name, action);
+
+    /// <summary>
     ///     Creates a non-blocking durable timer that completes after the specified duration.
     ///     Unlike <see cref="Sleep" /> which blocks, this returns a future for use with combinators.
     /// </summary>

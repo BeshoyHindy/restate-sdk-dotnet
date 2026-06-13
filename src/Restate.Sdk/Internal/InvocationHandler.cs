@@ -137,6 +137,17 @@ internal sealed class InvocationHandler
             try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None, ex.NextRetryDelay, ex.StackTrace).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
+        catch (RunRedriveException ex)
+        {
+            // G15/G16/G17 — a non-terminal ctx.Run failure under an unbounded (Infinite) policy asks the
+            // RUNTIME to re-drive the invocation (shared-core ProposeRunCompletion → Err(error), the
+            // journal then replays). Emit a retryable Error frame carrying the policy-derived next-retry-
+            // delay (null = defer to the invoker), mirroring error.next_retry_delay (journal.rs:757-758).
+            Log.InvocationFailed(logger, ex, sm.InvocationId);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            try { await sm.FailAsync(500, ex.Reason, CancellationToken.None, ex.NextRetryDelay, ex.StackTrace).ConfigureAwait(false); }
+            catch { /* Stream already broken */ }
+        }
         catch (Exception ex)
         {
             Log.InvocationFailed(logger, ex, sm.InvocationId);
