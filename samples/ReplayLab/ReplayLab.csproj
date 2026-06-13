@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <!-- Native MSBuild container support (multi-arch amd64/arm64). See samples/Container.props. -->
+    <Import Project="../Container.props"/>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
+        <ProjectReference Include="../../src/Restate.Sdk.Generators/Restate.Sdk.Generators.csproj"
+                          OutputItemType="Analyzer"
+                          ReferenceOutputAssembly="false"/>
+    </ItemGroup>
+
+</Project>

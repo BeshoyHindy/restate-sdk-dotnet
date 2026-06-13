@@ -16,6 +16,7 @@
         <Project Path="samples/TicketReservation/TicketReservation.csproj"/>
         <Project Path="samples/SurrealDbInventory/SurrealDbInventory.csproj"/>
         <Project Path="samples/EmailPipeline/EmailPipeline.csproj"/>
+        <Project Path="samples/ReplayLab/ReplayLab.csproj"/>
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>
@@ -27,6 +28,7 @@
     <Folder Name="/test/">
         <Project Path="test/Restate.Sdk.Generators.Tests/Restate.Sdk.Generators.Tests.csproj"/>
         <Project Path="test/Restate.Sdk.Tests/Restate.Sdk.Tests.csproj"/>
+        <Project Path="test/Restate.Sdk.E2E/Restate.Sdk.E2E.csproj"/>
         <Project Path="test/Restate.Sdk.Benchmarks/Restate.Sdk.Benchmarks.csproj"/>
     </Folder>
 </Solution>

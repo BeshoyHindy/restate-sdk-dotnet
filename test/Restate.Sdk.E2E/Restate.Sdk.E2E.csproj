@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <!-- Suppress Restate generator diagnostics inherited via the ReplayLab project reference. -->
+        <NoWarn>$(NoWarn);RESTATE003;RESTATE008</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="Testcontainers"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
+        <ProjectReference Include="../../samples/ReplayLab/ReplayLab.csproj"/>
+        <!-- The generator must run against THIS assembly so the ReplayLab service invokers/registry
+             are emitted into the test host's own AddRestateGenerated; it travels with the ReplayLab
+             reference but is re-attached here as an Analyzer so the in-process host wiring resolves. -->
+        <ProjectReference Include="../../src/Restate.Sdk.Generators/Restate.Sdk.Generators.csproj"
+                          OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- One container, one in-proc endpoint, sequential scenarios. -->
+        <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest"/>
+    </ItemGroup>
+
+</Project>

@@ -1,0 +1,52 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay-e2e:
+    name: Replay E2E (restate-server testcontainer)
+    runs-on: ubuntu-latest          # docker preinstalled on GitHub runners
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.102'
+
+      # Single greppable image tag, kept in sync with RestateContainerFixture.ImageTag and
+      # .github/scripts/integration-test.sh. Pre-pulling keeps the per-test wait strategy fast.
+      - name: Pre-pull restate image
+        run: docker pull docker.io/restatedev/restate:1.4
+
+      - name: Run E2E suite
+        run: |
+          dotnet test test/Restate.Sdk.E2E/Restate.Sdk.E2E.csproj -c Release \
+            --logger "trx;LogFileName=e2e.trx" --results-directory artifacts/e2e
+
+      # Docker is always present in CI, so the suite must NOT skip. A skipped scenario means the
+      # DockerFact detection broke; treat that as a build failure rather than a silent green.
+      - name: Fail on skipped E2E tests (docker must be present in CI)
+        run: |
+          if grep -q 'outcome="NotExecuted"' artifacts/e2e/e2e.trx; then
+            echo "E2E tests were skipped in CI — docker detection broke." >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-results
+          path: artifacts/e2e
