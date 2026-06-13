@@ -35,7 +35,11 @@ internal sealed partial class InvocationStateMachine
         // by rethrowing the closure's exception.
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
-        Log.SideEffectExecuted(Logger, name, InvocationId);
+        // G33 — log only when the closure ACTUALLY executed (live path or the claimed replay frontier),
+        // never when a buffered/replayed completion was consumed. Mirrors shared-core, which emits the run
+        // debug log from propose_run_completion (gated on is_processing()), i.e. only when the closure ran.
+        if (executesLocally)
+            Log.SideEffectExecuted(Logger, name, InvocationId);
         return hasValue ? value : Deserialize<T>(completion.Value);
     }
 
@@ -52,7 +56,9 @@ internal sealed partial class InvocationStateMachine
 
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();   // B10b: failure re-raises here, AFTER durable storage
-        Log.SideEffectExecuted(Logger, name, InvocationId);
+        // G33 — only log a live/frontier execution, not a consumed replay completion (see RunAsync<T>).
+        if (executesLocally)
+            Log.SideEffectExecuted(Logger, name, InvocationId);
     }
 
     /// <summary>

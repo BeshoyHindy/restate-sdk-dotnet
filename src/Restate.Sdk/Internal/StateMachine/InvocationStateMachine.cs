@@ -245,6 +245,23 @@ internal sealed partial class InvocationStateMachine : IDisposable
         return new EntryRetryInfo(retryCount, loopDuration);
     }
 
+    /// <summary>
+    ///     G27 — the lock-acquiring public face of <see cref="InferEntryRetryInfoLocked" />. The run-closure
+    ///     <see cref="IRunContext" /> reads this when the closure executes so a backoff-aware side effect can
+    ///     observe the current attempt's cumulative retry count / loop duration (shared-core passes the same
+    ///     <c>EntryRetryInfo</c> to the run, vm/context.rs:461-479). On a fresh first attempt it is
+    ///     <see cref="EntryRetryInfo.Zero" />; after a runtime re-drive the first committed run resumes from
+    ///     the StartMessage seeds (fields 7/8). Snapshotted at closure-invocation time so it reflects the same
+    ///     seed the retry loop reads.
+    /// </summary>
+    internal EntryRetryInfo InferEntryRetryInfo()
+    {
+        lock (_commandLock)
+        {
+            return InferEntryRetryInfoLocked();
+        }
+    }
+
     public void Dispose()
     {
         _completions.CancelAll();

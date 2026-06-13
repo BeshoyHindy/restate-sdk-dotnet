@@ -152,6 +152,8 @@ _TeamCity*
 coverage*.json
 coverage*.xml
 coverage*.info
+# ...but the coverage gate's threshold config is source, not a coverage artifact
+!eng/coverage-thresholds.json
 
 # Visual Studio code coverage results
 *.coverage

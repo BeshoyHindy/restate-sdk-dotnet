@@ -1,0 +1,24 @@
+{
+  "comment": "Per-namespace-prefix thresholds enforced by eng/coverage-gate.ts on the merged Cobertura report. Longest matching prefix wins. Percentages are line / branch. CORE namespaces (StateMachine/Journal/Protocol/DurableFuture/InvocationHandler) hold line=100 via tests plus a short justified unreachable-line allowlist; their 98/95 branch budgets absorb genuinely-unreachable compiler-emitted await/finally branch twins (plan §1.3(3)). The Restate.Sdk catch-all is 97 line / 88 branch — a meaningful regression floor just below the measured 98.46% line / 91.67% branch achieved after RestateClient + ServiceHandle gained dedicated unit tests (mock HttpMessageHandler). Thresholds only ratchet up; the phase-in overrides were removed once the real thresholds were met.",
+  "rules": [
+    { "prefix": "Restate.Sdk.Internal.StateMachine", "line": 100, "branch": 98  },
+    { "prefix": "Restate.Sdk.Internal.Journal",      "line": 100, "branch": 98  },
+    { "prefix": "Restate.Sdk.Internal.Protocol",     "line": 100, "branch": 98  },
+    { "prefix": "Restate.Sdk.Internal.DurableFuture","line": 100, "branch": 98  },
+    { "prefix": "Restate.Sdk.Internal.InvocationHandler", "line": 100, "branch": 95 },
+    { "prefix": "Restate.Sdk.Internal.Context",      "line": 95,  "branch": 90  },
+    { "prefix": "Restate.Sdk.Internal",              "line": 95,  "branch": 90  },
+    { "prefix": "Restate.Sdk",                       "line": 97,  "branch": 88  }
+  ],
+  "unreachableLinesComment": "Genuinely-unreachable IN-METHOD defensive lines that cannot carry a [ExcludeFromCodeCoverage] member attribute (an attribute targets whole members; these live inside methods with reachable code). Each is excluded from BOTH covered and valid so the 100 line target keeps full force on every reachable line — strictly more precise than lowering a threshold. See plan 07 §1.3 'Coverage exclusions' appendix. This list NEVER hides a testable gap.",
+  "unreachableLines": [
+    { "file": "Internal/StateMachine/InvocationStateMachine.cs", "line": 356, "reason": "ThrowIfClosedLocked Closed-guard head (if State == Closed): the TRUE arm leads ONLY to the already-excluded throw at lines 357-358, which EnsureActive shields by pre-screening Closed before the lock. The guard's Closed branch is race-only defense-in-depth with no deterministic single-process trigger, so its branch counting (otherwise flaky across runs) is removed alongside the throw body. (Shifted from 339 by the G27 InferEntryRetryInfo() accessor added above.)" },
+    { "file": "Internal/StateMachine/InvocationStateMachine.cs", "line": 357, "reason": "ThrowIfClosedLocked Closed-throw (suspended arm): shielded by EnsureActive (pre-screens Closed under _commandLock) and the _executingRuns suspension guard, so no locked op can observe Closed here. (Shifted from 340 by the G27 InferEntryRetryInfo() accessor added above.)" },
+    { "file": "Internal/StateMachine/InvocationStateMachine.cs", "line": 358, "reason": "ThrowIfClosedLocked Closed-throw (non-suspended arm): same EnsureActive/_executingRuns shield as line 357; defense-in-depth for an impossible-by-construction state. (Shifted from 341 by the G27 InferEntryRetryInfo() accessor added above.)" },
+    { "file": "Internal/StateMachine/InvocationStateMachine.Operations.cs", "line": 27, "reason": "RunAsync<T> prefix flush under (!executesLocally && !replaying): RunPrefix returns executesLocally=true on the live path and replaying=true on every replay path, so both-false is unreachable." },
+    { "file": "Internal/StateMachine/InvocationStateMachine.Operations.cs", "line": 52, "reason": "RunAsync (void) prefix flush under (!executesLocally && !replaying): same RunPrefix invariant as line 27 — unreachable. (Shifted from 48 by the G33 replay-frontier SideEffectExecuted log gate added to RunAsync<T> above.)" },
+    { "file": "Internal/StateMachine/InvocationStateMachine.Operations.cs", "line": 1346, "reason": "CompleteAsync in-lock Closed re-check (suspended arm): EnsureActive pre-screens Closed before the lock, so the in-lock branch is race-only defense-in-depth with no deterministic single-process trigger. (Shifted from 1340 by the G33 SideEffectExecuted log gates added to both RunAsync overloads above.)" },
+    { "file": "Internal/StateMachine/InvocationStateMachine.Operations.cs", "line": 1347, "reason": "CompleteAsync in-lock raced-normal-close return: reachable only if State flips to Closed in the EnsureActive→lock window — a race with no non-flaky test seam. (Shifted from 1341 by the G33 SideEffectExecuted log gates added to both RunAsync overloads above.)" },
+    { "file": "Internal/Protocol/ProtocolReader.cs", "line": 124, "reason": "TryParseMessage trailing 'return false': DecoderState has exactly WaitingHeader/WaitingPayload and both are handled above; the compiler-mandated fallthrough is unreachable." }
+  ]
+}

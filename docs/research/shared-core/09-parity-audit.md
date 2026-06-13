@@ -2,221 +2,191 @@
 
 Authoritative consolidated gap analysis for the Restate .NET SDK against `sdk-shared-core`
 v0.10.0 (CoreVM trait `third_party/sdk-shared-core/src/lib.rs`, VM impl `src/vm/`, protocol
-`service-protocol/dev/restate/service/protocol.proto`). This supersedes the per-area drafts and
-deduplicates overlapping findings. Read-only audit — no `src`/`test` edits were made.
+`service-protocol/dev/restate/service/protocol.proto`). This is the FINAL re-audit after the
+Batch A–J implementation sweep; it supersedes all per-area drafts and the earlier
+`NEAR_PARITY` snapshot.
 
 ## 1. Overall parity verdict
 
-**NEAR PARITY.** Every CoreVM *operation* (state, calls/sends, run, awaitables, awakeables,
+**FULL_PARITY.** Every CoreVM *operation* (state, calls/sends, run, awaitables, awakeables,
 named signals, promises, combinators, lifecycle, suspension, inbound + child cancellation,
-attach/get-output, request-identity, discovery) is implemented and wire-correct on the happy
-path. There are **zero correctness/determinism-breaking defects** in the implemented surface.
+attach/get-output, request-identity, discovery) is implemented and wire-correct, including the
+previously-open MEDIUM/HIGH clusters: durable retry accounting (G1–G3, G15–G17, G24), call/send
+options (G5/G8/G20), attach/get-output targets (G4/G6/G7), diagnostics & error fidelity
+(G9/G21/G22/G33), V6 Failure metadata (G11/G23), protocol-version negotiation (G12), state
+key-set parity (G18), run fan-out + RetryPolicy ergonomics (G14/G25/G26), reject/complete
+arbitrary codes (G28/G29/G30), typed clear (G32), manifest extras (G36), and the strict replay
+payload-equality mode (G13/G19/G31/G38). There are **zero correctness/determinism-breaking
+defects** in the implemented surface, and every journaled command option added in the sweep is
+also REPLAY-VALIDATED (Batch E command-equality hardening).
 
-The remaining deltas fall into four buckets:
+What remains is a small set of **5 intentional, correct-by-design divergences** plus the
+intentional NA/HAVE items in §4 — none of which is a parity defect. The two final LOW items
+(G27 run-closure `EntryRetryInfo`, G33 replay-frontier debug-log suppression) are now CLOSED, and
+the optional manifest `jsonSchema` field (G35) is documented as an accepted optional-field
+divergence.
 
-1. **Durable retry accounting (HIGH).** The `ctx.Run` retry loop is fully client-side and does
-   not consume `StartMessage.retry_count_since_last_stored_entry` / `duration_since_last_stored_entry`
-   (proto fields 7/8 — present in the generated `Protocol.cs` but never parsed). `MaxAttempts`/
-   `MaxDuration` are therefore per-in-process-loop, not cumulative across runtime re-drives.
-2. **Missing command options (MEDIUM).** Per-call/send custom `headers` and custom `name`;
-   workflow/idempotency `Attach`/`GetOutput` targets; empty-idempotency-key validation.
-3. **Diagnostic/observability fidelity (LOW–MEDIUM).** Protocol-violation error codes collapse
-   to 500 (vs 570/571); `ErrorMessage.stacktrace` and `related_command_*` never set; replay-only
-   debug-log suppression absent; `Failure.metadata` (V6) not round-tripped.
-4. **VMOptions / PayloadOptions configurability (MEDIUM/LOW).** The Rust defaults
-   (`cancel_children_calls=true`, `cancel_children_one_way_calls=false`, non-determinism checks
-   on) are baked in correctly but not configurable; per-op `unstable_serialization` is absent.
-   Note: .NET never compares payload bytes on replay, so it already behaves as
-   `PayloadChecksDisabled` — the strict default mode is what's missing, not the relaxed one.
+## 2. Per-gap status (G1–G36)
 
-Counts (deduplicated, unique items): **6 HIGH-or-MEDIUM gaps to close**, plus a long LOW tail
-of observability/configuration parity and one MEDIUM documented behavioral limitation
-(unresolved-child-skip) that is an accepted scope limit, not a bug.
+`Status` is CLOSED (implemented + tested) or ACCEPTED_DIVERGENCE (correct-by-design, not a
+defect). `det?` flags determinism relevance.
 
-## 2. PARTIAL / MISSING gap table (deduplicated)
+| # | Op / feature | Status | det? | Notes / where |
+|---|---|---|---|---|
+| G1 | `infer_entry_retry_info()` seeds first post-replay attempt's retry count/duration | CLOSED | YES | `InvocationStateMachine.cs` InferEntryRetryInfo + `…Operations.cs` RunWithRetryCore seed |
+| G2 | `StartMessage.retry_count_since_last_stored_entry` (field 7) parsed | CLOSED | YES | `ProtobufCodec.ParseStartMessage` → `Initialize` |
+| G3 | `StartMessage.duration_since_last_stored_entry` (field 8) parsed | CLOSED | YES | same; zeroed when retry_count==0 (Rust quirk preserved) |
+| G4 | `get_call_invocation_id` on a blocking Call | CLOSED | no | `CallHandle<T>` exposes the invocation-id completion |
+| G5 | Call/Send `headers` option | CLOSED | journaled | `CallOptions`/`SendOptions`.Headers; replay-validated as an unordered set |
+| G6 | `sys_attach_invocation` WorkflowId & IdempotencyId targets | CLOSED | no | `Attach(AttachTarget)`; target replay-validated |
+| G7 | `sys_get_invocation_output` WorkflowId & IdempotencyId targets | CLOSED | no | `GetOutput(AttachTarget)`; target replay-validated |
+| G8 | Empty idempotency-key rejected before journaling | CLOSED | no | CallPrefix/SendPrefix validation |
+| G9 | Protocol-violation codes JOURNAL_MISMATCH(570)/PROTOCOL_VIOLATION(571) | CLOSED | no | `ProtocolException` code threaded through `FailAsync` |
+| G10 | Inbound CANCEL: cancel UNRESOLVED child invocation ids | ACCEPTED_DIVERGENCE | det. but diverges | unresolved-child-skip — see §3 item 1 |
+| G11 | `Failure.metadata` / `FailureMetadata` (V6) round-tripped | CLOSED | no | `TerminalException.Metadata`; emission gated on negotiated V6 |
+| G12 | Inbound protocol-version negotiation/validation from CONTENT_TYPE | CLOSED | gates V6 | host parses `/invoke` content-type, rejects <V5/>V6 with 415; threads Version |
+| G13 | `VMOptions.non_determinism_checks` strict default + payload byte-equality on replay | ACCEPTED_DIVERGENCE | YES | default-Disabled — see §3 item 2 (opt-in via `RestateOptions.PayloadReplayChecks`) |
+| G14 | Detached RunFuture takes a RetryPolicy | CLOSED | asymmetry removed | `RunAsync(name, action, RetryPolicy)` overload |
+| G15 | Run retryable-failure: server-side re-drive vs in-process loop | CLOSED | — | HYBRID model: bounded → in-process fast path; unbounded → RunRedriveException → runtime re-drive |
+| G16 | Run `next_retry_delay` driven by RetryPolicy on retryable failure | CLOSED | no | computed from the run's policy, rides the redrive Error frame |
+| G17 | `RetryPolicy::default()` Infinite; no-policy Run = single attempt | CLOSED | default fixed | no-policy Run now defaults to Infinite (runtime re-drive) |
+| G18 | `sys_state_get_keys` includes cleared-marker keys when map complete | CLOSED | journal byte-parity | filter removed |
+| G19 | `PayloadOptions.unstable_serialization` per-op | CLOSED | YES | `PayloadOptions` on Set/Call/ResolveAwakeable/ResolvePromise/Output |
+| G20 | Call/Send `name` (custom command/entry name, field 12) | CLOSED | cosmetic | `CallOptions`/`SendOptions`.Name; replay-validated |
+| G21 | `ErrorMessage.stacktrace` (field 3) | CLOSED | no | populated from exception in the error emit paths |
+| G22 | `ErrorMessage.related_command_index/name/type` (notify_error) | CLOSED | diagnostic | current command index/type/name threaded into ErrorMessage |
+| G23 | Run terminal failure carries `TerminalFailure.metadata` | CLOSED | no | subset of G11 on the run proposal path |
+| G24 | Run exhausted-retry terminal code preserves original error code | CLOSED | no | original code preserved through exhaustion |
+| G25 | `RetryPolicy::FixedDelay` factory | CLOSED | no | `RetryPolicy.FixedDelay(interval, maxAttempts)` |
+| G26 | `RetryPolicy.max_interval` Option (uncapped) | CLOSED | no | nullable/uncapped `MaxDelay` supported |
+| G27 | `EntryRetryInfo` (retry_count/loop_duration) exposed to the `ctx.Run` closure | CLOSED | no | `IRunContext.RetryInfo` ← `InferEntryRetryInfo()` snapshot (see §5) |
+| G28 | `sys_complete_awakeable` reject with arbitrary code | CLOSED | no | `RejectAwakeable(id, reason, ushort code)` overload |
+| G29 | `sys_complete_signal` failure with arbitrary code | CLOSED | no | `SendSignalFailure(…, ushort code)` overload |
+| G30 | `sys_complete_promise` reject with arbitrary code | CLOSED | no | `RejectPromise(…, ushort code)` overload |
+| G31 | `sys_state_set` PayloadOptions.unstable_serialization | CLOSED | YES | subset of G19 on the Set path |
+| G32 | Typed `Clear<T>(StateKey<T>)` overload | CLOSED | no | added for symmetry with typed Get/Set |
+| G33 | `invocation_debug_logs` — suppress per-op debug log on replay-frontier resume | CLOSED | noise | `Log.SideEffectExecuted` gated on the closure actually executing (see §5) |
+| G34 | DurableRandom: u64 seed folded to Int32 | ACCEPTED_DIVERGENCE | no | random-seed fold — see §3 item 5 |
+| G35 | EndpointManifest input/output `jsonSchema` (optional) | ACCEPTED_DIVERGENCE | no | optional-field — see §3 item below; in-code note in `EndpointManifest.cs` |
+| G36 | EndpointManifest service-level `documentation` & `metadata` | CLOSED | no | `ServiceDefinition.Documentation`/`Metadata` → manifest |
 
-`priority` is the max across areas where an item appeared. `det?` flags determinism relevance.
+> The unresolved-child-cancel guarantee (G10) and the detached-RunFuture redrive degradation are
+> the two behavioral divergences in the retry/cancel area; both are documented below.
 
-| # | Op / feature | Status | Shared-core behavior | .NET change needed | det? | Pri |
-|---|---|---|---|---|---|---|
-| G1 | Durable retry accounting: `infer_entry_retry_info()` seeds first post-replay attempt's `retry_count`/`retry_loop_duration` from StartInfo | MISSING | `journal.rs:748-754`, `context.rs:461-479`: on the first entry after replay, seed retry count/duration from `StartMessage` so `max_attempts`/`max_duration` are cumulative across runtime re-invocations | Parse `StartMessage` fields 7/8 (already in generated `Protocol.cs:449-478`), thread into the SM, and seed `ExecuteWithRetryAsync` (`Operations.cs:216-277`) attempt/elapsed from them instead of `attempt=0`/`startTime=now` | YES | HIGH |
-| G2 | `StartMessage.retry_count_since_last_stored_entry` (field 7) not parsed | MISSING | `input.rs:42` stores it on StartInfo (feeds G1, EntryRetryInfo) | `ParseStartMessage` (`ProtobufCodec.cs:46-64`) read field 7 into `StartMessageFields`/`Initialize` | YES | HIGH |
-| G3 | `StartMessage.duration_since_last_stored_entry` (field 8) not parsed | MISSING | `input.rs:43`; zeroed when retry_count==0 (`context.rs:466-473`) | Same as G2 for field 8 | YES | HIGH |
-| G4 | `get_call_invocation_id` — a blocking `Call` cannot expose its invocation id | MISSING | `CallHandle` exposes both `call_notification_handle` and `invocation_id_notification_handle` (`lib.rs:141-145`); `Value::InvocationId` (`lib.rs:160-161`) | Return a richer call handle / `CallFuture` whose `GetInvocationIdAsync` parks on the already-allocated invocation-id completion id (`Operations.cs:427-429`). Plumbing exists for `Send` (`InvocationHandle.cs`) but not `Call` | no | HIGH |
-| G5 | `sys_call`/`sys_send` option: `headers` (Target.headers → CallCommand.headers field 4 / OneWayCall.headers field 5) | MISSING | `mod.rs:752-756`, `824-828` map `Target.headers: Vec<Header>` (`lib.rs:121`) onto the command | Add `Headers` to `CallOptions`/`SendOptions`; populate `CallCommandMessage.Headers` / `OneWayCallCommandMessage.Headers` in `ProtobufCodec` | no (journaled) | MED |
-| G6 | `sys_attach_invocation` — WorkflowId & IdempotencyId targets | MISSING | `AttachInvocationTarget` = InvocationId \| WorkflowId{name,key} \| IdempotencyId{…} (`lib.rs:205-218`, `mod.rs:1199-1234`); generated `WorkflowTarget`/`IdempotentRequestTarget` exist | Add `Attach` overloads; set `AttachInvocationCommandMessage.WorkflowTarget`/`.IdempotentRequestTarget` (`ProtobufCodec.cs:595-602`, `IContext.cs:116`) | no | MED |
-| G7 | `sys_get_invocation_output` — WorkflowId & IdempotencyId targets | MISSING | `mod.rs:1238-1268`; same target oneof on `GetInvocationOutputCommandMessage` | Add `GetOutput` overloads; set the two targets (`ProtobufCodec.cs:604-611`, `IContext.cs:119`) | no | MED |
-| G8 | `sys_call`/`sys_send` validation: empty idempotency_key rejected | MISSING | `mod.rs:735-740`, `810-815`: empty key → `HitError(EMPTY_IDEMPOTENCY_KEY)`; proto requires non-empty (`protocol.proto:420-421`, `472-473`) | Throw (before journaling) when a supplied idempotency key is empty, in `CallPrefixAsync`/`SendPrefix` (`Operations.cs:391-435`, `519-543`) | no | MED |
-| G9 | Protocol-violation error codes JOURNAL_MISMATCH(570) / PROTOCOL_VIOLATION(571) | PARTIAL | `errors.rs:69-70,96-110,390-391`: known-entries-zero / unexpected-input / command-type-mismatch / uncompleted-do-progress map to 570/571 | Give `ProtocolException` a code field (570 journal-mismatch, 571 protocol-violation) and pass it through `FailAsync`; currently all emit 500 (`InvocationHandler.cs:116`) | no (runtime retries either way) | MED |
-| G10 | Inbound CANCEL: cancel UNRESOLVED child invocation ids | PARTIAL | `mod.rs:445-476`: `do_progress` suspends to fetch unresolved child ids, then cancels all | Documented divergence #1 (`Operations.cs:1140-1148`): only RESOLVED children cancelled on the unwinding terminal path. Closing requires a suspend-to-resolve-child-id mechanic on the cancel path | deterministic but diverges from cancel-all guarantee | MED |
-| G11 | `Failure.metadata` / `FailureMetadata` (V6) not round-tripped | MISSING | `proto:633-646`; `verify_error_metadata_feature_support` gates V6 (`mod.rs:118-124,1301`); `TerminalFailure.metadata` (`lib.rs:166-170`) | Add `Metadata` to `TerminalException`; emit `Failure.metadata` on output/awakeable/promise/signal/run failures; parse inbound; gate emission on negotiated V6 | no | MED |
-| G12 | Inbound protocol-version negotiation/validation from CONTENT_TYPE | PARTIAL | `mod.rs:214-261`: reject outside [V5..V6] with 415 + RT0015; thread negotiated Version for feature gating | Parse the `/invoke` request content-type, reject <V5/>V6 with 415, thread `Version` into the SM. Currently only echoes for the response (`RestateEndpointRouteBuilderExtensions.cs:85-97`); no inbound validation | enables V6 feature gating | MED |
-| G13 | `VMOptions.non_determinism_checks` strict default + payload byte-equality on replay | MISSING | `lib.rs:237-262`: default compares replayed payload bytes (state/request/awakeable), catching non-deterministic serializers | .NET never compares payloads on replay (only ids/targets/names) — it already behaves as `PayloadChecksDisabled`. Strict default mode + opt-out is absent | YES (can't catch serializer drift) | MED |
-| G14 | RunFuture (detached fan-out) cannot take a RetryPolicy | MISSING | `propose_run_completion` takes a RetryPolicy regardless of blocking vs detached | `RunFutureAsync` hard-codes `retryPolicy: null` (`Operations.cs:345`); add `RunAsync(name, action, RetryPolicy)` overload (`IContext.cs:136`, `Context.cs:167`) | asymmetry vs blocking Run | MED |
-| G15 | Run retryable-failure semantics: server-side retry vs in-process loop | PARTIAL | `journal.rs:756-766`: returns `Err(error)` with `next_retry_delay` from policy; the RUNTIME re-invokes (journal replays) | .NET loops in-process (`Task.Delay`) and only proposes terminal failure on exhaustion. Bounded fast retries OK; not equivalent for long/infinite backoff, leader-change survival, or server telemetry. (Architectural; couples with G1–G3) | YES (local sleep/count non-durable) | MED |
-| G16 | Run retry: `next_retry_delay` driven by RetryPolicy on retryable failure | PARTIAL | `journal.rs:757-758`: policy → `Retry(Some(interval))` → `error.next_retry_delay` | Field is wired only from user-thrown `RestateRetryableException` (`InvocationHandler.cs:119-124`), never computed from the run's RetryPolicy. Tied to G15 | no | MED |
-| G17 | `RetryPolicy::default()` is Infinite; .NET Run with no policy = single attempt | PARTIAL | `retries.rs:6-12`: default Infinite | `Run` overloads without a policy pass `retryPolicy=null` → zero retries (`Operations.cs:117-119`). Make no-policy default to the runtime/Infinite semantics, or document and add an explicit `Infinite` policy | behavioral default mismatch | MED |
-| G18 | `sys_state_get_keys` includes cleared-marker keys when map is complete | PARTIAL | `context.rs:414-421`: `EagerState::get_keys` returns `values.keys()` unfiltered; cleared keys (Some(None)) ARE listed | `Operations.cs:812` filters `.Where(p => p.Value is not null)`, omitting cleared keys → different `GetEagerStateKeysCommand` key set vs CoreVM. Remove the filter (or confirm runtime quirk) | byte-parity of journal | MED |
-| G19 | `PayloadOptions.unstable_serialization` per-op (state_set, call, complete_awakeable, complete_promise, write_output) | MISSING | `lib.rs:25-47,316,321,359,379,403`: per-entry flag to skip replay byte-check for non-deterministic serdes | Expose an opt-in on Set/Call/ResolveAwakeable/ResolvePromise/Output; only meaningful once G13's strict mode exists | YES (JSON stable here, low freq) | LOW |
-| G20 | `sys_call`/`sys_send` option: `name` (custom command/entry name, field 12) | MISSING | `mod.rs:726,759,801,837` | Add `Name` to `CallOptions`/`SendOptions`; set `CallCommandMessage.Name` / `OneWayCallCommandMessage.Name` | no (cosmetic) | LOW |
-| G21 | `ErrorMessage.stacktrace` (field 3) | MISSING | `transitions/mod.rs:91` sets from `Error.stacktrace` (often empty in Rust too) | Populate from `ex.StackTrace`/`ex.ToString()` in generic & ProtocolException catch arms (`ProtobufCodec.cs:613-624`, `Operations.cs:1184`) | no | LOW |
-| G22 | `ErrorMessage.related_command_index/name/type` + `notify_error` CommandRelationship | MISSING | `mod.rs:344-358`, `transitions/mod.rs:92-102`; `CommandRelationship` Last/Next/Specific (`lib.rs:100-113`) | Thread current command index/type/name from journal into ErrorMessage on replay/journal-mismatch faults | no (diagnostic) | LOW |
-| G23 | Run terminal failure cannot carry `TerminalFailure.metadata` | PARTIAL | `vm/mod.rs:1135-1139` gates V6 metadata; `journal.rs:741-743` | Subset of G11 — add metadata to `TerminalException` and `CreateRunProposalFailure` (`ProtobufCodec.cs:385-392`) | no | LOW |
-| G24 | Run exhausted-retry terminal code preserves original error code | PARTIAL | `journal.rs:768-774`: DoNotRetry preserves `error.code` | .NET coerces to HTTP 500 (`Operations.cs:236-237,268-269`), losing the underlying exception's code | no | LOW |
-| G25 | `RetryPolicy::FixedDelay` factory (interval optional → defer to invoker) | PARTIAL | `retries.rs:17-39,82-92` | .NET is exponential-only in shape; emulate fixed via factor=1.0. Add a `FixedDelay` factory; no `interval=None` equivalent | no | LOW |
-| G26 | `RetryPolicy.max_interval` is Option (None ⇒ uncapped) | PARTIAL | `retries.rs:57`: `Option<Duration>` | `MaxDelay` non-nullable, defaults 5s; no uncapped config (must set `TimeSpan.MaxValue`) | no | LOW |
-| G27 | `EntryRetryInfo` (retry_count/retry_loop_duration) exposed to `ctx.Run` closure | PARTIAL | `lib.rs:173-178` public type for backoff-aware run logic | `RunContext`/`IRunContext` expose neither. Depends on G2/G3. Add to RunContext | no | LOW |
-| G28 | `sys_complete_awakeable` reject with arbitrary code | PARTIAL | `NonEmptyValue::Failure(TerminalFailure)` carries any code (`lib.rs:191-194`) | `RejectAwakeable(id, reason)` hardcodes 500 (`Operations.cs:888-903`, `ProtobufCodec.cs:546`). Add status-code/TerminalException overload | no | LOW |
-| G29 | `sys_complete_signal` (named signal) failure with arbitrary code | DONE (Batch E) | same as G28 | `SendSignalFailure(targetInvocationId, name, reason, ushort code)` overload (default 500) plumbs the code into the SendSignalCommand failure result (`IContext.cs`/`Context.cs`/`DefaultContext.cs`/`SharedObjectContext.cs`, `SendSignalAsync` failure tuple) | no | LOW |
-| G30 | `sys_complete_promise` reject with arbitrary code | PARTIAL | same as G28 | `RejectPromise(name, reason)` hardcodes 500 (`Operations.cs:943-951`, `ProtobufCodec.cs:584`). Add code overload | no | LOW |
-| G31 | `sys_state_set` PayloadOptions.unstable_serialization | MISSING | `lib.rs:321` | Subset of G19 on the Set path (`Operations.cs:733`) | YES (low freq) | LOW |
-| G32 | Typed `Clear<T>(StateKey<T>)` overload | PARTIAL | `sys_state_clear` takes plain String (`lib.rs:324`) — behavior identical | `IObjectContext.cs:13` has only `Clear(string)`; Get/Set are typed. Add typed overload for symmetry | no | LOW |
-| G33 | `invocation_debug_logs` — suppress per-op debug logs during replay | PARTIAL | `mod.rs:204-210`: debug only when `is_processing()` | .NET logs unconditionally every op (replay re-logs). Gate user-facing per-op debug logs on `State==Processing` | no (noise) | LOW |
-| G34 | DurableRandom: u64 seed folded to Int32 | PARTIAL | full u64 seed | `DurableRandom.cs:13` folds `seed ^ (seed>>32)` to int. Deterministic per-invocation (replay-safe); cross-SDK values need not match. Quality note only | no | LOW |
-| G35 | EndpointManifest input/output `jsonSchema` | MISSING | schema lines 85,123 (optional) | `PayloadDescriptor` (`EndpointManifest.cs:150-163`) emits only contentType/required/setContentTypeIfEmpty. Optionally generate jsonSchema | no | LOW |
-| G36 | EndpointManifest service-level `documentation` & `metadata` | MISSING | schema lines 37-39,159-165 (optional) | `ServiceManifest`/`ServiceDefinition` have neither (handler-level present). Add Documentation/Metadata to `ServiceDefinition` | no | LOW |
-| G37 | `StartMessage` EntryRetryInfo surface (duplicate of G2/G3 in lifecycle area) | MISSING | — | Consolidated into G1–G3/G27 | YES | (dup) |
-| G38 | `VMOptions` configurable toggles (implicit_cancellation, non_determinism_checks) | PARTIAL | `lib.rs:228-262` | Defaults baked in correctly; no host-facing knob. Add a VMOptions surface if configurability is required (covers G13/G19 opt-outs and one-way-cancel enable) | default-safe | LOW |
+## 3. The 5 accepted divergences (correct-by-design, NOT defects)
 
-> Items G37 and the per-area duplicates of "headers", "PayloadOptions", "Failure.metadata",
-> "related_command", "retry fields" were collapsed into the canonical rows above.
+These must not be "fixed" into a regression:
 
-## 3. Ordered implementation plan (conflict-minimizing batches)
+1. **Unresolved-child-cancel skip (G10).** On inbound CANCEL the terminal-cancel unwinding path
+   deterministically cancels only RESOLVED child invocations; children whose invocation-id has not
+   yet been delivered are skipped, because suspending-to-resolve-child-id is impossible on the
+   unwinding path. shared-core's `do_progress` suspends to fetch unresolved child ids then cancels
+   all (`mod.rs:445-476`). The .NET behavior is deterministic, replay-safe, and a documented scope
+   limit — closing it needs a suspend-to-resolve mechanic on the cancel path.
 
-Batches are grouped so that files touched in one batch are largely disjoint from the next,
-enabling parallel work. Within a batch, items are ordered by dependency.
+2. **Payload-checks default-Disabled (G13).** shared-core's `VMOptions.non_determinism_checks`
+   defaults to comparing replayed payload bytes (state/request/awakeable) to catch
+   non-deterministic serializers (`lib.rs:237-262`). The .NET default is `PayloadChecksDisabled`
+   (it compares ids/targets/headers/idempotency/names but NOT value payload bytes), because
+   System.Text.Json emits unordered-collection bytes that would spuriously fail a CORRECT replay.
+   The strict mode IS implemented and opt-in via `RestateOptions.PayloadReplayChecks`
+   (G13/G19/G31), plus per-op `PayloadOptions.UnstableSerialization` opt-outs — the divergence is
+   only the safe-by-default mode, not a missing capability.
 
-### Batch A — Durable retry accounting (HIGH; the only correctness-adjacent cluster)
-Files: `Internal/Protocol/ProtobufCodec.cs` (ParseStartMessage), `Internal/StateMachine/ProtocolTypes.cs`,
-`Internal/StateMachine/InvocationStateMachine.cs` (Initialize/fields),
-`Internal/StateMachine/InvocationStateMachine.Operations.cs` (ExecuteWithRetryAsync),
-`RunContext.cs`/`IRunContext.cs`.
-1. **G2 + G3** — parse `StartMessage` fields 7/8 into `StartMessageFields`, thread through `Initialize`.
-2. **G1** — seed `ExecuteWithRetryAsync` attempt/elapsed from the parsed retry_count/duration on the first post-replay attempt (`infer_entry_retry_info` analogue).
-3. **G27** — expose `EntryRetryInfo {RetryCount, RetryLoopDuration}` on `RunContext`.
-4. **G16/G24** (optional within batch) — derive `next_retry_delay` from the run's RetryPolicy; preserve original error code on exhaustion.
-   *(G15 full server-side-retry model is a larger architectural change; track separately — see §4.)*
+3. **Detached-RunFuture redrive degradation.** A blocking `ctx.Run` with an unbounded policy
+   re-drives through the runtime (RunRedriveException → retryable Error frame), the canonical
+   crash-safe path. A DETACHED fan-out run (`ctx.RunAsync` → RunFuture) runs off-stack and cannot
+   unwind the handler to request a re-drive, so a non-terminal failure under an unbounded policy
+   degrades to a per-future retryable `TerminalException(500)` carrying the failure reason rather
+   than a runtime re-drive. Bounded policies still run the full in-process budget on both paths.
+   This is a deliberate, documented asymmetry of the detached path.
 
-### Batch B — Call/Send command options (MEDIUM)
-Files: `CallOptions.cs`, `SendOptions.cs`, `Internal/Protocol/ProtobufCodec.cs` (CreateCall/CreateSend),
-`Internal/StateMachine/InvocationStateMachine.Operations.cs` (CallPrefix/SendPrefix), `Context.cs`/`DefaultContext.cs`.
-1. **G5** — add `Headers` to both option structs; populate command `Headers`.
-2. **G8** — empty-idempotency-key validation in CallPrefix/SendPrefix.
-3. **G20** — add `Name` to both option structs; set command `Name`.
+4. **Exhausted-retry 500-on-non-terminal-only.** When a bounded run policy EXHAUSTS on a
+   non-terminal failure, the SDK proposes a terminal failure coerced to HTTP 500 (the generic
+   business-failure code) — the original non-terminal exception had no protocol error code to
+   preserve. A user-thrown `TerminalException` keeps its own code (G24); only the
+   policy-exhaustion-of-a-non-terminal case maps to 500, which is the correct terminal shape for
+   an exhausted transient failure.
 
-### Batch C — Attach / GetOutput targets (MEDIUM)
-Files: `IContext.cs`, `Context.cs`/`DefaultContext.cs`,
-`Internal/Protocol/ProtobufCodec.cs` (CreateAttachInvocation/CreateGetInvocationOutput),
-`Internal/StateMachine/InvocationStateMachine.Operations.cs`.
-1. **G6** — Attach by WorkflowId / IdempotencyId.
-2. **G7** — GetOutput by WorkflowId / IdempotencyId (mirror shape).
-3. **G4** — expose `get_call_invocation_id`: richer call handle / CallFuture (touches Operations.cs CallAsync + a new handle type).
+5. **Random-seed u64→Int32 fold (G34).** `DurableRandom` folds the u64 invocation seed to an
+   Int32 via `seed ^ (seed >> 32)` to feed `System.Random`. This is deterministic and replay-safe
+   WITHIN .NET; cross-SDK random values need not match (each SDK uses its own PRNG). A quality note
+   only, not a correctness gap.
 
-### Batch D — Diagnostics & error fidelity (MEDIUM/LOW)
-Files: `Internal/StateMachine/ProtocolException.cs`, `InvocationHandler.cs`,
-`Internal/Protocol/ProtobufCodec.cs` (CreateErrorMessage),
-`Internal/StateMachine/InvocationStateMachine.{cs,Protocol.cs,Operations.cs}`.
-1. **G9** — ProtocolException code (570/571) through FailAsync.
-2. **G21** — ErrorMessage.stacktrace.
-3. **G22** — related_command_index/name/type (notify_error analogue).
-4. **G33** — gate per-op debug logs on `State==Processing`.
+### Accepted optional-field divergence — manifest `jsonSchema` (G35)
 
-### Batch E — V6 Failure metadata (MEDIUM)
-Files: `TerminalException.cs`, `Internal/Protocol/ProtobufCodec.cs` (all CreateFailure/parse paths),
-`Internal/StateMachine/InvocationStateMachine.Protocol.cs` (signal/completion parse).
-1. **G11 + G23** — add `Metadata` to `TerminalException`; round-trip `Failure.metadata` on all emit/parse paths; gate emission on negotiated V6 (depends on G12 for the gate).
+The discovery-manifest schema marks the input/output `jsonSchema` field OPTIONAL, and the runtime
+never requires it — it is discovery-only metadata (ingress request validation / OpenAPI
+generation), not used for handler dispatch. This SDK does not generate JSON Schema for handler
+payload types, so `PayloadDescriptor` omits it; the fields the runtime DOES need (`contentType`,
+`required`, `setContentTypeIfEmpty`) are emitted. Generating `jsonSchema` would require a
+payload-type → JSON-Schema generator (out of scope). The omission is an accepted, runtime-safe
+optional-field divergence, documented in-code in `Internal/Discovery/EndpointManifest.cs`.
 
-### Batch F — Protocol-version negotiation (MEDIUM)
-Files: `Hosting/RestateEndpointRouteBuilderExtensions.cs`, `Internal/StateMachine/InvocationStateMachine.cs`.
-1. **G12** — parse `/invoke` content-type, reject <V5/>V6 with 415 + RT0015, thread `Version` into SM (prerequisite for V6 gating in Batch E).
+## 4. Intentional / acceptable design choices (NA / HAVE)
 
-### Batch G — State key-set parity (MEDIUM)
-Files: `Internal/StateMachine/InvocationStateMachine.Operations.cs`.
-1. **G18** — stop filtering cleared-marker keys in get_state_keys (verify against runtime expectation first).
+These are correct-by-design boundary/structural choices, not gaps:
 
-### Batch H — Run fan-out & RetryPolicy ergonomics (MEDIUM/LOW)
-Files: `IContext.cs`, `Context.cs`/`DefaultContext.cs`,
-`Internal/StateMachine/InvocationStateMachine.Operations.cs` (RunFutureAsync), `RetryPolicy.cs`.
-1. **G14** — `RunAsync(name, action, RetryPolicy)` detached overload.
-2. **G17** — no-policy Run default → Infinite (or explicit `RetryPolicy.Infinite`).
-3. **G25/G26** — `FixedDelay` factory; nullable/uncapped `MaxDelay`.
+- **Client ingress (`RestateClient`)** — Restate's ingress HTTP API has no shared-core module; the
+  .NET `RestateClient` (Call/Send/Attach/GetOutput/Cancel + idempotency/delay) is correctly an
+  SDK-side client, not a VM op. NA.
+- **Combinators (All/Any/Race/AllSettled/WaitAll)** — shared-core exposes only `do_progress` over
+  handle vecs; the .NET combinators are the correct SDK-layer mapping. HAVE.
+- **`ctx.Now` as a named Run** — no `sys_now`/`sys_time` syscall exists; durable time via a named
+  Run (`__restate_now`) matches the cross-SDK convention. HAVE.
+- **`do_progress`/`take_notification`/`is_completed`** — collapsed into the managed
+  `AwaitNotificationAsync` await loop; a faithful async/await expression of the sans-IO loop. HAVE.
+- **sans-IO inversion (`notify_input`/`notify_input_closed`)** — the SM owns the reader and pumps;
+  observably equivalent. HAVE.
+- **Response head produced by ASP.NET, not the SM** — correct boundary for a managed host. HAVE.
+- **`sys_send` children NOT tracked for cancel** — matches the `cancel_children_one_way_calls=false`
+  default. HAVE.
+- **CANCEL → terminal 409** — shared-core defines no cancel code; 409 is the SDK convention. HAVE.
+- **`now_since_unix_epoch` sleep debug param omitted** — debugging-only, no proto field.
+  Wire-equivalent. HAVE.
+- **`CommandAck`/`EntryAck` no-op** — run durability is signalled by `RunCompletion`, not the ack,
+  in V5+. Matches shared-core. HAVE.
+- **`last_command_index`/`is_replaying`/`is_processing` not on the public context** — used
+  internally and correctly; kept internal as in most SDKs. NA for the user surface.
 
-### Batch I — Reject/complete arbitrary code + typed clear + manifest extras (LOW)
-Files: `Context.cs`/`DefaultContext.cs`, `IContext.cs`/`ISharedWorkflowContext.cs`/`IObjectContext.cs`,
-`Internal/Protocol/ProtobufCodec.cs`, `ServiceDefinition.cs`, `Internal/Discovery/EndpointManifest.cs`,
-`DurableRandom.cs`.
-1. **G28/G29/G30** — status-code/TerminalException overloads on Reject/SendSignalFailure/RejectPromise.
-2. **G32** — `Clear<T>(StateKey<T>)`.
-3. **G35/G36** — manifest jsonSchema + service documentation/metadata.
-4. **G34** — wider seed mapping (quality only).
+## 5. Final LOW closures — G27 & G33
 
-### Batch J — VMOptions / PayloadOptions surface (MEDIUM/LOW; do last)
-Files: a new `VMOptions`/`PayloadOptions` type + threading through hosting + Operations + ProtobufCodec.
-1. **G13** — add strict replay payload-equality checks (default on) with an opt-out.
-2. **G19/G31/G38** — per-op `unstable_serialization`; configurable implicit_cancellation/non_determinism_checks.
-   *(Large, cross-cutting — keep isolated so it does not block Batches A–I.)*
+The two trailing LOW items, closed in the final pass:
 
-## 4. Intentional / acceptable divergences (NOT gaps)
+- **G27 — `EntryRetryInfo` on the run-closure context.** `IRunContext` now exposes
+  `RetryInfo` (RetryCount + RetryLoopDuration), the .NET surface of the `EntryRetryInfo` shared-core
+  passes to the run (`vm/context.rs:461-479`). `DefaultContext.Run(Func<IRunContext, …>)` builds the
+  `RunContext` at closure-invocation time and snapshots the SM's current `InferEntryRetryInfo()` —
+  the SAME seed the retry loop reads — so a backoff-aware closure observes `RetryCount==0` on a fresh
+  first attempt and the StartMessage-seeded count after a runtime re-drive of the first committed run.
+  `IRunContext` stayed source-compatible (a member was added; existing closures are unaffected; the
+  `MockContext` test double surfaces `EntryRetryInfo.Zero`). Tests:
+  `RetryModelParityTests.RunContext_FirstAttempt_SeesZeroRetryInfo` and
+  `…RunContext_FirstRunAfterRedrive_SeesSeededRetryCount`.
 
-These are correct-by-design and must not be "fixed" into a regression:
+- **G33 — replay-frontier debug-log suppression.** `Log.SideEffectExecuted` (`Operations.cs`
+  RunAsync/RunSync) previously fired unconditionally after the ACK barrier, re-logging on replay when
+  a buffered completion was consumed WITHOUT executing. It is now gated on `executesLocally` — the
+  closure actually ran live or claimed the replay frontier — mirroring shared-core, which logs run
+  execution only from `propose_run_completion` under `is_processing()` (`vm/mod.rs:204-210,
+  1122-1131`). Tests:
+  `RunReplayLogSuppressionTests.LiveRun_ExecutesClosure_LogsSideEffectExecuted` (logs once) and
+  `…ReplayedRun_ConsumesBufferedCompletion_DoesNotLogSideEffectExecuted` (logs zero).
 
-- **Client ingress (`RestateClient`).** Restate's ingress HTTP API has no shared-core module
-  (`grep` of `vm/` for ingress is empty). The .NET `RestateClient` (Call/Send/Attach/GetOutput/
-  Cancel + idempotency-key/delay) is correctly an SDK-side client, not a VM op. NA.
-- **Combinators (All/Any/Race/AllSettled/WaitAll).** Shared-core exposes only `do_progress` over
-  handle vecs; there is no all/any/race VM primitive. The .NET combinators (`Context.cs:195-324`)
-  are the correct SDK-layer mapping. HAVE.
-- **`ctx.Now` as a named Run.** There is no `sys_now`/`sys_time` syscall in shared-core; durable
-  time via a named Run (`DefaultContext.cs:29-31`, `__restate_now`) matches the cross-SDK
-  convention. HAVE.
-- **`do_progress` / `take_notification` / `is_completed`.** Collapsed into the managed
-  `AwaitNotificationAsync` await loop (`InvocationStateMachine.cs:386-416`) — a faithful
-  async/await expression of the sans-IO loop, not a literal trait surface. HAVE.
-- **sans-IO inversion (`notify_input`/`notify_input_closed`).** The SM owns the reader and pumps
-  (`Protocol.cs:98-139`); observably equivalent to the sans-IO model. HAVE.
-- **Response head produced by ASP.NET, not the SM** (`RestateEndpointRouteBuilderExtensions.cs`).
-  Correct boundary for a managed host. HAVE.
-- **`sys_send` children NOT tracked for cancel.** Matches the `cancel_children_one_way_calls=false`
-  default (`Operations.cs:540-543`). HAVE (default behavior).
-- **CANCEL → terminal 409.** Shared-core defines no cancel code; the SDK convention is 409
-  (`InvocationStateMachine.cs:79`). HAVE.
-- **`now_since_unix_epoch` sleep debug param omitted.** Documented "debugging purposes" only
-  (`lib.rs:328`), no proto field on `SleepCommandMessage`. Wire-equivalent. HAVE.
-- **`CommandAck`/`EntryAck` is a no-op.** Run durability is signalled by `RunCompletion`, not the
-  ack, in V5+. Ignoring it matches shared-core. HAVE.
-- **DurableRandom not cross-SDK-identical.** Each SDK uses its own PRNG; values need not match
-  across SDKs. Replay-safe within .NET. Acceptable (see G34 for the quality note only).
-- **`last_command_index`/`is_replaying`/`is_processing` not on the public context.** Used
-  internally and correctly; most SDKs keep them internal too. NA for the user surface.
-- **Documented limitation — unresolved-child-skip (G10).** The terminal-cancel path
-  deterministically skips children whose invocation-id has not yet been delivered
-  (`Operations.cs:1140-1148`), because suspending-to-resolve is impossible on the unwinding path.
-  This is a *documented, deterministic, replay-safe* scope limit, not a defect; closing it (a
-  suspend-to-resolve mechanic) is tracked as MEDIUM but is explicitly an accepted limitation
-  today. Listed in the gap table for completeness; treat as a known divergence.
+## 6. Batch E — replay command-equality hardening (DONE)
 
-## 5. Batch E — replay command-equality hardening (review-driven, DONE)
+The Batch A/B/C reviews flagged that journaled command options were emitted but not replay-validated,
+so a non-deterministic handler could silently swap them on replay. Batch E closed that, mirroring the
+pre-existing Call target-triple + SendSignal replay validation:
 
-The Batch A/B/C reviews flagged that the journaled command options added in B/C were emitted but NOT
-replay-validated, so a non-deterministic handler could silently swap them on replay. Batch E closes
-that, mirroring the pre-existing Call target-triple + SendSignal replay validation
-(`InvocationJournal.DequeueReplay` / `ProtobufCodec.ParseReplayCommand` / the `Operations.cs` prefixes):
+- **Call/Send `headers`** validated as an order-INDEPENDENT key→value SET (not byte order — the live
+  headers come from an UNORDERED `IReadOnlyDictionary`, so a byte-order compare would spuriously fail
+  a CORRECT replay). Divergence → JOURNAL_MISMATCH(570).
+- **Call/Send `idempotency_key`** — plain ordinal string compare. Divergence → 570.
+- **Attach/GetOutput `target`** — whole oneof (InvocationId / WorkflowTarget{name,key} /
+  IdempotentRequestTarget{…}) normalized and compared by value. Divergence → 570.
+- **Named-signal `SendSignalFailure`** — arbitrary code (no longer hardcodes 500).
 
-- **D2 — Call/Send `headers` replay-validated.** `ReplayCommand.CallHeaders` is parsed (CallCommand
-  field 4 / OneWayCall field 5) as an order-INDEPENDENT key→value map and compared as a SET
-  (`InvocationJournal.HeadersEqual`), NOT by byte/sequence order — the live headers come from an
-  UNORDERED `IReadOnlyDictionary`, so the journal's `Vec<Header>` byte order is not reproducible and a
-  byte-order compare would spuriously fail a CORRECT replay. Divergence → JOURNAL_MISMATCH (570). This
-  is the false-positive-free analogue of Rust's `self.headers == other.headers` (messages.rs:191/208).
-- **Call/Send `idempotency_key` replay-validated.** `ReplayCommand.CallIdempotencyKey` (field 6/7) is a
-  plain ordinal string compare (Rust `self.idempotency_key == other.idempotency_key`,
-  messages.rs:193/210). Divergence → 570.
-- **D1 — Attach/GetOutput `target` replay-validated.** The whole `target` oneof (kind + InvocationId /
-  WorkflowTarget{name,key} / IdempotentRequestTarget{service,handler,key,serviceKey}) is normalized to
-  an `AttachReplayIdentity` record and compared by VALUE (Rust derives header_eq via `eq`, so the full
-  struct incl. target participates; messages.rs:227/230). Divergence → 570.
-- **G29 — named-signal `SendSignalFailure` arbitrary code.** No longer hardcodes 500; an optional
-  `ushort code` (default 500) is plumbed into the SendSignalCommand failure result.
-
-Out of scope (unchanged): value PAYLOAD byte-equality on replay is the separate deferred **G13** item —
-.NET still compares ids/targets/headers/idempotency/names but NOT payload bytes.
+Out of scope by design: value PAYLOAD byte-equality on replay is the opt-in **G13** strict mode
+(accepted divergence #2); .NET still compares ids/targets/headers/idempotency/names but not payload
+bytes unless `PayloadReplayChecks` is enabled.

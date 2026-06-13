@@ -158,6 +158,13 @@ internal sealed class HandlerManifest
     }
 }
 
+// G35 (accepted divergence) — the discovery-manifest schema marks the input/output `jsonSchema` field
+// OPTIONAL, and the runtime never requires it: it is discovery-only metadata used for ingress request
+// validation / OpenAPI generation, not for handler dispatch. This SDK does not generate JSON Schema for
+// handler input/output payload types, so the field is omitted. The fields the runtime DOES need —
+// `contentType`, `required`, and `setContentTypeIfEmpty` — are emitted below. Emitting `jsonSchema` would
+// require a payload-type → JSON-Schema generator (out of scope), so its absence is an accepted, runtime-safe
+// optional-field divergence rather than a parity defect.
 internal sealed class PayloadDescriptor
 {
     [JsonPropertyName("contentType")]

@@ -48,14 +48,17 @@ internal sealed class DefaultContext : Restate.Sdk.Context
 
     public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
     {
-        var runCtx = new RunContext(Aborted, _logger);
-        return _stateMachine.RunAsync(name, () => action(runCtx), Aborted);
+        // G27 — build the RunContext at closure-invocation time so its EntryRetryInfo reflects the SM's
+        // current retry seed (the same value the retry loop reads): 0 on a fresh first attempt, the
+        // StartMessage-seeded count after a runtime re-drive of the first committed run.
+        return _stateMachine.RunAsync(name,
+            () => action(new RunContext(Aborted, _logger, _stateMachine.InferEntryRetryInfo())), Aborted);
     }
 
     public override ValueTask Run(string name, Func<IRunContext, Task> action)
     {
-        var runCtx = new RunContext(Aborted, _logger);
-        return _stateMachine.RunAsync(name, () => action(runCtx), Aborted);
+        return _stateMachine.RunAsync(name,
+            () => action(new RunContext(Aborted, _logger, _stateMachine.InferEntryRetryInfo())), Aborted);
     }
 
     public override ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy)

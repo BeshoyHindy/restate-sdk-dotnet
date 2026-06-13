@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging.Abstractions;
+using Restate.Sdk.Internal.Context;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
 using Restate.Sdk.Tests.Testing;
@@ -325,6 +327,69 @@ public sealed class RetryModelParityTests
         var ex = await Assert.ThrowsAsync<TerminalException>(() => AwaitBounded(resolve().AsTask()));
         Assert.Equal((ushort)500, ex.Code);
         Assert.Contains("transient", ex.Message, StringComparison.Ordinal);
+
+        rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    // ---- G27: the run closure's IRunContext surfaces EntryRetryInfo ---------------------------
+
+    [Fact(Timeout = WatchdogMs)]
+    public async Task RunContext_FirstAttempt_SeesZeroRetryInfo()
+    {
+        using var rig = new StateMachineRig();
+        var sm = rig.StateMachine;
+        await StartFreshAsync(rig);
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        var ctx = new DefaultContext(sm, NullLogger.Instance, CancellationToken.None);
+
+        // The IRunContext handed to the closure exposes the current attempt's retry accounting. On a
+        // FRESH first attempt (no runtime re-drive) it is EntryRetryInfo.Zero — count 0, duration 0.
+        EntryRetryInfo observed = default;
+        var runTask = ctx.Run("observe-retry", ctxRun =>
+        {
+            observed = ctxRun.RetryInfo;
+            return Task.FromResult(7);
+        }).AsTask();
+        await DeliverInboundAsync(rig, MessageType.RunCompletion, CreateRunCompletion(1u, Json(7)));
+        Assert.Equal(7, await AwaitBounded(runTask));
+
+        Assert.Equal(0, observed.RetryCount);
+        Assert.Equal(TimeSpan.Zero, observed.RetryLoopDuration);
+
+        rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    [Fact(Timeout = WatchdogMs)]
+    public async Task RunContext_FirstRunAfterRedrive_SeesSeededRetryCount()
+    {
+        using var rig = new StateMachineRig();
+        var sm = rig.StateMachine;
+        // Simulate the runtime re-driving after 3 prior failed attempts: StartMessage field 7 carries
+        // retry_count_since_last_stored_entry = 3 (field 8 = 1500ms). The FIRST committed run resumes the
+        // cumulative seed, so its IRunContext.RetryInfo reports count 3 (the InferEntryRetryInfo seed),
+        // letting a backoff-aware closure observe how many times it has already been retried.
+        await rig.DeliverAsync(MessageType.Start, CreateStartMessage("inv-ctx-redrive", 1,
+            retryCountSinceLastStoredEntry: 3, durationSinceLastStoredEntryMillis: 1500));
+        await rig.DeliverAsync(MessageType.InputCommand, CreateInputCommand(Array.Empty<byte>()));
+        await AwaitBounded(sm.StartAsync(CancellationToken.None));
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        var ctx = new DefaultContext(sm, NullLogger.Instance, CancellationToken.None);
+
+        EntryRetryInfo observed = default;
+        var runTask = ctx.Run("seeded-observe", ctxRun =>
+        {
+            observed = ctxRun.RetryInfo;
+            return Task.FromResult(9);
+        }).AsTask();
+        await DeliverInboundAsync(rig, MessageType.RunCompletion, CreateRunCompletion(1u, Json(9)));
+        Assert.Equal(9, await AwaitBounded(runTask));
+
+        Assert.Equal(3, observed.RetryCount);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), observed.RetryLoopDuration);
 
         rig.CompleteInbound();
         await AwaitBounded(pump);

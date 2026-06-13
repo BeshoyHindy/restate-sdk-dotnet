@@ -635,6 +635,10 @@ public sealed class MockContext : Context
     {
         public CancellationToken CancellationToken => CancellationToken.None;
         public ILogger Logger { get; } = NullLogger.Instance;
+
+        // G27 — mock side effects run exactly once with no runtime re-drive, so there is no
+        // accumulated retry state to surface.
+        public EntryRetryInfo RetryInfo => EntryRetryInfo.Zero;
     }
 }
 
