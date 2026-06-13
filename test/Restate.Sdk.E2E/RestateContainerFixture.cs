@@ -136,6 +136,27 @@ public sealed class RestateContainerFixture : IAsyncLifetime
     }
 
     /// <summary>
+    ///     Cancels a running invocation through the restate ADMIN API
+    ///     (<c>PATCH /invocations/{id}/cancel</c>). Cancellation is an admin-plane operation on this
+    ///     server: the ingress port exposes only <c>/output</c> and <c>/attach</c> under
+    ///     <c>/restate/invocation/</c>, so a cancel must go to the admin port (9070), not ingress.
+    ///     Triggers the SDK's inbound-CANCEL path — for E9 this fans out the implicit child-cancel
+    ///     signals to the parent's resolved children.
+    /// </summary>
+    public async Task CancelInvocationAsync(string invocationId)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch, $"/invocations/{invocationId}/cancel");
+        using var response = await _adminClient!.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException(
+                $"Cancel of invocation '{invocationId}' failed: {(int)response.StatusCode} {response.StatusCode}\n{body}");
+        }
+    }
+
+    /// <summary>
     ///     POSTs the deployment registration to the admin API and fails fast (with the response
     ///     body) on a non-success status so a registration problem surfaces immediately rather than
     ///     as a downstream invocation timeout.

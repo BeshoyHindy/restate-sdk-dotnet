@@ -36,6 +36,11 @@ public static class ReplayLabHost
             .AddService<SlowEchoService>()
             // B1 two-id Call model across suspension (shares SlowEchoService as the target).
             .AddService<CallAcrossSuspensionService>()
+            // E9 — implicit child cancellation: parent spawns child Calls, is cancelled, children auto-cancelled.
+            .AddService<ChildCancelLabService>()
+            .AddService<CancellableChildService>()
+            // E10 — named (string-keyed) signals: await by name, resolved by an externally-sent named signal.
+            .AddService<NamedSignalLabService>()
             // Promise replay sites — workflow suspend on promise, shared-handler resolve.
             .AddWorkflow<ApprovalWorkflow>()
             // Out-of-process probe readout for the standalone sample.

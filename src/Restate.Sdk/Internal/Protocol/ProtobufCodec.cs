@@ -510,17 +510,21 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
-    ///     Builds the SuspensionMessage (B8). waiting_named_signals (proto field 3) is INTENTIONALLY
-    ///     never populated: this fork does not consume named signals (§5 non-goal); Rust fills it
-    ///     from NotificationId::SignalName (terminal.rs:43-46). Whoever implements named-signal waits
-    ///     must extend this factory or the runtime will never resume a named-signal park.
+    ///     Builds the SuspensionMessage (B8). waiting_named_signals (proto field 3) is populated from
+    ///     parked named-signal waits — Rust fills it from NotificationId::SignalName
+    ///     (terminal.rs:43-46) so the runtime resumes the invocation when a matching named signal is
+    ///     delivered. Between the three lists there MUST be at least one element (proto:92); the caller
+    ///     (TrySuspendAsync) enforces that before invoking this factory.
     /// </summary>
     public static Gen.SuspensionMessage CreateSuspensionMessage(
-        IReadOnlyCollection<uint> waitingCompletions, IReadOnlyCollection<uint> waitingSignals)
+        IReadOnlyCollection<uint> waitingCompletions, IReadOnlyCollection<uint> waitingSignals,
+        IReadOnlyCollection<string>? waitingNamedSignals = null)
     {
         var msg = new Gen.SuspensionMessage();
         foreach (var id in waitingCompletions) msg.WaitingCompletions.Add(id);
         foreach (var id in waitingSignals) msg.WaitingSignals.Add(id);
+        if (waitingNamedSignals is not null)
+            foreach (var name in waitingNamedSignals) msg.WaitingNamedSignals.Add(name);
         return msg;
     }
 
@@ -624,6 +628,37 @@ internal static class ProtobufCodec
             TargetInvocationId = targetInvocationId,
             Idx = CancelSignalId, // BuiltInSignal.CANCEL = 1
             Void = new Gen.Void()
+        };
+    }
+
+    /// <summary>
+    ///     Creates a SendSignalCommandMessage carrying a NAMED signal with a success value (Rust
+    ///     sys_complete_signal, mod.rs:955-979). signal_id = Name oneof (field 3); result = Value
+    ///     oneof. Mirrors <see cref="CreateCancelInvocationCommand" /> but keyed by name + payload.
+    /// </summary>
+    public static Gen.SendSignalCommandMessage CreateSendNamedSignalSuccess(
+        string targetInvocationId, string name, ReadOnlySpan<byte> value)
+    {
+        return new Gen.SendSignalCommandMessage
+        {
+            TargetInvocationId = targetInvocationId,
+            Name = name,
+            Value = new Gen.Value { Content = ByteString.CopyFrom(value) }
+        };
+    }
+
+    /// <summary>
+    ///     Creates a SendSignalCommandMessage carrying a NAMED signal with a terminal failure result
+    ///     (the failure variant of <see cref="CreateSendNamedSignalSuccess" />).
+    /// </summary>
+    public static Gen.SendSignalCommandMessage CreateSendNamedSignalFailure(
+        string targetInvocationId, string name, uint code, string message)
+    {
+        return new Gen.SendSignalCommandMessage
+        {
+            TargetInvocationId = targetInvocationId,
+            Name = name,
+            Failure = new Gen.Failure { Code = code, Message = message }
         };
     }
 

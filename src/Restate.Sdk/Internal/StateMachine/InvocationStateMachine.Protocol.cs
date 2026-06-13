@@ -122,6 +122,7 @@ internal sealed partial class InvocationStateMachine
             // RST_STREAM / teardown: unpark any waiter so HandleAsync can unwind (defensive leak-stop).
             _completions.FailAll(new OperationCanceledException(ct));
             _signalCompletions.FailAll(new OperationCanceledException(ct));
+            _namedSignals.FailAll(new OperationCanceledException(ct));
             throw;
         }
         catch (Exception ex)
@@ -132,6 +133,7 @@ internal sealed partial class InvocationStateMachine
             // handler unwinds with this exception and HandleAsync's catch arms emit the ErrorMessage.
             _completions.FailAll(ex);
             _signalCompletions.FailAll(ex);
+            _namedSignals.FailAll(ex);
             throw;
         }
     }
@@ -194,15 +196,33 @@ internal sealed partial class InvocationStateMachine
 
                 Log.CompletionReceived(Logger, InvocationId, signalIndex);
             }
+            else if (signal.Name is { } signalName)
+            {
+                // Named signal (oneof name, no numeric idx) → route into _namedSignals BY NAME. The
+                // string-keyed manager resolves a parked AwaitNamedSignalAsync waiter, OR buffers an
+                // early/no-waiter delivery in its own slot (harmless: a name nobody awaits is simply
+                // discarded on Dispose — that is the "no waiter → safely ignored" case, with NO
+                // numeric awakeable ever touched since the two managers are disjoint). StartAsync routes
+                // buffered replay-batch signals through here too, so a named signal inside the known-
+                // entries batch resolves identically.
+                Log.NotificationReceived(Logger, InvocationId, MessageType.SignalNotification, 0, signal.IsFailure);
+                if (signal.IsFailure)
+                {
+                    _namedSignals.TryFail(signalName, signal.FailureCode!.Value, signal.FailureMessage!);
+                }
+                else
+                {
+                    var result = signal.Value is not null
+                        ? CompletionResult.Success(signal.Value.Value)
+                        : CompletionResult.Success(ReadOnlyMemory<byte>.Empty);
+                    _namedSignals.TryComplete(signalName, result);
+                }
+            }
             else
             {
-                // Named signal (oneof name, no numeric idx). There is provably NO named-signal waiter:
-                // Awakeable() only allocates numeric ids (17+) and _signalCompletions is keyed by int
-                // id, so no one is ever parked on a name. SuspensionMessage.waiting_named_signals is
-                // never populated either. Buffering or ignoring is therefore correct and strands no
-                // one — a deliberate named divergence (no named-signal user API in this SDK). Safe
-                // ignore (no routing into _signalCompletions, which has no slot for a name).
-                Log.NamedSignalIgnored(Logger, InvocationId, signal.Name ?? "");
+                // Degenerate frame: neither idx NOR name set (signal_id oneof unset). There is no key
+                // to route on, so it is logged-and-ignored — strands no one.
+                Log.NamedSignalIgnored(Logger, InvocationId, "");
             }
 
             return;

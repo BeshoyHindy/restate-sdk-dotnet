@@ -126,6 +126,19 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask SendSignal<T>(string targetInvocationId, string name, T payload,
+        ISerde<T>? serde = null)
+    {
+        return BaseContext.SendSignal(targetInvocationId, name, payload, serde);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason)
+    {
+        return BaseContext.SendSignalFailure(targetInvocationId, name, reason);
+    }
+
+    /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
@@ -185,6 +198,12 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     public override Awakeable<T> Awakeable<T>(ISerde<T>? serde = null)
     {
         return BaseContext.Awakeable(serde);
+    }
+
+    /// <inheritdoc />
+    public override NamedSignal<T> NamedSignal<T>(string name, ISerde<T>? serde = null)
+    {
+        return BaseContext.NamedSignal<T>(name, serde);
     }
 
     /// <inheritdoc />

@@ -21,6 +21,7 @@ internal sealed class MockContextHelper
     public IReadOnlyList<RecordedSend> Sends => InnerMock.Sends;
     public IReadOnlyList<RecordedSleep> Sleeps => InnerMock.Sleeps;
     public IReadOnlyList<string> Cancellations => InnerMock.Cancellations;
+    public IReadOnlyList<RecordedSignalSend> SignalSends => InnerMock.SignalSends;
 
     // Delegation setup methods
     public void SetupCall<T>(string service, string handler, T result)
@@ -46,6 +47,11 @@ internal sealed class MockContextHelper
     public void SetupAwakeable<T>(T result)
     {
         InnerMock.SetupAwakeable(result);
+    }
+
+    public void SetupNamedSignal<T>(T result)
+    {
+        InnerMock.SetupNamedSignal(result);
     }
 
     public void RegisterClient<TClient>(TClient client) where TClient : class

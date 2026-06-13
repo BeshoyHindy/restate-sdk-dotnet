@@ -22,9 +22,9 @@ namespace Restate.Sdk.Tests.StateMachine;
 ///     TerminalException(409, "cancelled"), the handler unwinds through the existing
 ///     `catch (TerminalException)` arm, and the SDK writes a terminal OutputCommand{failure:409} +
 ///     End (NOT a clean empty Output, NOT a retryable Error/Suspension frame). Child sub-invocation
-///     cancel (SendSignalCommand idx=1) is already user-driven via CancelInvocationAsync; automatic
-///     tracked-children cancel on inbound CANCEL (Rust mod.rs:445-476) is a documented out-of-scope
-///     divergence (no tracked_invocation_ids registry here).
+///     cancel (SendSignalCommand idx=1) is user-driven via CancelInvocationAsync AND automatic on
+///     inbound CANCEL for tracked Call children (Rust mod.rs:445-476) — see ChildCancelTests for that
+///     path; this file covers the THIS-invocation terminal-frame behavior.
 ///
 ///     Each handler signals a deterministic "ready" gate the moment it has parked / entered its run
 ///     loop; the harness delivers the CANCEL frame only after that gate, so there is NO wall-clock

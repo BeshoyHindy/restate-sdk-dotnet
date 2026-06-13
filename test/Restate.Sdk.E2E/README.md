@@ -5,6 +5,24 @@ container** (`docker.io/restatedev/restate:1.4`), forcing genuine suspend/resume
 asserting the durable post-conditions plus the `ExecutionProbe` attempt/run counters that prove the
 faulty replay paths (B1–B10) actually ran.
 
+Two further scenarios (`NewFeaturesE2eTests`) exercise the SDK's newer features against the same
+real server:
+
+- **E9 — implicit child cancellation.** A parent spawns request/response child Calls and parks on
+  their results; the test cancels the parent through the **admin** API
+  (`PATCH /invocations/{id}/cancel` — the ingress port only exposes `/output` and `/attach`) WHILE the
+  parent is still parked on its first attempt (within the 5s inactivity window), so the inbound CANCEL
+  is processed against the live, fully-tracked Processing state — both children tracked AND their
+  invocation-ids already resolved, the precondition for the SDK's child-cancel fan-out (it cancels
+  only already-resolved children on the unwinding terminal path). The SDK then emits one cancel
+  SendSignal per child and the server routes it. The discriminator is read on the child side via
+  `ChildCancelProbe`: both children reach `cancelled:{i}`, never `completed:{i}`. A regression that
+  dropped the child-cancel would leave the children sleeping (10 min) and the test times out.
+- **E10 — named (string-keyed) signals.** A handler parks on `ctx.NamedSignal<string>("decision")`
+  and resumes with the sender-supplied value only when another invocation sends a matching named
+  signal via `ctx.SendSignal`. A regressed feature never completes the await, so the bounded
+  scenario timeout turns the hang into a fast failure.
+
 ## How it works
 
 - The ReplayLab services are hosted **in-process** (`ReplayLabHost.Build(0)`) on an OS-assigned

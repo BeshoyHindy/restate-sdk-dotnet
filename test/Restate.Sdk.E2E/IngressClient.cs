@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 
@@ -73,6 +74,25 @@ public sealed class IngressClient : IDisposable
     }
 
     /// <summary>
+    ///     Fire-and-forget submission that RETURNS the server-assigned invocation id from the
+    ///     <c>/send</c> response body (<c>{ "invocationId": "inv_..." }</c>). Used by E9 to learn the
+    ///     parent invocation's id so the test can cancel it through the invocation route.
+    /// </summary>
+    public async Task<string> SendReturningIdAsync(
+        string service, string handler, object? body = null,
+        string? idempotencyKey = null, string? key = null, CancellationToken ct = default)
+    {
+        var path = key is null ? $"/{service}/{handler}/send" : $"/{service}/{key}/{handler}/send";
+        using var response = await SendAsync(path, body, idempotencyKey, ct);
+        var send = await response.Content.ReadFromJsonAsync<SendAck>(JsonOptions, ct);
+        return send?.InvocationId
+               ?? throw new InvalidOperationException($"/send to {path} returned no invocationId.");
+    }
+
+    /// <summary>The <c>/send</c> response body: the server-assigned invocation id of the accepted invocation.</summary>
+    private sealed record SendAck(string InvocationId);
+
+    /// <summary>
     ///     Attaches to a keyed workflow run and awaits its durable result. A workflow run handler
     ///     completes once per key; re-invoking <c>Run</c> returns 409 Conflict, so the result is
     ///     read through the dedicated attach route
@@ -129,7 +149,12 @@ public sealed class IngressClient : IDisposable
         if (response.IsSuccessStatusCode)
             return;
         var body = await response.Content.ReadAsStringAsync(ct);
-        throw new HttpRequestException($"{what} failed: {(int)response.StatusCode} {response.StatusCode}\n{body}");
+        // Carry the StatusCode on the exception so callers can distinguish a benign 4xx (e.g. E8's
+        // second promise-resolution returning 409 "promise already completed") from a 5xx server
+        // crash. Without it ex.StatusCode is null and any guard keyed on the status mis-fires.
+        throw new HttpRequestException(
+            $"{what} failed: {(int)response.StatusCode} {response.StatusCode}\n{body}",
+            inner: null, statusCode: response.StatusCode);
     }
 
     public void Dispose() => _http.Dispose();

@@ -110,6 +110,29 @@ public class CompletionManagerTests
     }
 
     [Fact]
+    public void TryGetResult_ReturnsOnlyBufferedSuccessResults()
+    {
+        var manager = new CompletionManager();
+
+        // Absent id → false (the child-cancel path treats this as "unresolved, skip").
+        Assert.False(manager.TryGetResult(1, out _));
+
+        // Early-completion success is parked as a Result-kind slot → readable WITHOUT a waiter, which
+        // is exactly how a tracked child's invocation-id string is read at CANCEL time.
+        manager.TryComplete(1, CompletionResult.SuccessString("inv_child"));
+        Assert.True(manager.TryGetResult(1, out var resolved));
+        Assert.Equal("inv_child", resolved.StringValue);
+
+        // A registered-but-unresolved waiter is a Tcs-kind slot (not Result-kind) → false.
+        manager.GetOrRegister(2);
+        Assert.False(manager.TryGetResult(2, out _));
+
+        // A failure is stored Failure-kind, never Result-kind → reported as "no result" (skip).
+        manager.TryFail(3, 500, "boom");
+        Assert.False(manager.TryGetResult(3, out _));
+    }
+
+    [Fact]
     public void TryClaimForExecution_OnlyOnce_AndNotAfterDelivery()
     {
         var manager = new CompletionManager();

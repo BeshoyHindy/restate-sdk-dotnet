@@ -132,6 +132,23 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return _stateMachine.CancelInvocationAsync(invocationId, Aborted);
     }
 
+    public override ValueTask SendSignal<T>(string targetInvocationId, string name, T payload,
+        ISerde<T>? serde = null)
+    {
+        // Serialize INSIDE the SM helper (reuses _serializeBuffer), then copy to a stable buffer:
+        // SendSignalAsync awaits a flush, so the bytes must outlive the reusable buffer.
+        var bytes = _stateMachine.SerializeWithSerde(payload, serde).ToArray();
+        return _stateMachine.SendSignalAsync(targetInvocationId, name, bytes, Aborted);
+    }
+
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason)
+    {
+        // Failure variant: no value bytes; the SM writes the failure result oneof. 500 mirrors the
+        // RejectAwakeable failure code (a generic terminal/business failure).
+        return _stateMachine.SendSignalAsync(targetInvocationId, name, ReadOnlyMemory<byte>.Empty,
+            Aborted, (500, reason));
+    }
+
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
@@ -223,6 +240,31 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         var result = await _stateMachine
             .AwaitNotificationAsync(signalId, InvocationStateMachine.NotificationKind.Signal)
             .ConfigureAwait(false);
+        result.ThrowIfFailure();
+        if (serde is not null)
+            return serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
+        return _stateMachine.Deserialize<T>(result.Value);
+    }
+
+    public override NamedSignal<T> NamedSignal<T>(string name, ISerde<T>? serde = null)
+    {
+        // Local registration only — no command, no journal entry (Rust create_signal_handle). Flush
+        // pending writes (gated) so the server processes prior commands before we block, identical to
+        // the awakeable pre-park flush.
+        _stateMachine.RegisterNamedSignal(name);
+        var flushTask = _stateMachine.FlushPendingAsync(Aborted);
+        return new NamedSignal<T>
+        {
+            Name = name,
+            Value = FlushThenAwaitNamedSignal(flushTask, name, serde)
+        };
+    }
+
+    private async ValueTask<T> FlushThenAwaitNamedSignal<T>(
+        ValueTask flushTask, string name, ISerde<T>? serde = null)
+    {
+        await flushTask.ConfigureAwait(false);
+        var result = await _stateMachine.AwaitNamedSignalAsync(name).ConfigureAwait(false);
         result.ThrowIfFailure();
         if (serde is not null)
             return serde.Deserialize(new ReadOnlySequence<byte>(result.Value));

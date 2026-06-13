@@ -10,10 +10,12 @@ namespace Restate.Sdk.Testing;
 public sealed class MockContext : Context
 {
     private readonly Queue<object?> _awakeableResults = new();
+    private readonly Queue<object?> _namedSignalResults = new();
     private readonly Dictionary<string, TerminalException> _callFailures = [];
     private readonly Dictionary<string, object?> _callResults = [];
     private readonly List<RecordedCall> _calls = [];
     private readonly List<string> _cancellations = [];
+    private readonly List<RecordedSignalSend> _signalSends = [];
     private readonly Dictionary<Type, object> _clients = [];
     private readonly List<RecordedSend> _sends = [];
     private readonly List<RecordedSleep> _sleeps = [];
@@ -54,6 +56,9 @@ public sealed class MockContext : Context
     /// <summary>All recorded CancelInvocation calls (invocation IDs that were cancelled).</summary>
     public IReadOnlyList<string> Cancellations => _cancellations;
 
+    /// <summary>All recorded named-signal sends (SendSignal / SendSignalFailure).</summary>
+    public IReadOnlyList<RecordedSignalSend> SignalSends => _signalSends;
+
     /// <summary>
     ///     Configures the return value for a Call to the given service/handler.
     /// </summary>
@@ -84,6 +89,16 @@ public sealed class MockContext : Context
     public void SetupAwakeable<T>(T result)
     {
         _awakeableResults.Enqueue(result);
+    }
+
+    /// <summary>
+    ///     Enqueues a value to be returned by the next <see cref="NamedSignal{T}" /> call.
+    ///     Values are consumed in FIFO order. If no value is enqueued, the named signal resolves
+    ///     with <c>default(T)</c>.
+    /// </summary>
+    public void SetupNamedSignal<T>(T result)
+    {
+        _namedSignalResults.Enqueue(result);
     }
 
     /// <summary>
@@ -220,6 +235,21 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
+    public override ValueTask SendSignal<T>(string targetInvocationId, string name, T payload,
+        ISerde<T>? serde = null)
+    {
+        _signalSends.Add(new RecordedSignalSend(targetInvocationId, name, payload));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason)
+    {
+        _signalSends.Add(new RecordedSignalSend(targetInvocationId, name, null, reason));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
@@ -302,6 +332,19 @@ public sealed class MockContext : Context
         return new Awakeable<T>
         {
             Id = id,
+            Value = new ValueTask<T>(value)
+        };
+    }
+
+    /// <inheritdoc />
+    public override NamedSignal<T> NamedSignal<T>(string name, ISerde<T>? serde = null)
+    {
+        var value = _namedSignalResults.Count > 0
+            ? (T)_namedSignalResults.Dequeue()!
+            : default!;
+        return new NamedSignal<T>
+        {
+            Name = name,
             Value = new ValueTask<T>(value)
         };
     }
@@ -555,3 +598,10 @@ public sealed record RecordedSend(
 
 /// <summary>A recorded Sleep invocation.</summary>
 public sealed record RecordedSleep(TimeSpan Duration);
+
+/// <summary>A recorded named-signal send. <c>Payload</c> is null for the failure variant.</summary>
+public sealed record RecordedSignalSend(
+    string TargetInvocationId,
+    string Name,
+    object? Payload,
+    string? FailureReason = null);

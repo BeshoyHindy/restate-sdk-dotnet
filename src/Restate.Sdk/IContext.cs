@@ -71,6 +71,18 @@ public interface IContext
     /// </summary>
     ValueTask CancelInvocation(string invocationId);
 
+    /// <summary>
+    ///     Sends a named signal carrying a payload to a target invocation. The target resolves a
+    ///     matching <see cref="NamedSignal{T}" /> awaiting the same <paramref name="name" />.
+    /// </summary>
+    ValueTask SendSignal<T>(string targetInvocationId, string name, T payload, ISerde<T>? serde = null);
+
+    /// <summary>
+    ///     Sends a named signal carrying a terminal failure to a target invocation. A matching
+    ///     <see cref="NamedSignal{T}" /> await on the target throws a <see cref="TerminalException" />.
+    /// </summary>
+    ValueTask SendSignalFailure(string targetInvocationId, string name, string reason);
+
     /// <summary>Sends a one-way invocation to a stateless service. Returns a handle to track the invocation.</summary>
     ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null);
@@ -84,6 +96,12 @@ public interface IContext
 
     /// <summary>Creates a durable promise that can be resolved from outside the current invocation.</summary>
     Awakeable<T> Awakeable<T>(ISerde<T>? serde = null);
+
+    /// <summary>
+    ///     Creates a durable promise keyed by <paramref name="name" />, resolved when another
+    ///     invocation sends a matching named signal via <see cref="SendSignal{T}" />.
+    /// </summary>
+    NamedSignal<T> NamedSignal<T>(string name, ISerde<T>? serde = null);
 
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);

@@ -418,6 +418,16 @@ internal sealed partial class InvocationStateMachine
                     invocationIdCompletionId, resultCompletionId);
                 _journal.RecordCommand(JournalEntryType.Call);
             }
+
+            // Track this child for implicit cancel-on-CANCEL — Rust sys_call gates this push on
+            // cancel_children_calls, true by default (mod.rs:766-777), which we bake in by ALWAYS
+            // appending here (one-way Sends are intentionally untracked). The append is INSIDE
+            // _commandLock in BOTH replay and processing branches so the registry rebuilds identically
+            // across attempts (same id, same order) — that determinism is what lets the terminal
+            // child-cancel emission dequeue-match its journaled SendSignals on replay. We track the
+            // invocation-id completion id (NOT the result id): the resolved id string lands in
+            // _completions under THIS id (HandleIncomingMessage InvocationId branch).
+            _trackedChildren.Add(invocationIdCompletionId);
         }
 
         if (!replaying) await FlushGatedAsync(ct).ConfigureAwait(false);
@@ -526,6 +536,10 @@ internal sealed partial class InvocationStateMachine
                     invocationIdCompletionId);
                 _journal.RecordCommand(JournalEntryType.OneWayCall);
             }
+
+            // One-way (Send) children are NOT tracked: VMOptions::default sets
+            // cancel_children_one_way_calls=false (lib.rs:257), so Rust's sys_send push (mod.rs:843-854)
+            // is gated off — we omit the append entirely (scope-limitation #2).
         }
 
         return invocationIdCompletionId;
@@ -994,6 +1008,40 @@ internal sealed partial class InvocationStateMachine
         Log.CancellingInvocation(Logger, InvocationId, targetInvocationId);
     }
 
+    // ------- Named signal (send side) -------
+
+    /// <summary>
+    ///     Sends a NAMED signal to a target invocation (Rust sys_complete_signal, mod.rs:955-979). The
+    ///     wire shape is a SendSignalCommandMessage with the NAME oneof + a value/failure result — the
+    ///     same non-completable journaled command class as CancelInvocationAsync, only with a name and
+    ///     payload instead of the CANCEL built-in idx. Replay-safe by the identical pattern: one
+    ///     journal entry (JournalEntryType.SendSignal) written under _commandLock, dequeued+validated
+    ///     on replay; deterministic across attempts because the name and ordering are fixed by call
+    ///     order. <paramref name="failure" /> null = success value; non-null = failure result.
+    /// </summary>
+    public async ValueTask SendSignalAsync(string targetInvocationId, string name,
+        ReadOnlyMemory<byte> value, CancellationToken ct, (ushort Code, string Message)? failure = null)
+    {
+        EnsureActive();
+        lock (_commandLock)
+        {
+            ThrowIfClosedLocked();
+            if (State == InvocationState.Replaying)
+            {
+                DequeueReplayCommand(JournalEntryType.SendSignal);
+                return;
+            }
+
+            var command = failure is { } f
+                ? ProtobufCodec.CreateSendNamedSignalFailure(targetInvocationId, name, f.Code, f.Message)
+                : ProtobufCodec.CreateSendNamedSignalSuccess(targetInvocationId, name, value.Span);
+            WriteCommand(MessageType.SendSignalCommand, command);
+            _journal.RecordCommand(JournalEntryType.SendSignal);
+        }
+
+        await FlushGatedAsync(ct).ConfigureAwait(false);
+    }
+
     // ------- Output / Error (terminal) -------
     //
     // Each is ONE locked section with an in-lock State re-check, so a frame can never land AFTER a
@@ -1050,12 +1098,65 @@ internal sealed partial class InvocationStateMachine
                 return;
             }
 
+            // Implicit child-cancel runs FIRST, only on the inbound-CANCEL path (_cancelled). The
+            // child-cancel SendSignals must strictly PRECEDE the terminal Output in the wire/journal —
+            // matching Rust, where sys_cancel_invocation (mod.rs:470-476) runs inside do_progress
+            // before sys_end. The whole block is one atomic _commandLock section, so no fan-out
+            // straggler can interleave a frame between the child-cancels and the Output.
+            if (_cancelled)
+                EmitChildCancelsLocked();
+
             WriteCommand(MessageType.OutputCommand, ProtobufCodec.CreateOutputFailure(code, message));
             _writer.WriteHeaderOnly(MessageType.End);
             State = InvocationState.Closed;
         }
 
         await FlushGatedAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Emits one cancel SendSignalCommand(idx=1) per tracked child whose invocation-id notification
+    ///     had RESOLVED at CANCEL time — the .NET analogue of Rust do_progress's cancel loop
+    ///     (vm/mod.rs:445-476). Drains the snapshot built by TriggerCancellation (registry == journal
+    ///     order), reusing the EXACT machinery CancelInvocationAsync uses to write each SendSignal +
+    ///     record its journal entry. Caller MUST hold _commandLock; called only from FailTerminalAsync's
+    ///     single terminal-writer block, so it shares CancelInvocationAsync's single-writer discipline.
+    ///
+    ///     REPLAY SAFETY — always Processing, never Replaying. To reach FailTerminalAsync on the cancel
+    ///     path the handler must have PARKED (e.g. on Sleep) and then had that await faulted by inbound
+    ///     CANCEL. Parking is only legal once replay has drained (AwaitNotificationAsync's replay-
+    ///     mutation guard throws otherwise), so State == Processing whenever this runs. The child-cancel
+    ///     SendSignals are therefore always written FRESH and journaled in a fixed position
+    ///     ([Call commands][child-cancel SendSignals][Output{409}][End]); a 409 terminal Output ends the
+    ///     invocation permanently, so these SendSignals never re-enter a later replay batch. They are
+    ///     still deterministic across the (re)attempt that produces them: the snapshot reflects the SAME
+    ///     resolved-child set because each child's invocation-id is a journaled CallInvocationIdCompletion
+    ///     replayed in the StartMessage known-entries on every attempt.
+    ///
+    ///     SCOPE / DOCUMENTED DIVERGENCE from Rust:
+    ///       1. ONLY children whose invocation-id is ALREADY resolved are cancelled. Rust suspends
+    ///          do_progress to fetch unresolved ids (test call_then_cancel_without_invocation_id), but
+    ///          here the cancel fires on the unwinding terminal path where suspending is impossible, so
+    ///          an unresolved child is deterministically SKIPPED (the snapshot omits it).
+    ///       2. Only the Call path cancels children: one-way Sends are not tracked, matching
+    ///          VMOptions::default's cancel_children_one_way_calls=false (lib.rs:257).
+    ///       3. Fires ONLY on the inbound-CANCEL terminal path (_cancelled) — never on caller-ct
+    ///          teardown or a generic 500 failure.
+    /// </summary>
+    private void EmitChildCancelsLocked()
+    {
+        // The resolved child ids were snapshotted at CANCEL time (TriggerCancellation), in registry
+        // (== journal) order, BEFORE FailAll cleared _completions. Null means no tracked child resolved
+        // (or none was tracked) — nothing to emit.
+        if (_cancelledChildInvocationIds is not { } childIds)
+            return;
+
+        foreach (var childId in childIds)
+        {
+            WriteCommand(MessageType.SendSignalCommand,
+                ProtobufCodec.CreateCancelInvocationCommand(childId));
+            _journal.RecordCommand(JournalEntryType.SendSignal);
+        }
     }
 
     /// <summary>

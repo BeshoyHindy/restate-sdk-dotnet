@@ -31,6 +31,9 @@ public sealed class MockObjectContext : ObjectContext
     /// <summary>All recorded CancelInvocation calls (invocation IDs that were cancelled).</summary>
     public IReadOnlyList<string> Cancellations => _helper.Cancellations;
 
+    /// <summary>All recorded named-signal sends (SendSignal / SendSignalFailure).</summary>
+    public IReadOnlyList<RecordedSignalSend> SignalSends => _helper.SignalSends;
+
     /// <summary>Configures the return value for a Call to the given service/handler.</summary>
     public void SetupCall<T>(string service, string handler, T result) => _helper.SetupCall(service, handler, result);
 
@@ -45,6 +48,9 @@ public sealed class MockObjectContext : ObjectContext
 
     /// <summary>Enqueues a value to be returned by the next <see cref="Context.Awakeable{T}" /> call.</summary>
     public void SetupAwakeable<T>(T result) => _helper.SetupAwakeable(result);
+
+    /// <summary>Enqueues a value to be returned by the next <see cref="Context.NamedSignal{T}" /> call.</summary>
+    public void SetupNamedSignal<T>(T result) => _helper.SetupNamedSignal(result);
 
     /// <summary>Registers a typed client instance to be returned by typed client methods.</summary>
     public void RegisterClient<TClient>(TClient client) where TClient : class => _helper.RegisterClient(client);

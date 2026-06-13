@@ -125,6 +125,35 @@ internal sealed class CompletionManager
     }
 
     /// <summary>
+    ///     Reads a BUFFERED success result WITHOUT registering or consuming a waiter — used by the
+    ///     child-cancel terminal path to pull a tracked child's already-delivered invocation-id string
+    ///     out of its buffered slot (the analogue of Rust's CopyNotification on a resolved handle,
+    ///     mod.rs:455). Returns false when the slot is absent, latched-away, or holds a failure — the
+    ///     caller then deterministically SKIPS that child. A tracked Call child's invocation-id
+    ///     notification is delivered with NO waiter registered on its completion id (the Call/CallFuture
+    ///     path awaits the RESULT id, never the invocation-id id), so an early TryComplete parks it as a
+    ///     Result-kind slot — exactly what this reads. Pure read (no mutation, no latch), so calling it
+    ///     for an id whose real awaiter resolves later is harmless. A Result-kind slot is ALWAYS a
+    ///     success (failures are stored Failure-kind by TryFail and are reported as "no result" here),
+    ///     so a found Result-kind slot is returned unconditionally.
+    /// </summary>
+    public bool TryGetResult(int completionId, out CompletionResult result)
+    {
+        lock (_gate)
+        {
+            if (_slots.TryGetValue(completionId, out var slot)
+                && slot.Kind == CompletionSlot.SlotKind.Result)
+            {
+                result = slot.Result;
+                return true;
+            }
+
+            result = default;
+            return false;
+        }
+    }
+
+    /// <summary>
     ///     Atomic execute-vs-await decision for Run replay (1.7 case 2): returns false if a
     ///     result exists, was delivered, or the id was already claimed; otherwise marks the id
     ///     claimed-for-local-execution and returns true. Closes the TOCTOU where a late

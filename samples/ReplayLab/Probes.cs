@@ -84,6 +84,64 @@ public static class AwakeableMailbox
 }
 
 /// <summary>
+///     Out-of-band observation board for the implicit child-cancellation scenario (E9). The cancelled
+///     CHILD cannot return its outcome through its own response (it is aborted with a 409), so each
+///     child records its lifecycle here — started, then either cancelled (expected) or completed
+///     (regression) — keyed by the parent's probe id and the child ordinal. The parent records that
+///     it parked. The E2E test reads this board to assert the discriminating post-condition: every
+///     child reached <c>cancelled:{i}</c>, NOT <c>completed:{i}</c>. A regression that drops the
+///     implicit child-cancel leaves the children running, so they record <c>completed:{i}</c> (or
+///     never leave <c>started:{i}</c>), which the test rejects.
+/// </summary>
+public static class ChildCancelProbe
+{
+    // probeId -> set of lifecycle marks ("parent:parked", "started:{i}", "cancelled:{i}", "completed:{i}").
+    // A concurrent set per probe: parent and N children mark from independent invocation threads.
+    private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> Marks = new();
+
+    private static void Mark(string probeId, string mark) =>
+        Marks.GetOrAdd(probeId, static _ => new ConcurrentDictionary<string, byte>())[mark] = 0;
+
+    /// <summary>Records that the parent issued its child Calls and is about to park.</summary>
+    public static void MarkParentParked(string probeId) => Mark(probeId, "parent:parked");
+
+    /// <summary>Records that child <paramref name="index" /> began running (distinguishes cancelled from never-reached).</summary>
+    public static void MarkChildStarted(string probeId, int index) => Mark(probeId, $"started:{index}");
+
+    /// <summary>Records that child <paramref name="index" /> was cancelled — the E9 success outcome.</summary>
+    public static void MarkChildCancelled(string probeId, int index) => Mark(probeId, $"cancelled:{index}");
+
+    /// <summary>Records that child <paramref name="index" /> ran to completion — the E9 regression outcome.</summary>
+    public static void MarkChildCompleted(string probeId, int index) => Mark(probeId, $"completed:{index}");
+
+    /// <summary>Returns whether a given lifecycle <paramref name="mark" /> has been recorded for the probe.</summary>
+    public static bool Has(string probeId, string mark) =>
+        Marks.TryGetValue(probeId, out var marks) && marks.ContainsKey(mark);
+
+    /// <summary>Returns a point-in-time copy of every mark recorded for <paramref name="probeId" />.</summary>
+    public static IReadOnlyCollection<string> Snapshot(string probeId) =>
+        Marks.TryGetValue(probeId, out var marks) ? marks.Keys.ToArray() : Array.Empty<string>();
+}
+
+/// <summary>
+///     Out-of-band mailbox for the named-signal scenario (E10). The awaiting handler cannot return
+///     its own invocation id through its response while it is parked on the signal, so it publishes
+///     the id here from a journaled Run; the driving test reads it to learn WHERE to send the named
+///     signal. Keyed by probeId for isolation.
+/// </summary>
+public static class NamedSignalMailbox
+{
+    private static readonly ConcurrentDictionary<string, string> Targets = new();
+
+    /// <summary>Publishes the awaiting invocation's id so the test can target the named signal at it.</summary>
+    public static void PublishTarget(string probeId, string invocationId) => Targets[probeId] = invocationId;
+
+    /// <summary>Reads the awaiting invocation's id, or <c>null</c> if it has not published yet.</summary>
+    public static string? TryReadTarget(string probeId) =>
+        Targets.TryGetValue(probeId, out var id) ? id : null;
+}
+
+/// <summary>
 ///     Exposes <see cref="ExecutionProbe" /> snapshots through ingress so the standalone
 ///     <c>samples/ReplayLab</c> exe is probe-readable by hand and by the integration-test smoke
 ///     script. The in-process E2E tests read the static directly (same process), so they do not

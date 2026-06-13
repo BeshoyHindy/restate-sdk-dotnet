@@ -162,6 +162,34 @@ public class InterfaceConformanceTests
         Assert.NotNull(method);
     }
 
+    [Fact]
+    public void IContext_HasNamedSignal()
+    {
+        var method = typeof(IContext)
+            .GetMethods()
+            .SingleOrDefault(m => m.Name == "NamedSignal" && m.IsGenericMethodDefinition
+                                  && m.GetParameters().Length == 2);
+        Assert.NotNull(method);
+    }
+
+    [Fact]
+    public void IContext_HasSendSignal()
+    {
+        var method = typeof(IContext)
+            .GetMethods()
+            .SingleOrDefault(m => m.Name == "SendSignal" && m.IsGenericMethodDefinition
+                                  && m.GetParameters().Length == 4);
+        Assert.NotNull(method);
+    }
+
+    [Fact]
+    public void IContext_HasSendSignalFailure()
+    {
+        var method = typeof(IContext).GetMethod("SendSignalFailure",
+            [typeof(string), typeof(string), typeof(string)]);
+        Assert.NotNull(method);
+    }
+
     // Helper methods simulating handler signatures that accept interfaces
 
     private static async Task<string> AcceptIContext(IContext ctx)
