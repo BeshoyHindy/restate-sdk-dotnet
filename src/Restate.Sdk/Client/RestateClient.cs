@@ -52,7 +52,11 @@ public sealed class RestateClient : IDisposable
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        options.MakeReadOnly();
+        // populateMissingResolver: the parameterless MakeReadOnly() throws on .NET 10 when the
+        // options carries no TypeInfoResolver, even with reflection-based JSON enabled. Pass true so
+        // the reflection-based DefaultJsonTypeInfoResolver is attached (the ingress client always
+        // runs in a reflection-enabled host; AOT consumers use the source-generated client path).
+        options.MakeReadOnly(populateMissingResolver: true);
         return options;
     }
 
