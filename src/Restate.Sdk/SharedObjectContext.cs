@@ -247,6 +247,12 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override void RejectAwakeable(string id, string reason, ushort code)
+    {
+        BaseContext.RejectAwakeable(id, reason, code);
+    }
+
+    /// <inheritdoc />
     public override ValueTask<T> Attach<T>(string invocationId)
     {
         return BaseContext.Attach<T>(invocationId);

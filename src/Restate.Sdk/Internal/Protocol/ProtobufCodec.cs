@@ -700,8 +700,21 @@ internal static class ProtobufCodec
         return msg;
     }
 
+    /// <summary>
+    ///     Builds an <see cref="Gen.ErrorMessage" /> (the retryable-error frame). In addition to the
+    ///     code/message and the optional <paramref name="nextRetryDelayMs" /> override, this populates
+    ///     the diagnostic fields shared-core sets on <c>notify_error</c> (transitions/mod.rs:86-105):
+    ///     <paramref name="stacktrace" /> (field 3) when available, and <paramref name="relatedCommandIndex" />
+    ///     (field 4) — the journal command index of the failing/last command (the <c>Last</c>
+    ///     CommandRelationship). Rust leaves <c>related_command_index</c> unset for index &lt; 0 (no
+    ///     command processed yet); we mirror that by passing <see langword="null" /> for the pre-first
+    ///     command case. (<c>related_command_type</c>/<c>related_command_name</c> are intentionally not
+    ///     emitted: shared-core leaves them empty in the common case and the .NET journal does not carry
+    ///     a wire-type mapping, so emitting only the always-meaningful index matches the runtime.)
+    /// </summary>
     public static Gen.ErrorMessage CreateErrorMessage(uint code, string message,
-        ulong? nextRetryDelayMs = null)
+        ulong? nextRetryDelayMs = null, string? stacktrace = null,
+        uint? relatedCommandIndex = null)
     {
         var error = new Gen.ErrorMessage
         {
@@ -710,6 +723,10 @@ internal static class ProtobufCodec
         };
         if (nextRetryDelayMs.HasValue)
             error.NextRetryDelay = nextRetryDelayMs.Value;
+        if (!string.IsNullOrEmpty(stacktrace))
+            error.Stacktrace = stacktrace;
+        if (relatedCommandIndex.HasValue)
+            error.RelatedCommandIndex = relatedCommandIndex.Value;
         return error;
     }
 
@@ -760,30 +777,37 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
-    ///     Creates a CallCommandMessage with an optional idempotency key and optional custom headers
-    ///     (CallCommand fields 4/12-adjacent — see <see cref="AddHeaders" />).
+    ///     Creates a CallCommandMessage with an optional idempotency key, optional custom headers
+    ///     (CallCommand field 4 — see <see cref="AddHeaders" />), and an optional custom command
+    ///     <paramref name="name" /> (field 12, G20). A non-empty name is part of the journaled
+    ///     command's replay equality, so the caller threads the SAME name as <c>expectedName</c> on
+    ///     replay (vm/mod.rs:758, header_eq compares <c>name</c>).
     /// </summary>
     public static Gen.CallCommandMessage CreateCallCommandWithOptions(
         string service, string handler, string? key,
         ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx,
-        string? idempotencyKey, IEnumerable<KeyValuePair<string, string>>? headers = null)
+        string? idempotencyKey, IEnumerable<KeyValuePair<string, string>>? headers = null,
+        string? name = null)
     {
         var msg = CreateCallCommand(service, handler, key, parameter, completionId, invocationIdNotificationIdx);
         if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
         AddHeaders(msg.Headers, headers);
         return msg;
     }
 
     /// <summary>
-    ///     Creates a OneWayCallCommandMessage with optional custom headers (OneWayCall field 5),
-    ///     mirroring <see cref="CreateCallCommandWithOptions" /> for the send path.
+    ///     Creates a OneWayCallCommandMessage with optional custom headers (OneWayCall field 5) and an
+    ///     optional custom command <paramref name="name" /> (field 12, G20), mirroring
+    ///     <see cref="CreateCallCommandWithOptions" /> for the send path.
     /// </summary>
     public static Gen.OneWayCallCommandMessage CreateSendCommandWithOptions(
         string service, string handler, string? key,
         ReadOnlySpan<byte> parameter, ulong invokeTime, string? idempotencyKey, uint notificationIdx,
-        IEnumerable<KeyValuePair<string, string>>? headers = null)
+        IEnumerable<KeyValuePair<string, string>>? headers = null, string? name = null)
     {
         var msg = CreateSendCommand(service, handler, key, parameter, invokeTime, idempotencyKey, notificationIdx);
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
         AddHeaders(msg.Headers, headers);
         return msg;
     }

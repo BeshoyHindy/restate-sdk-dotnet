@@ -42,6 +42,26 @@ public class OptionsTests
         Assert.Equal("key-123", opts.IdempotencyKey);
     }
 
+    // G20 — custom command name on SendOptions.
+    [Fact]
+    public void SendOptions_DefaultName_IsNull()
+    {
+        Assert.Null(new SendOptions().Name);
+    }
+
+    [Fact]
+    public void SendOptions_WithName_SetsName()
+    {
+        Assert.Equal("notify-user", SendOptions.WithName("notify-user").Name);
+    }
+
+    [Fact]
+    public void SendOptions_WithHeaders_SetsHeaders()
+    {
+        var headers = new Dictionary<string, string> { ["x"] = "y" };
+        Assert.Same(headers, SendOptions.WithHeaders(headers).Headers);
+    }
+
     // ── InvocationHandle ──
 
     [Fact]

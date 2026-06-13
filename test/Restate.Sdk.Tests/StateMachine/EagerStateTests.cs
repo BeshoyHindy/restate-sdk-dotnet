@@ -30,6 +30,7 @@ namespace Restate.Sdk.Tests.StateMachine;
 public sealed class EagerStateTests
 {
     private static readonly string[] SortedKeysAbc = ["a", "b", "c"];
+    private static readonly string[] SortedKeysAb = ["a", "b"];
     private static readonly string[] KeysX = ["x"];
 
     private static byte[] Json<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value);
@@ -260,6 +261,36 @@ public sealed class EagerStateTests
             .Select(f => Gen.GetEagerStateCommandMessage.Parser.ParseFrom(f.Payload)).Single();
         Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Value, eagerCmd.ResultCase);
         Assert.Equal(0, eagerCmd.Value.Content.Length);
+    }
+
+    // G18 — get_state_keys lists CLEARED-marker keys (parity with Rust EagerState::get_keys, which
+    // returns values.keys() unfiltered; a cleared key is Some(None), still present in the map). After
+    // ClearAllState (map empty, complete) then Set("a")+Set("b")+Clear("a"), the eager keys command
+    // and the user-facing result must BOTH include "a" (the cleared key) alongside "b", ordinal-sorted.
+    // Pre-fix the SDK filtered nulls, emitting a smaller journaled key set than CoreVM.
+    [Fact(Timeout = 10_000)]
+    public async Task GetStateKeys_IncludesClearedMarkerKeys()
+    {
+        using var rig = new FreshRig(partialState: true);
+        var sm = rig.StateMachine;
+
+        // clear_all makes the map complete-and-empty (is_partial=false) so GetStateKeys hits the eager
+        // path; then set two keys and clear one — the cleared key stays in the map as a null marker.
+        sm.ClearAllState();
+        sm.SetState("a", 1);
+        sm.SetState("b", 2);
+        sm.ClearState("a");
+
+        var keys = await AwaitBounded(sm.GetStateKeysAsync(CancellationToken.None));
+        // Both the cleared "a" and the live "b" are listed, ordinal-sorted — matching Rust get_keys.
+        Assert.Equal(SortedKeysAb, keys);
+
+        var frames = await rig.FlushAndReadOutboundAsync();
+        Assert.DoesNotContain(frames, f => f.Header.Type == MessageType.GetLazyStateKeysCommand);
+        var keysCmd = frames.Where(f => f.Header.Type == MessageType.GetEagerStateKeysCommand)
+            .Select(f => Gen.GetEagerStateKeysCommandMessage.Parser.ParseFrom(f.Payload)).Single();
+        // The journaled GetEagerStateKeysCommand carries the cleared key too (byte-parity of journal).
+        Assert.Equal(SortedKeysAb, keysCmd.Value.Keys.Select(k => k.ToStringUtf8()).ToArray());
     }
 
     // ---- Replay-path coverage -------------------------------------------------------------------

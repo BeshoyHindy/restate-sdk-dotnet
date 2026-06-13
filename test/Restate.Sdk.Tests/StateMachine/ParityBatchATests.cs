@@ -48,7 +48,7 @@ public class ParityBatchATests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var handle = rig.StateMachine.CallHandleAsync<string>(
-            Service, null, Handler, "hello", null, null, CancellationToken.None);
+            Service, null, Handler, "hello", null, null, null, CancellationToken.None);
 
         // The call allocates id 1 (invocation id) then id 2 (result). Deliver both.
         await rig.DeliverAsync(MessageType.CallInvocationIdCompletion,
@@ -78,7 +78,7 @@ public class ParityBatchATests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var handle = rig.StateMachine.CallHandleAsync<string>(
-            Service, null, Handler, "hello", null, null, CancellationToken.None);
+            Service, null, Handler, "hello", null, null, null, CancellationToken.None);
 
         // Only the RESULT (id 2) is delivered — the invocation-id slot (id 1) is left unresolved.
         await rig.DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, Json("world")));
@@ -102,7 +102,7 @@ public class ParityBatchATests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var handle = rig.StateMachine.CallHandleAsync<string>(
-            Service, null, Handler, "hello", null, null, CancellationToken.None);
+            Service, null, Handler, "hello", null, null, null, CancellationToken.None);
 
         await rig.DeliverAsync(MessageType.CallInvocationIdCompletion,
             CreateCallInvocationIdCompletion(1, "inv_child"));
@@ -147,7 +147,7 @@ public class ParityBatchATests
         // Drive the result so the call completes; deliver id+result.
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, headers, CancellationToken.None);
+            Service, null, Handler, "hi", null, headers, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, Json("ok")));
         await AwaitBounded(callTask);
 
@@ -176,7 +176,7 @@ public class ParityBatchATests
 
         var headers = new Dictionary<string, string> { ["x-source"] = "sdk" };
         await AwaitBounded(rig.StateMachine.SendAsync(
-            Service, null, Handler, (object?)"hi", null, null, headers, CancellationToken.None));
+            Service, null, Handler, (object?)"hi", null, null, headers, null, CancellationToken.None));
 
         rig.CompleteInbound();
         var outbound = await ReadAllOutboundAsync(rig);
@@ -199,7 +199,7 @@ public class ParityBatchATests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, null, CancellationToken.None);
+            Service, null, Handler, "hi", null, null, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, Json("ok")));
         await AwaitBounded(callTask);
 
@@ -236,7 +236,7 @@ public class ParityBatchATests
 
         // Same target + same headers on replay: dequeue+validate succeeds (no journal mismatch).
         var result = await AwaitBounded(rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, headers, CancellationToken.None));
+            Service, null, Handler, "hi", null, headers, null, CancellationToken.None));
         Assert.Equal("ok", result);
 
         rig.CompleteInbound();
@@ -425,7 +425,7 @@ public class ParityBatchATests
 
         var ex = await Assert.ThrowsAsync<TerminalException>(() =>
             rig.StateMachine.CallAsync<string>(
-                Service, null, Handler, "hi", "", null, CancellationToken.None).AsTask());
+                Service, null, Handler, "hi", "", null, null, CancellationToken.None).AsTask());
         Assert.Contains("idempotency key", ex.Message);
 
         rig.CompleteInbound();
@@ -445,7 +445,7 @@ public class ParityBatchATests
 
         var ex = await Assert.ThrowsAsync<TerminalException>(() =>
             rig.StateMachine.SendAsync(
-                Service, null, Handler, (object?)"hi", null, "", null, CancellationToken.None).AsTask());
+                Service, null, Handler, (object?)"hi", null, "", null, null, CancellationToken.None).AsTask());
         Assert.Contains("idempotency key", ex.Message);
 
         rig.CompleteInbound();
@@ -464,7 +464,7 @@ public class ParityBatchATests
 
         await Assert.ThrowsAsync<TerminalException>(() =>
             rig.StateMachine.SendAsync(
-                Service, Handler, "hi", null, null, "", null, CancellationToken.None).AsTask());
+                Service, Handler, "hi", null, null, "", null, null, CancellationToken.None).AsTask());
     }
 
     /// <summary>
@@ -479,7 +479,7 @@ public class ParityBatchATests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", "valid-key", null, CancellationToken.None);
+            Service, null, Handler, "hi", "valid-key", null, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, Json("ok")));
         await AwaitBounded(callTask);
 

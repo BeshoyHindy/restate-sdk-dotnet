@@ -31,4 +31,24 @@ public class CallOptionsTests
 
         Assert.Equal("init-key", options.IdempotencyKey);
     }
+
+    // G20 — custom command name on CallOptions.
+    [Fact]
+    public void Default_HasNullName()
+    {
+        Assert.Null(new CallOptions().Name);
+    }
+
+    [Fact]
+    public void WithName_SetsName()
+    {
+        Assert.Equal("charge-card", CallOptions.WithName("charge-card").Name);
+    }
+
+    [Fact]
+    public void WithHeaders_SetsHeaders()
+    {
+        var headers = new Dictionary<string, string> { ["x"] = "y" };
+        Assert.Same(headers, CallOptions.WithHeaders(headers).Headers);
+    }
 }

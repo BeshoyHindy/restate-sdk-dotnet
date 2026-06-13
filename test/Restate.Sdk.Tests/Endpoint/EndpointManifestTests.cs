@@ -299,6 +299,82 @@ public class EndpointManifestTests
         ]
     };
 
+    // ---- G36: service-level documentation & metadata ----------------------------------------
+
+    [Fact]
+    public void ServiceManifest_CarriesServiceLevelDocumentationAndMetadata()
+    {
+        // G36 — the discovery manifest schema exposes service.documentation and service.metadata
+        // (endpoint_manifest_schema.json:37,159). A definition that supplies them must surface them
+        // on the ServiceManifest so the runtime/Admin API can advertise them.
+        var metadata = new Dictionary<string, string> { ["owner"] = "payments", ["tier"] = "gold" };
+        var def = new ServiceDefinition
+        {
+            Name = "DocumentedService",
+            Type = ServiceType.Service,
+            Factory = _ => new object(),
+            Handlers =
+            [
+                new HandlerDefinition { Name = "H", IsShared = false, Invoker = (_, _, _, _) => Task.FromResult<object?>(null) }
+            ],
+            Documentation = "The payments coordination service.",
+            Metadata = metadata,
+        };
+
+        var manifest = ServiceManifest.FromDefinition(def);
+        Assert.Equal("The payments coordination service.", manifest.Documentation);
+        Assert.Equal(metadata, manifest.Metadata);
+    }
+
+    [Fact]
+    public void ServiceManifest_NoDocumentationOrMetadata_OmitsBothFromJson()
+    {
+        // The absence path: a service without documentation/metadata must NOT emit either field
+        // (WhenWritingNull), keeping the manifest minimal for the common case.
+        var def = MakeServiceDefinition(ServiceType.Service);
+        var manifest = ServiceManifest.FromDefinition(def);
+        Assert.Null(manifest.Documentation);
+        Assert.Null(manifest.Metadata);
+
+        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        });
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.TryGetProperty("documentation", out _));
+        Assert.False(doc.RootElement.TryGetProperty("metadata", out _));
+    }
+
+    [Fact]
+    public void ServiceManifest_Json_IncludesServiceDocumentationAndMetadata()
+    {
+        var metadata = new Dictionary<string, string> { ["owner"] = "payments" };
+        var def = new ServiceDefinition
+        {
+            Name = "DocumentedService",
+            Type = ServiceType.Service,
+            Factory = _ => new object(),
+            Handlers =
+            [
+                new HandlerDefinition { Name = "H", IsShared = false, Invoker = (_, _, _, _) => Task.FromResult<object?>(null) }
+            ],
+            Documentation = "doc text",
+            Metadata = metadata,
+        };
+
+        var manifest = ServiceManifest.FromDefinition(def);
+        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        });
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("doc text", doc.RootElement.GetProperty("documentation").GetString());
+        Assert.Equal("payments", doc.RootElement.GetProperty("metadata").GetProperty("owner").GetString());
+    }
+
     [Fact]
     public void Manifest_Json_ExcludesNullType_ForServiceHandlers()
     {

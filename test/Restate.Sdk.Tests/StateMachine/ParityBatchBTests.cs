@@ -284,7 +284,7 @@ public class ParityBatchBTests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, null, CancellationToken.None);
+            Service, null, Handler, "hi", null, null, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion,
             CreateCallCompletionFailureWithMetadata(2, 409, "conflict",
                 ("retry-after", "30"), ("scope", "tenant")));
@@ -310,7 +310,7 @@ public class ParityBatchBTests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, null, CancellationToken.None);
+            Service, null, Handler, "hi", null, null, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion,
             CreateCallCompletionFailure(2, 500, "boom").ToByteArray());
 
@@ -346,7 +346,7 @@ public class ParityBatchBTests
         var pump = rig.StateMachine.ProcessIncomingMessagesAsync(CancellationToken.None);
 
         var callTask = rig.StateMachine.CallAsync<string>(
-            Service, null, Handler, "hi", null, null, CancellationToken.None);
+            Service, null, Handler, "hi", null, null, null, CancellationToken.None);
         await rig.DeliverAsync(MessageType.CallCompletion,
             CreateCallCompletionFailureWithMetadata(2, 409, "conflict", ("propagate", "yes")));
 

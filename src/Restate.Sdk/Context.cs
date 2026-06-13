@@ -164,6 +164,15 @@ public abstract class Context : IContext
     /// <summary>Rejects a previously created awakeable with a failure reason.</summary>
     public abstract void RejectAwakeable(string id, string reason);
 
+    /// <summary>
+    ///     Rejects a previously created awakeable with a failure reason and a custom Restate/HTTP error
+    ///     <paramref name="code" /> (G28 — shared-core <c>complete_awakeable</c> carries any
+    ///     <c>Failure{code}</c>). The default body drops the code and delegates to
+    ///     <see cref="RejectAwakeable(string, string)" /> so existing context implementations keep
+    ///     working unchanged; the durable runtime context overrides this to emit the chosen code.
+    /// </summary>
+    public virtual void RejectAwakeable(string id, string reason, ushort code) => RejectAwakeable(id, reason);
+
     /// <summary>Returns the current time, durably journaled for replay safety.</summary>
     public abstract ValueTask<DateTimeOffset> Now();
 

@@ -124,7 +124,9 @@ internal sealed class InvocationHandler
             // 500. Matches shared-core's per-error code mapping (vm/errors.rs impl_error_code!).
             Log.ProtocolError(logger, ex, sm.InvocationId);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
+            // G21/G22: pass the exception stacktrace so the ErrorMessage carries it (Rust sets
+            // ErrorMessage.stacktrace), alongside the related_command_index the SM derives.
+            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None, stacktrace: ex.StackTrace).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
         catch (RestateRetryableException ex)
@@ -132,14 +134,14 @@ internal sealed class InvocationHandler
             // Retryable failure with an optional next-retry-delay override — the runtime re-invokes.
             Log.InvocationFailed(logger, ex, sm.InvocationId);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None, ex.NextRetryDelay).ConfigureAwait(false); }
+            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None, ex.NextRetryDelay, ex.StackTrace).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
         catch (Exception ex)
         {
             Log.InvocationFailed(logger, ex, sm.InvocationId);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            try { await sm.FailAsync(500, ex.Message, CancellationToken.None).ConfigureAwait(false); }
+            try { await sm.FailAsync(500, ex.Message, CancellationToken.None, stacktrace: ex.StackTrace).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
         finally

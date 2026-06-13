@@ -137,6 +137,13 @@ public interface IContext
     /// <summary>Rejects a previously created awakeable with a failure reason.</summary>
     void RejectAwakeable(string id, string reason);
 
+    /// <summary>
+    ///     Rejects a previously created awakeable with a failure reason and a custom Restate/HTTP error
+    ///     <paramref name="code" /> (G28). The default forwards to <see cref="RejectAwakeable(string,
+    ///     string)" /> (code dropped) so existing <see cref="IContext" /> implementors need no change.
+    /// </summary>
+    void RejectAwakeable(string id, string reason, ushort code) => RejectAwakeable(id, reason);
+
     /// <summary>Returns the current time, durably journaled for replay safety.</summary>
     ValueTask<DateTimeOffset> Now();
 

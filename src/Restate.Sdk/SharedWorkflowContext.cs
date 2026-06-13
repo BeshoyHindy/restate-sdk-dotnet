@@ -14,4 +14,13 @@ public abstract class SharedWorkflowContext : SharedObjectContext, ISharedWorkfl
 
     /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
     public abstract ValueTask RejectPromise(string name, string reason);
+
+    /// <summary>
+    ///     Rejects a workflow promise with a reason and a custom Restate/HTTP error
+    ///     <paramref name="code" /> (G30). The default body drops the code and delegates to
+    ///     <see cref="RejectPromise(string, string)" /> so existing implementations keep working; the
+    ///     durable runtime context overrides this to emit the chosen code.
+    /// </summary>
+    public virtual ValueTask RejectPromise(string name, string reason, ushort code) =>
+        RejectPromise(name, reason);
 }

@@ -119,28 +119,28 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         CallOptions options)
     {
         return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey,
-            options.Headers, Aborted);
+            options.Headers, options.Name, Aborted);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
         CallOptions options)
     {
         return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey,
-            options.Headers, Aborted);
+            options.Headers, options.Name, Aborted);
     }
 
     public override CallHandle<TResponse> CallHandle<TResponse>(string service, string handler, object? request = null,
         CallOptions? options = null)
     {
         return _stateMachine.CallHandleAsync<TResponse>(service, null, handler, request,
-            options?.IdempotencyKey, options?.Headers, Aborted);
+            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted);
     }
 
     public override CallHandle<TResponse> CallHandle<TResponse>(string service, string key, string handler,
         object? request, CallOptions? options = null)
     {
         return _stateMachine.CallHandleAsync<TResponse>(service, key, handler, request,
-            options?.IdempotencyKey, options?.Headers, Aborted);
+            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted);
     }
 
     public override ValueTask CancelInvocation(string invocationId)
@@ -181,14 +181,14 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         SendOptions options)
     {
         return _stateMachine.SendAsync(service, null, handler, request, options.Delay, options.IdempotencyKey,
-            options.Headers, Aborted);
+            options.Headers, options.Name, Aborted);
     }
 
     public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
         SendOptions options)
     {
         return _stateMachine.SendAsync(service, key, handler, request, options.Delay, options.IdempotencyKey,
-            options.Headers, Aborted);
+            options.Headers, options.Name, Aborted);
     }
 
     public override TClient ServiceClient<TClient>()
@@ -231,7 +231,7 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         TRequest request, string? key = null, SendOptions? options = null)
     {
         return _stateMachine.SendAsync(service, handler, request, key, options?.Delay, options?.IdempotencyKey,
-            options?.Headers, Aborted);
+            options?.Headers, options?.Name, Aborted);
     }
 
     public override ValueTask<T> Attach<T>(string invocationId)
@@ -320,5 +320,10 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     public override void RejectAwakeable(string id, string reason)
     {
         _stateMachine.RejectAwakeable(id, reason);
+    }
+
+    public override void RejectAwakeable(string id, string reason, ushort code)
+    {
+        _stateMachine.RejectAwakeable(id, reason, code);
     }
 }

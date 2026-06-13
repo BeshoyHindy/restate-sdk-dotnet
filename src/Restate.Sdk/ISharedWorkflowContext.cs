@@ -14,4 +14,12 @@ public interface ISharedWorkflowContext : ISharedObjectContext
 
     /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
     ValueTask RejectPromise(string name, string reason);
+
+    /// <summary>
+    ///     Rejects a workflow promise with a reason and a custom Restate/HTTP error
+    ///     <paramref name="code" /> (G30 — shared-core <c>complete_promise</c> carries any
+    ///     <c>Failure{code}</c>). The default forwards to <see cref="RejectPromise(string, string)" />
+    ///     (code dropped) so existing implementors need no change.
+    /// </summary>
+    ValueTask RejectPromise(string name, string reason, ushort code) => RejectPromise(name, reason);
 }

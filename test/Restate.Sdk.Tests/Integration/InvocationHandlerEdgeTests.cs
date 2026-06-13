@@ -131,6 +131,50 @@ public class InvocationHandlerEdgeTests
     }
 
     [Fact(Timeout = WatchdogMs)]
+    public async Task GenericException_AfterJournaledCommand_EnrichesErrorWithRelatedIndexAndStacktrace()
+    {
+        // G21/G22 — a handler that journals a command (SetState advances the command index to 1) then
+        // throws must emit an Error frame carrying related_command_index = the journal's current command
+        // index AND a non-empty stacktrace (Rust notify_error sets ErrorMessage.related_command_index /
+        // stacktrace, transitions/mod.rs:86-105).
+        var frames = await RunHandlerAsync(Service(ServiceType.VirtualObject,
+            (_, ctx, _, _) =>
+            {
+                ((ObjectContext)ctx).Set(new StateKey<int>("n"), 1);   // command index 0 → 1
+                throw new InvalidOperationException("kaboom");
+            }));
+
+        var error = frames.Single(f => f.Header.Type == MessageType.Error);
+        var parsed = Gen.ErrorMessage.Parser.ParseFrom(error.Payload);
+        Assert.Equal(500u, parsed.Code);
+        // The SetState was journaled at command index 1 (Input is 0), so the failing-command relation
+        // (the Last CommandRelationship) points at index 1.
+        Assert.True(parsed.HasRelatedCommandIndex);
+        Assert.Equal(1u, parsed.RelatedCommandIndex);
+        // The exception stacktrace rides ErrorMessage.stacktrace (field 3).
+        Assert.NotEqual("", parsed.Stacktrace);
+    }
+
+    [Fact(Timeout = WatchdogMs)]
+    public async Task GenericException_BeforeAnyCommand_OmitsRelatedCommandIndex()
+    {
+        // The negative case: a handler that throws BEFORE journaling any command has command index 0
+        // (only the Input entry at index 0 is recorded by StartAsync) — so related_command_index is the
+        // Input's index 0... but Input is recorded during StartAsync, making CommandIndex 0. We assert
+        // the field is present and reflects that index, NOT left at a bogus value. (Rust leaves the
+        // field unset only when command_index() < 0, i.e. before the Input entry; here Input already
+        // ran, so index 0 is the legitimate Last command.)
+        var frames = await RunHandlerAsync(Service(ServiceType.Service,
+            (_, _, _, _) => throw new InvalidOperationException("immediate")));
+
+        var error = frames.Single(f => f.Header.Type == MessageType.Error);
+        var parsed = Gen.ErrorMessage.Parser.ParseFrom(error.Payload);
+        Assert.Equal(500u, parsed.Code);
+        Assert.True(parsed.HasRelatedCommandIndex);
+        Assert.Equal(0u, parsed.RelatedCommandIndex);
+    }
+
+    [Fact(Timeout = WatchdogMs)]
     public async Task GenericException_FromHandler_EmitsErrorFrame500()
     {
         var frames = await RunHandlerAsync(Service(ServiceType.Service,

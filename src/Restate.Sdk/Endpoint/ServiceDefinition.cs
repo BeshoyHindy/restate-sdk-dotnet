@@ -23,4 +23,16 @@ public sealed class ServiceDefinition
 
     /// <summary>Duration to retain workflow execution data after completion, in milliseconds. Only applicable to workflows.</summary>
     public long? WorkflowRetentionMs { get; init; }
+
+    /// <summary>
+    ///     Optional service-level documentation surfaced on the discovery manifest (endpoint manifest
+    ///     schema service.documentation, G36). Markdown is the conventional format.
+    /// </summary>
+    public string? Documentation { get; init; }
+
+    /// <summary>
+    ///     Optional service-level custom metadata surfaced on the discovery manifest (endpoint manifest
+    ///     schema service.metadata, G36) and shown on the Restate Admin API.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 }

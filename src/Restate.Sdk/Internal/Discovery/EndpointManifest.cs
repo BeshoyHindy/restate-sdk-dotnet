@@ -47,6 +47,14 @@ internal sealed class ServiceManifest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? WorkflowCompletionRetention { get; init; }
 
+    [JsonPropertyName("documentation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Documentation { get; init; }
+
+    [JsonPropertyName("metadata")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+
     public static ServiceManifest FromDefinition(ServiceDefinition def)
     {
         var typeName = def.Type switch
@@ -67,6 +75,9 @@ internal sealed class ServiceManifest
             Type = typeName,
             Handlers = handlers,
             WorkflowCompletionRetention = def.WorkflowRetentionMs,
+            // G36 — service-level documentation/metadata advertised by the discovery manifest schema.
+            Documentation = def.Documentation,
+            Metadata = def.Metadata,
         };
     }
 }

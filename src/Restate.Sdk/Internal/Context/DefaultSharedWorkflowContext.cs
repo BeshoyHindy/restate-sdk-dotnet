@@ -41,4 +41,9 @@ internal sealed class DefaultSharedWorkflowContext : SharedWorkflowContext
     {
         return _sm.RejectPromise(name, reason, _ct);
     }
+
+    public override ValueTask RejectPromise(string name, string reason, ushort code)
+    {
+        return _sm.RejectPromise(name, reason, _ct, code);
+    }
 }

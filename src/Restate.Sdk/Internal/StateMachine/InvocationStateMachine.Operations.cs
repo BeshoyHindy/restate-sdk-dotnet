@@ -371,23 +371,23 @@ internal sealed partial class InvocationStateMachine
 
     private void WriteCallCommandMessageWithOptions(string service, string handler, string? key,
         ReadOnlyMemory<byte> requestBytes, uint invocationIdNotificationIdx, uint completionId, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers)
+        IReadOnlyDictionary<string, string>? headers, string? name)
     {
         var msg = ProtobufCodec.CreateCallCommandWithOptions(
             service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx, idempotencyKey,
-            headers);
+            headers, name);
         WriteCommand(MessageType.CallCommand, msg);
     }
 
     private void WriteSendCommandMessage(string service, string handler, string? key, ReadOnlyMemory<byte> requestBytes,
         TimeSpan? delay, string? idempotencyKey, uint notificationIdx,
-        IReadOnlyDictionary<string, string>? headers)
+        IReadOnlyDictionary<string, string>? headers, string? name)
     {
         var invokeTime = delay.HasValue && delay.Value > TimeSpan.Zero
             ? (ulong)DateTimeOffset.UtcNow.Add(delay.Value).ToUnixTimeMilliseconds()
             : 0UL;
         var msg = ProtobufCodec.CreateSendCommandWithOptions(
-            service, handler, key, requestBytes.Span, invokeTime, idempotencyKey, notificationIdx, headers);
+            service, handler, key, requestBytes.Span, invokeTime, idempotencyKey, notificationIdx, headers, name);
         WriteCommand(MessageType.OneWayCallCommand, msg);
     }
 
@@ -398,13 +398,18 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     private async ValueTask<(uint ResultCompletionId, uint InvocationIdCompletionId)> CallPrefixAsync(
         string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
-        string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+        string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
     {
         // G8 — empty-idempotency-key parity (shared-core EMPTY_IDEMPOTENCY_KEY, mod.rs:735-740). An
         // empty (but non-null) key is a caller bug: Rust transitions to HitError BEFORE journaling, so
         // we throw a non-retryable TerminalException here, BEFORE NextCompletionId / RecordCommand, to
         // avoid mutating the journal. A null key (no idempotency) is the normal path and is allowed.
         ThrowIfEmptyIdempotencyKey(idempotencyKey);
+
+        // G20 — a non-empty custom name (CallCommand.name field 12) is journaled and is part of Rust's
+        // header_eq, so it MUST be re-supplied as expectedName on replay; an empty/null name normalizes
+        // to "" both when writing and comparing, matching name.unwrap_or_default() in sys_call.
+        var hasName = !string.IsNullOrEmpty(name);
 
         uint invocationIdCompletionId, resultCompletionId;
         bool replaying;
@@ -416,18 +421,20 @@ internal sealed partial class InvocationStateMachine
             replaying = State == InvocationState.Replaying;
             if (replaying)
             {
-                var cmd = DequeueReplayCommand(JournalEntryType.Call, expectedName: null,
+                // Pass the LIVE name as expectedName so Rust's name equality is honored on replay
+                // (G20): a journaled non-empty name must match the re-supplied one, else JOURNAL_MISMATCH.
+                var cmd = DequeueReplayCommand(JournalEntryType.Call, expectedName: name,
                     expectedService: service, expectedHandler: handler, expectedKey: key);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, resultCompletionId);
             }
-            else if (idempotencyKey is not null || headers is not null)
+            else if (idempotencyKey is not null || headers is not null || hasName)
             {
-                // Any optional command field (idempotency key OR custom headers) routes through the
-                // options writer; both default-absent when null so the emitted command stays minimal.
+                // Any optional command field (idempotency key, custom headers, OR custom name) routes
+                // through the options writer; each default-absent when null so the command stays minimal.
                 WriteCallCommandMessageWithOptions(service, handler, key, requestBytes,
-                    invocationIdCompletionId, resultCompletionId, idempotencyKey, headers);
-                _journal.RecordCommand(JournalEntryType.Call);
+                    invocationIdCompletionId, resultCompletionId, idempotencyKey, headers, name);
+                _journal.RecordCommand(JournalEntryType.Call, name);
             }
             else
             {
@@ -467,21 +474,22 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<TResponse> CallAsync<TResponse>(
         string service, string? key, string handler, object? request, CancellationToken ct)
     {
-        return await CallAsync<TResponse>(service, key, handler, request, null, null, ct).ConfigureAwait(false);
+        return await CallAsync<TResponse>(service, key, handler, request, null, null, null, ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    ///     Full-option blocking Call: idempotency key (G8-validated) + custom headers (G5). All other
-    ///     CallAsync overloads funnel through here so the option-threading lives in one place.
+    ///     Full-option blocking Call: idempotency key (G8-validated) + custom headers (G5) + custom
+    ///     command name (G20). All other CallAsync overloads funnel through here so the option-threading
+    ///     lives in one place.
     /// </summary>
     public async ValueTask<TResponse> CallAsync<TResponse>(
         string service, string? key, string handler, object? request, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
         var (resultCompletionId, _) = await CallPrefixAsync(
-            service, key, handler, requestBytes, idempotencyKey, headers, ct).ConfigureAwait(false);
+            service, key, handler, requestBytes, idempotencyKey, headers, name, ct).ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
             .ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -493,7 +501,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         var requestBytes = CopyToPooled(Serialize(request));
-        var (resultCompletionId, _) = await CallPrefixAsync(service, key, handler, requestBytes, null, null, ct)
+        var (resultCompletionId, _) = await CallPrefixAsync(service, key, handler, requestBytes, null, null, null, ct)
             .ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
             .ConfigureAwait(false);
@@ -510,7 +518,7 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public CallHandle<TResponse> CallHandleAsync<TResponse>(
         string service, string? key, string handler, object? request, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
@@ -518,7 +526,7 @@ internal sealed partial class InvocationStateMachine
         // both completion ids are captured once the (cheap) flush completes. The same prefix Task is
         // shared by both thunks, so the command is emitted exactly once regardless of which (or both)
         // the caller awaits.
-        var prefixTask = CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, headers, ct);
+        var prefixTask = CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, headers, name, ct);
         return new CallHandle<TResponse>(
             async () =>
             {
@@ -542,7 +550,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
-        var resultIdTask = CallPrefixAsync(service, key, handler, requestBytes, null, null, ct);
+        var resultIdTask = CallPrefixAsync(service, key, handler, requestBytes, null, null, null, ct);
         // The prefix journals synchronously inside CallPrefixAsync before its first await, so the
         // command order is fixed; we capture the result id once the (cheap) flush completes.
         return async () =>
@@ -558,19 +566,22 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
         TimeSpan? delay, string? idempotencyKey, CancellationToken ct)
     {
-        return await SendAsync(service, key, handler, request, delay, idempotencyKey, null, ct).ConfigureAwait(false);
+        return await SendAsync(service, key, handler, request, delay, idempotencyKey, null, null, ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
-    ///     Full-option send: idempotency key (G8-validated) + delay + custom headers (G5). The
-    ///     object-request and typed-request send overloads funnel through here.
+    ///     Full-option send: idempotency key (G8-validated) + delay + custom headers (G5) + custom
+    ///     command name (G20). The object-request and typed-request send overloads funnel through here.
     /// </summary>
     public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
-        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name,
+        CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
-        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers);
+        var invocationIdCompletionId =
+            SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers, name);
         await FlushGatedAsync(ct).ConfigureAwait(false);
         // Fire-and-forget: the handle resolves the invocation id lazily through the park API, so an
         // unawaited handle never parks/suspends (Rust sys_send returns SendHandle immediately).
@@ -579,17 +590,18 @@ internal sealed partial class InvocationStateMachine
 
     public async ValueTask<InvocationHandle> SendAsync<TRequest>(
         string service, string handler, TRequest request, string? key, TimeSpan? delay, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = CopyToPooled(Serialize(request));
-        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers);
+        var invocationIdCompletionId =
+            SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers, name);
         await FlushGatedAsync(ct).ConfigureAwait(false);
         return new InvocationHandle(() => ResolveInvocationIdAsync(invocationIdCompletionId));
     }
 
     private uint SendPrefix(string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
-        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers)
+        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name)
     {
         // G8 — same empty-idempotency-key guard as the call path (mod.rs:810-815). Thrown BEFORE the
         // lock / NextCompletionId / RecordCommand so an invalid key never mutates the journal.
@@ -602,15 +614,17 @@ internal sealed partial class InvocationStateMachine
             invocationIdCompletionId = NextCompletionId();
             if (State == InvocationState.Replaying)
             {
-                var cmd = DequeueReplayCommand(JournalEntryType.OneWayCall, expectedName: null,
+                // G20 — thread the live name as expectedName so OneWayCall.name equality is honored on
+                // replay (Rust header_eq compares name); null/empty normalizes to "" on both sides.
+                var cmd = DequeueReplayCommand(JournalEntryType.OneWayCall, expectedName: name,
                     expectedService: service, expectedHandler: handler, expectedKey: key);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
             }
             else
             {
                 WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
-                    invocationIdCompletionId, headers);
-                _journal.RecordCommand(JournalEntryType.OneWayCall);
+                    invocationIdCompletionId, headers, name);
+                _journal.RecordCommand(JournalEntryType.OneWayCall, name);
             }
 
             // One-way (Send) children are NOT tracked: VMOptions::default sets
@@ -900,8 +914,12 @@ internal sealed partial class InvocationStateMachine
             }
             else if (!_eagerStateIsPartial)
             {
-                eagerKeys = _eagerState.Where(p => p.Value is not null).Select(p => p.Key)
-                    .Order(StringComparer.Ordinal).ToArray();
+                // G18: list EVERY key in the eager map, INCLUDING cleared markers (null values). Rust
+                // EagerState::get_keys returns values.keys() unfiltered (vm/context.rs:414-421) — a
+                // cleared key is Some(None), still present in the map. Filtering nulls here would emit a
+                // SMALLER journaled GetEagerStateKeysCommand key set than CoreVM, breaking byte-parity of
+                // the journal. Ordinal sort still matches Rust's keys.sort().
+                eagerKeys = _eagerState.Keys.Order(StringComparer.Ordinal).ToArray();
                 WriteCommand(MessageType.GetEagerStateKeysCommand,
                     ProtobufCodec.CreateGetEagerStateKeysCommand(eagerKeys));
                 _journal.RecordCommand(JournalEntryType.GetStateKeys);
@@ -976,7 +994,14 @@ internal sealed partial class InvocationStateMachine
         }
     }
 
-    public void RejectAwakeable(string id, string reason)
+    /// <summary>
+    ///     Rejects an awakeable with a terminal failure. <paramref name="code" /> defaults to 500 but a
+    ///     handler may supply any Restate/HTTP code (G28) — shared-core <c>complete_awakeable</c> carries
+    ///     a <c>NonEmptyValue::Failure(TerminalFailure)</c> with an arbitrary <c>code</c> (lib.rs:191-194).
+    ///     The code is NOT part of replay equality (payload result bytes are not compared, §5), so a
+    ///     code change across replays is benign by the same rule as the awakeable value.
+    /// </summary>
+    public void RejectAwakeable(string id, string reason, ushort code = 500)
     {
         EnsureActive();
         lock (_commandLock)
@@ -989,7 +1014,7 @@ internal sealed partial class InvocationStateMachine
             }
 
             WriteCommand(MessageType.CompleteAwakeableCommand,
-                ProtobufCodec.CreateCompleteAwakeableFailure(id, 500, reason));
+                ProtobufCodec.CreateCompleteAwakeableFailure(id, code, reason));
             _journal.RecordCommand(JournalEntryType.CompleteAwakeable);
         }
     }
@@ -1031,11 +1056,17 @@ internal sealed partial class InvocationStateMachine
         completion.ThrowIfFailure();
     }
 
-    public async ValueTask RejectPromise(string name, string reason, CancellationToken ct)
+    /// <summary>
+    ///     Rejects a durable promise with a terminal failure. <paramref name="code" /> defaults to 500
+    ///     but a handler may supply any Restate/HTTP code (G30) — shared-core <c>complete_promise</c>
+    ///     carries a <c>NonEmptyValue::Failure(TerminalFailure)</c> with an arbitrary <c>code</c>. The
+    ///     code rides the CompletePromiseCommand result oneof, which is not compared on replay (§5).
+    /// </summary>
+    public async ValueTask RejectPromise(string name, string reason, CancellationToken ct, ushort code = 500)
     {
         EnsureActive();
         var (completionId, needsFlush) = CompletePromisePrefix(name,
-            id => ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, id));
+            id => ProtobufCodec.CreateCompletePromiseFailure(name, code, reason, id));
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // command on the wire before parking
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -1265,9 +1296,14 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Sends a transient error as an ErrorMessage (retryable). An optional
     ///     <paramref name="nextRetryDelay" /> overrides the runtime's delay before the next retry.
+    ///     G21/G22: enriches the frame with the failing command's <c>related_command_index</c> (the
+    ///     journal's current command index — the <c>Last</c> CommandRelationship, transitions/mod.rs:92)
+    ///     and the exception <paramref name="stacktrace" /> when available (field 3). The index rides
+    ///     INSIDE the lock so it reflects the journal state at the exact write point; a negative index
+    ///     (no command processed yet) is omitted, mirroring Rust's <c>command_index().unwrap_or(-1)</c>.
     /// </summary>
     public async ValueTask FailAsync(ushort code, string message, CancellationToken ct,
-        TimeSpan? nextRetryDelay = null)
+        TimeSpan? nextRetryDelay = null, string? stacktrace = null)
     {
         lock (_commandLock)
         {
@@ -1280,7 +1316,11 @@ internal sealed partial class InvocationStateMachine
             var nextRetryDelayMs = nextRetryDelay is { } delay && delay > TimeSpan.Zero
                 ? (ulong)delay.TotalMilliseconds
                 : (ulong?)null;
-            WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message, nextRetryDelayMs));
+            // command index < 0 means no command was processed before the fault → leave field unset.
+            var commandIndex = _journal.CommandIndex;
+            var relatedCommandIndex = commandIndex >= 0 ? (uint?)commandIndex : null;
+            WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(
+                code, message, nextRetryDelayMs, stacktrace, relatedCommandIndex));
             _writer.WriteHeaderOnly(MessageType.End);
             State = InvocationState.Closed;
         }

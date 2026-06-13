@@ -457,6 +457,8 @@ public sealed class ContextSurfaceTests : IDisposable
         // ResolveAwakeable / RejectAwakeable write CompleteAwakeable commands synchronously.
         ctx.ResolveAwakeable("sign_1abc", "payload");
         ctx.RejectAwakeable("sign_1def", "nope");
+        // G28 — the custom-code RejectAwakeable overload delegates to the SM with the chosen code.
+        ctx.RejectAwakeable("sign_1ghi", "gone", code: 410);
 
         // Awakeable<T> parks on the signal id (17). Deliver the SignalNotification to resolve it.
         var awakeable = ctx.Awakeable<string>();
@@ -495,6 +497,27 @@ public sealed class ContextSurfaceTests : IDisposable
 
         ctx.Clear("count");
         ctx.ClearAll();
+    }
+
+    // G32 — typed Clear<T>(StateKey<T>) is API-symmetric with Set<T>/Get and clears by the key's Name,
+    // identically to Clear(string). After Set then typed Clear, a subsequent Get returns default and the
+    // key is gone from the (complete) eager key set — proving the typed overload forwards to ClearState.
+    [Fact]
+    public async Task ObjectContext_TypedClear_ClearsByKeyName()
+    {
+        var eager = new Dictionary<string, ReadOnlyMemory<byte>?>
+        {
+            ["count"] = JsonSerializer.SerializeToUtf8Bytes(5)
+        };
+        InitProcessing(key: "the-key", eagerState: eager, partialState: false);
+        var ctx = new DefaultObjectContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        var countKey = new StateKey<int>("count");
+        ctx.Clear(countKey);   // typed overload → ClearState("count")
+
+        // Cleared marker ⇒ Get returns default; the cleared key is still LISTED (G18 cleared-marker
+        // parity), but reads back as absent.
+        Assert.Equal(0, await AwaitBounded(ctx.Get(countKey)));
     }
 
     [Fact]
@@ -592,6 +615,8 @@ public sealed class ContextSurfaceTests : IDisposable
         Assert.NotNull(awk.Id);
         ctx.ResolveAwakeable("ak_other", "v");
         ctx.RejectAwakeable("ak_other2", "no");
+        // G28 — the custom-code overload on the shared-object context forwards through BaseContext.
+        ctx.RejectAwakeable("ak_other3", "gone", code: 410);
 
         // The Call/Send/CallFuture/Attach/GetOutput delegations forward to the SM and PARK on a
         // completion that never arrives in this test. We start them (the one-line forward executes
@@ -671,6 +696,38 @@ public sealed class ContextSurfaceTests : IDisposable
         var peek = ctx.PeekPromise<string>("decision");
         await DeliverCompletionAsync(MessageType.PeekPromiseCompletion, 4, ReadOnlyMemory<byte>.Empty);
         Assert.Null(await AwaitBounded(peek));
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    // G30 — the custom-code RejectPromise overload on both the workflow and shared-workflow contexts
+    // delegates to the SM with the chosen code, parking on the CompletePromiseCompletion ack (id 1).
+    [Fact]
+    public async Task WorkflowContext_RejectPromise_WithCode_Delegates()
+    {
+        InitProcessing(key: "wf-key");
+        var pump = StartPump();
+        var ctx = new DefaultWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        var reject = ctx.RejectPromise("approval", "denied", code: 409);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(reject);
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    [Fact]
+    public async Task SharedWorkflowContext_RejectPromise_WithCode_Delegates()
+    {
+        InitProcessing(key: "swf-key");
+        var pump = StartPump();
+        var ctx = new DefaultSharedWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        var reject = ctx.RejectPromise("approval", "denied", code: 409);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(reject);
 
         _rig.CompleteInbound();
         await AwaitBounded(pump);
