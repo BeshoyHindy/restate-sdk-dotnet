@@ -70,6 +70,32 @@ public static class RestateEndpointRouteBuilderExtensions
         return null; // No mutually supported version → 415
     }
 
+    // The invocation content type our manifest's maxProtocolVersion corresponds to. Used as the
+    // fallback when the request carries no recognizable invocation content type.
+    private const string DefaultInvocationContentType = "application/vnd.restate.invocation.v6";
+
+    /// <summary>
+    ///     Picks the response content type for an /invoke exchange. restate-server negotiates the
+    ///     service-protocol version per request and signals it via the request Content-Type
+    ///     (<c>application/vnd.restate.invocation.v{N}</c>); the response MUST use the SAME version
+    ///     or the server rejects the stream with RT0012. We therefore echo the request's content
+    ///     type when it is a well-formed invocation type, and only fall back to our manifest max
+    ///     when none was supplied (e.g. a hand-crafted request).
+    /// </summary>
+    internal static string NegotiateInvocationContentType(string? requestContentType)
+    {
+        if (string.IsNullOrEmpty(requestContentType))
+            return DefaultInvocationContentType;
+
+        // Strip any parameters (e.g. "; charset=..."); the bare media type is what must match.
+        var separator = requestContentType.IndexOf(';');
+        var mediaType = (separator >= 0 ? requestContentType[..separator] : requestContentType).Trim();
+
+        return mediaType.StartsWith("application/vnd.restate.invocation.v", StringComparison.OrdinalIgnoreCase)
+            ? mediaType
+            : DefaultInvocationContentType;
+    }
+
     /// <summary>
     ///     Maps Restate discovery and invocation endpoints.
     ///     Requires prior registration via <see cref="RestateServiceCollectionExtensions.AddRestate" />.
@@ -138,7 +164,12 @@ public static class RestateEndpointRouteBuilderExtensions
             }
 
             context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "application/vnd.restate.invocation.v6";
+            // The response protocol version MUST match the version the server negotiated on the
+            // request. restate-server sends Content-Type: application/vnd.restate.invocation.v{N}
+            // on /invoke and rejects (RT0012) any response whose version differs — so we echo the
+            // request's content-type verbatim, falling back to our manifest max (v6) only when the
+            // request carried no recognizable invocation content type.
+            context.Response.ContentType = NegotiateInvocationContentType(context.Request.ContentType);
             context.Response.Headers.Append("x-restate-server", ServerVersion);
 
             // Disable response buffering so protocol frames are written directly to the HTTP/2 stream.
