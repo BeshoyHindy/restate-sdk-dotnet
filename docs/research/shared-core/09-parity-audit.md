@@ -67,7 +67,7 @@ of observability/configuration parity and one MEDIUM documented behavioral limit
 | G26 | `RetryPolicy.max_interval` is Option (None ⇒ uncapped) | PARTIAL | `retries.rs:57`: `Option<Duration>` | `MaxDelay` non-nullable, defaults 5s; no uncapped config (must set `TimeSpan.MaxValue`) | no | LOW |
 | G27 | `EntryRetryInfo` (retry_count/retry_loop_duration) exposed to `ctx.Run` closure | PARTIAL | `lib.rs:173-178` public type for backoff-aware run logic | `RunContext`/`IRunContext` expose neither. Depends on G2/G3. Add to RunContext | no | LOW |
 | G28 | `sys_complete_awakeable` reject with arbitrary code | PARTIAL | `NonEmptyValue::Failure(TerminalFailure)` carries any code (`lib.rs:191-194`) | `RejectAwakeable(id, reason)` hardcodes 500 (`Operations.cs:888-903`, `ProtobufCodec.cs:546`). Add status-code/TerminalException overload | no | LOW |
-| G29 | `sys_complete_signal` (named signal) failure with arbitrary code | PARTIAL | same as G28 | `SendSignalFailure(...,reason)` hardcodes 500 (`DefaultContext.cs:144-150`, `ProtobufCodec.cs:660`). Add code overload | no | LOW |
+| G29 | `sys_complete_signal` (named signal) failure with arbitrary code | DONE (Batch E) | same as G28 | `SendSignalFailure(targetInvocationId, name, reason, ushort code)` overload (default 500) plumbs the code into the SendSignalCommand failure result (`IContext.cs`/`Context.cs`/`DefaultContext.cs`/`SharedObjectContext.cs`, `SendSignalAsync` failure tuple) | no | LOW |
 | G30 | `sys_complete_promise` reject with arbitrary code | PARTIAL | same as G28 | `RejectPromise(name, reason)` hardcodes 500 (`Operations.cs:943-951`, `ProtobufCodec.cs:584`). Add code overload | no | LOW |
 | G31 | `sys_state_set` PayloadOptions.unstable_serialization | MISSING | `lib.rs:321` | Subset of G19 on the Set path (`Operations.cs:733`) | YES (low freq) | LOW |
 | G32 | Typed `Clear<T>(StateKey<T>)` overload | PARTIAL | `sys_state_clear` takes plain String (`lib.rs:324`) — behavior identical | `IObjectContext.cs:13` has only `Clear(string)`; Get/Set are typed. Add typed overload for symmetry | no | LOW |
@@ -194,3 +194,29 @@ These are correct-by-design and must not be "fixed" into a regression:
   This is a *documented, deterministic, replay-safe* scope limit, not a defect; closing it (a
   suspend-to-resolve mechanic) is tracked as MEDIUM but is explicitly an accepted limitation
   today. Listed in the gap table for completeness; treat as a known divergence.
+
+## 5. Batch E — replay command-equality hardening (review-driven, DONE)
+
+The Batch A/B/C reviews flagged that the journaled command options added in B/C were emitted but NOT
+replay-validated, so a non-deterministic handler could silently swap them on replay. Batch E closes
+that, mirroring the pre-existing Call target-triple + SendSignal replay validation
+(`InvocationJournal.DequeueReplay` / `ProtobufCodec.ParseReplayCommand` / the `Operations.cs` prefixes):
+
+- **D2 — Call/Send `headers` replay-validated.** `ReplayCommand.CallHeaders` is parsed (CallCommand
+  field 4 / OneWayCall field 5) as an order-INDEPENDENT key→value map and compared as a SET
+  (`InvocationJournal.HeadersEqual`), NOT by byte/sequence order — the live headers come from an
+  UNORDERED `IReadOnlyDictionary`, so the journal's `Vec<Header>` byte order is not reproducible and a
+  byte-order compare would spuriously fail a CORRECT replay. Divergence → JOURNAL_MISMATCH (570). This
+  is the false-positive-free analogue of Rust's `self.headers == other.headers` (messages.rs:191/208).
+- **Call/Send `idempotency_key` replay-validated.** `ReplayCommand.CallIdempotencyKey` (field 6/7) is a
+  plain ordinal string compare (Rust `self.idempotency_key == other.idempotency_key`,
+  messages.rs:193/210). Divergence → 570.
+- **D1 — Attach/GetOutput `target` replay-validated.** The whole `target` oneof (kind + InvocationId /
+  WorkflowTarget{name,key} / IdempotentRequestTarget{service,handler,key,serviceKey}) is normalized to
+  an `AttachReplayIdentity` record and compared by VALUE (Rust derives header_eq via `eq`, so the full
+  struct incl. target participates; messages.rs:227/230). Divergence → 570.
+- **G29 — named-signal `SendSignalFailure` arbitrary code.** No longer hardcodes 500; an optional
+  `ushort code` (default 500) is plumbed into the SendSignalCommand failure result.
+
+Out of scope (unchanged): value PAYLOAD byte-equality on replay is the separate deferred **G13** item —
+.NET still compares ids/targets/headers/idempotency/names but NOT payload bytes.
