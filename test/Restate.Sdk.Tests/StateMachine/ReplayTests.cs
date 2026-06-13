@@ -471,6 +471,233 @@ public class ReplayTests
         Assert.Contains("target", ex.Message);
     }
 
+    // §4.1.17b — SendSignalCommand replay TARGET + signal-identity validation (determinism hardening).
+    // Rust SendSignalCommand command_header_eq compares target_invocation_id + signal_id (messages.rs
+    // :622-654). The journaled cancel/named-signal must match what the handler now produces, else the
+    // SAME journal-mismatch ProtocolException as the Call target check fires — a non-deterministic
+    // handler that on replay cancels a DIFFERENT target or sends a DIFFERENT named signal is rejected,
+    // not silently accepted. Payload bytes are NOT compared (§5 payload-equality deferral).
+
+    // (a) Cancel replay with the SAME target_invocation_id PASSES (no mismatch); the journaled
+    // SendSignalCommand is consumed from the queue and replay drains to Processing.
+    [Fact(Timeout = WatchdogMs)]
+    public async Task CancelInvocationReplay_SameTarget_Passes()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand,
+                ProtobufCodec.CreateCancelInvocationCommand("inv-target").ToByteArray()));
+
+        await AwaitBounded(rig.StateMachine.CancelInvocationAsync("inv-target", CancellationToken.None).AsTask());
+
+        Assert.False(rig.StateMachine.IsReplaying);   // command dequeued → Processing, no duplicate on wire
+        await AwaitBounded(rig.StateMachine.CompleteAsync(null, CancellationToken.None));
+        var frames = await DrainOutboundAsync(rig);
+        Assert.DoesNotContain(frames, f => f.Header.Type == MessageType.SendSignalCommand);
+    }
+
+    // (b) Cancel replay with a DIFFERENT target_invocation_id throws the journal-mismatch
+    // ProtocolException (was silently accepted before the fix — only type/entry_name were checked).
+    [Fact(Timeout = WatchdogMs)]
+    public async Task CancelInvocationReplay_DifferentTarget_Throws()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand,
+                ProtobufCodec.CreateCancelInvocationCommand("inv-original").ToByteArray()));
+
+        var ex = await Assert.ThrowsAsync<ProtocolException>(() =>
+            AwaitBounded(rig.StateMachine.CancelInvocationAsync("inv-different", CancellationToken.None).AsTask()));
+        Assert.Contains("Command mismatch", ex.Message);
+        Assert.Contains("signal target", ex.Message);
+    }
+
+    // (c-pass) Named-signal replay with the SAME target AND signal NAME PASSES.
+    [Fact(Timeout = WatchdogMs)]
+    public async Task NamedSignalReplay_SameTargetAndName_Passes()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand, ProtobufCodec
+                .CreateSendNamedSignalSuccess("inv-target", "approve", Json("ok")).ToByteArray()));
+
+        await AwaitBounded(rig.StateMachine.SendSignalAsync(
+            "inv-target", "approve", Json("ok"), CancellationToken.None).AsTask());
+
+        Assert.False(rig.StateMachine.IsReplaying);
+        await AwaitBounded(rig.StateMachine.CompleteAsync(null, CancellationToken.None));
+        var frames = await DrainOutboundAsync(rig);
+        Assert.DoesNotContain(frames, f => f.Header.Type == MessageType.SendSignalCommand);
+    }
+
+    // (c) Named-signal replay with a DIFFERENT signal NAME throws the journal-mismatch
+    // ProtocolException (signal_id oneof divergence — the name part of command_header_eq).
+    [Fact(Timeout = WatchdogMs)]
+    public async Task NamedSignalReplay_DifferentName_Throws()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand, ProtobufCodec
+                .CreateSendNamedSignalSuccess("inv-target", "approve", Json("ok")).ToByteArray()));
+
+        var ex = await Assert.ThrowsAsync<ProtocolException>(() =>
+            AwaitBounded(rig.StateMachine.SendSignalAsync(
+                "inv-target", "reject", Json("ok"), CancellationToken.None).AsTask()));
+        Assert.Contains("Command mismatch", ex.Message);
+        Assert.Contains("approve", ex.Message);   // the journaled signal name surfaces in the diagnostic
+    }
+
+    // (c-target) Named-signal replay with a DIFFERENT target_invocation_id (same name) throws — proves
+    // target divergence is caught independently of the signal name.
+    [Fact(Timeout = WatchdogMs)]
+    public async Task NamedSignalReplay_DifferentTarget_Throws()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand, ProtobufCodec
+                .CreateSendNamedSignalSuccess("inv-original", "approve", Json("ok")).ToByteArray()));
+
+        var ex = await Assert.ThrowsAsync<ProtocolException>(() =>
+            AwaitBounded(rig.StateMachine.SendSignalAsync(
+                "inv-different", "approve", Json("ok"), CancellationToken.None).AsTask()));
+        Assert.Contains("Command mismatch", ex.Message);
+        Assert.Contains("signal target", ex.Message);
+    }
+
+    // (c-cross) A journaled CANCEL (idx variant) replayed against a live NAMED signal send diverges on
+    // signal_id (idx-vs-name): the same target but mismatched oneof variant must throw. Pins that the
+    // idx/name discriminant — not just the target — participates in the comparison.
+    [Fact(Timeout = WatchdogMs)]
+    public async Task SignalReplay_IdxJournaledButNamedSent_Throws()
+    {
+        using var rig = new StateMachineRig();
+        await StartReplayAsync(rig, knownEntries: 2,
+            (MessageType.SendSignalCommand,
+                ProtobufCodec.CreateCancelInvocationCommand("inv-target").ToByteArray()));
+
+        var ex = await Assert.ThrowsAsync<ProtocolException>(() =>
+            AwaitBounded(rig.StateMachine.SendSignalAsync(
+                "inv-target", "approve", Json("ok"), CancellationToken.None).AsTask()));
+        Assert.Contains("Command mismatch", ex.Message);
+    }
+
+    // §4.1.17c — Journal-level SendSignal overload (direct, no SM): a matching idx-variant signal
+    // passes and is returned; a target divergence and a signal-idx divergence each throw. Exercises the
+    // new DequeueReplay(type, target, idx?, name?) branches without driving the full state machine.
+    [Fact]
+    public void JournalSendSignal_MatchingIdx_Passes_DivergenceThrows()
+    {
+        var journal = new InvocationJournal();
+        journal.Initialize(2);
+        journal.EnqueueReplay(new ReplayCommand
+        {
+            MessageType = MessageType.SendSignalCommand,
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x",
+            SignalIdx = 1
+        });
+
+        // Match: same target + same idx, no name → returns the command.
+        var ok = journal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", 1u, null);
+        Assert.Equal("inv-x", ok.SignalTargetInvocationId);
+
+        // Fresh journal: target divergence throws.
+        var targetJournal = new InvocationJournal();
+        targetJournal.Initialize(2);
+        targetJournal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x",
+            SignalIdx = 1
+        });
+        var targetEx = Assert.Throws<ProtocolException>(() =>
+            targetJournal.DequeueReplay(JournalEntryType.SendSignal, "inv-y", 1u, null));
+        Assert.Contains("signal target", targetEx.Message);
+
+        // Fresh journal: idx divergence throws (idx 1 journaled, idx 2 expected).
+        var idxJournal = new InvocationJournal();
+        idxJournal.Initialize(2);
+        idxJournal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x",
+            SignalIdx = 1
+        });
+        var idxEx = Assert.Throws<ProtocolException>(() =>
+            idxJournal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", 2u, null));
+        Assert.Contains("Command mismatch", idxEx.Message);
+    }
+
+    // §4.1.17d — Journal-level NAME-variant overload branches: a full name match passes (target + name
+    // equal, idx null on both → falls through every || clause and returns); a name-only divergence
+    // (target + idx equal, NAME differs) throws and surfaces the journaled name. Covers the third ||
+    // clause (name compare) in both its pass-through and throw arms plus the FormatSignalId name path.
+    [Fact]
+    public void JournalSendSignal_NameVariant_MatchPasses_NameDivergenceThrows()
+    {
+        var matchJournal = new InvocationJournal();
+        matchJournal.Initialize(2);
+        matchJournal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x",
+            SignalName = "approve"
+        });
+        var ok = matchJournal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", null, "approve");
+        Assert.Equal("approve", ok.SignalName);
+
+        var nameJournal = new InvocationJournal();
+        nameJournal.Initialize(2);
+        nameJournal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x",
+            SignalName = "approve"
+        });
+        var nameEx = Assert.Throws<ProtocolException>(() =>
+            nameJournal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", null, "reject"));
+        Assert.Contains("approve", nameEx.Message);   // journaled name rendered via FormatSignalId name path
+    }
+
+    // §4.1.17e — FormatSignalId <empty> arm: a journaled SendSignal carrying NEITHER idx NOR name
+    // (signal_id oneof unset, e.g. a corrupt/foreign journal) diverges from an idx-expected live cancel.
+    // The diagnostic renders the journaled id as "<empty>" — covering the idx?.ToString() ?? "<empty>"
+    // null arm of FormatSignalId.
+    [Fact]
+    public void JournalSendSignal_EmptySignalId_RendersEmptyInDiagnostic()
+    {
+        var journal = new InvocationJournal();
+        journal.Initialize(2);
+        journal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = "inv-x"
+            // neither SignalIdx nor SignalName set → both null
+        });
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", 1u, null));
+        Assert.Contains("<empty>", ex.Message);   // journaled signal id rendered as <empty>
+    }
+
+    // §4.1.17f — Null-target normalization: a journaled SendSignal with a NULL SignalTargetInvocationId
+    // (corrupt/foreign journal) normalizes to "" and diverges from a non-empty expected target → throws.
+    // Covers the null arm of `command.SignalTargetInvocationId ?? ""` in the target compare.
+    [Fact]
+    public void JournalSendSignal_NullJournaledTarget_NormalizesAndThrows()
+    {
+        var journal = new InvocationJournal();
+        journal.Initialize(2);
+        journal.EnqueueReplay(new ReplayCommand
+        {
+            EntryType = JournalEntryType.SendSignal,
+            SignalTargetInvocationId = null,
+            SignalIdx = 1
+        });
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.SendSignal, "inv-x", 1u, null));
+        Assert.Contains("Command mismatch", ex.Message);
+    }
+
     // §4.1.18 — Notifications-only batch (ZERO non-input commands). Start{known_entries=2} + Input +
     // one CompletionNotification → StartAsync lands in Processing; the notification parks as an
     // early-completion slot and the first matching live op consumes it without a wire wait.

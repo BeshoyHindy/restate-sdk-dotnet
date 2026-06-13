@@ -995,7 +995,9 @@ internal sealed partial class InvocationStateMachine
             ThrowIfClosedLocked();
             if (State == InvocationState.Replaying)
             {
-                DequeueReplayCommand(JournalEntryType.SendSignal);
+                // Cancel = CANCEL built-in idx (signal_id = Idx oneof); no signal name.
+                DequeueReplayCommand(JournalEntryType.SendSignal,
+                    targetInvocationId, ProtobufCodec.CancelSignalId, expectedSignalName: null);
                 return;
             }
 
@@ -1028,7 +1030,9 @@ internal sealed partial class InvocationStateMachine
             ThrowIfClosedLocked();
             if (State == InvocationState.Replaying)
             {
-                DequeueReplayCommand(JournalEntryType.SendSignal);
+                // Named signal = Name oneof (signal_id); no idx. Payload bytes are NOT compared (§5).
+                DequeueReplayCommand(JournalEntryType.SendSignal,
+                    targetInvocationId, expectedSignalIdx: null, name);
                 return;
             }
 

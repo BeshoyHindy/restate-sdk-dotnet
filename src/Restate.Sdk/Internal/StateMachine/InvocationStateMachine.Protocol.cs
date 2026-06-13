@@ -294,6 +294,23 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
+    ///     SendSignal replay-pop with target_invocation_id + signal-identity validation (cancel idx,
+    ///     or named-signal name). Caller MUST hold _commandLock.
+    /// </summary>
+    private ReplayCommand DequeueReplayCommand(JournalEntryType expectedType,
+        string expectedTarget, uint? expectedSignalIdx, string? expectedSignalName)
+    {
+        var command = _journal.DequeueReplay(expectedType, expectedTarget, expectedSignalIdx, expectedSignalName);
+        if (!_journal.IsReplaying)
+        {
+            State = InvocationState.Processing;
+            Log.ReplayCompleted(Logger, InvocationId);
+        }
+
+        return command;
+    }
+
+    /// <summary>
     ///     Non-determinism check: a replayed command's wire id must equal the locally re-allocated
     ///     one (counters advance identically across attempts). STRICT: every completable V4 command
     ///     carries an id &gt;= 1 — counters start at 1 precisely so 0 means field-unset

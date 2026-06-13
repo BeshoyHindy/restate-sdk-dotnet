@@ -91,4 +91,33 @@ internal sealed class InvocationJournal
                 $"expected '{expectedService}/{expectedHandler}' key '{expectedKey}'");
         return command;
     }
+
+    /// <summary>
+    ///     SendSignal replay validation — type PLUS target_invocation_id and the signal_id identity
+    ///     (the CANCEL/named idx, or the signal name), so a non-deterministic handler that on replay
+    ///     cancels a DIFFERENT target or sends a DIFFERENT named signal than was journaled fails loudly
+    ///     instead of being silently accepted. Mirrors the Call target-triple overload and Rust's
+    ///     SendSignalCommand command_header_eq (target_invocation_id + signal_id; messages.rs:622-654).
+    ///     SendSignal carries an always-empty entry_name, so name is validated by the base overload as ""
+    ///     (<paramref name="expectedSignalName" /> null = the IDX variant). Payload bytes are NOT
+    ///     compared — parity with the documented §5 payload-equality deferral.
+    /// </summary>
+    public ReplayCommand DequeueReplay(JournalEntryType expectedType,
+        string expectedTarget, uint? expectedSignalIdx, string? expectedSignalName)
+    {
+        var command = DequeueReplay(expectedType);
+        if (!string.Equals(command.SignalTargetInvocationId ?? "", expectedTarget, StringComparison.Ordinal)
+            || command.SignalIdx != expectedSignalIdx
+            || !string.Equals(command.SignalName ?? "", expectedSignalName ?? "", StringComparison.Ordinal))
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count - 1}: replayed signal target " +
+                $"'{command.SignalTargetInvocationId}' id '{FormatSignalId(command.SignalIdx, command.SignalName)}', " +
+                $"expected '{expectedTarget}' id '{FormatSignalId(expectedSignalIdx, expectedSignalName)}'");
+        return command;
+    }
+
+    /// <summary>Renders the signal_id oneof for mismatch diagnostics — idx number or signal name.</summary>
+    private static string FormatSignalId(uint? idx, string? name) =>
+        name is not null ? name
+            : idx?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<empty>";
 }

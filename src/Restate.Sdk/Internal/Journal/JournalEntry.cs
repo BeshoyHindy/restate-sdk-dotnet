@@ -63,6 +63,19 @@ internal readonly struct ReplayCommand
     public string? TargetHandler { get; init; }
     public string? TargetKey { get; init; }
 
+    /// <summary>
+    ///     SendSignalCommand target + signal identity (target_invocation_id field 1; signal_id oneof:
+    ///     idx field 2 / name field 3) — replay-validated against the live cancel/named-signal so a
+    ///     non-deterministic handler that on replay cancels a DIFFERENT target, or sends a DIFFERENT
+    ///     named signal, fails loudly instead of being silently accepted (the Rust SendSignalCommand
+    ///     command_header_eq compares target_invocation_id + signal_id; see messages.rs:622-654).
+    ///     <see cref="SignalName" /> is set for the NAME variant; <see cref="SignalIdx" /> for the IDX
+    ///     variant (CANCEL = idx 1). Exactly one is non-null on a parsed SendSignal command.
+    /// </summary>
+    public string? SignalTargetInvocationId { get; init; }
+    public uint? SignalIdx { get; init; }
+    public string? SignalName { get; init; }
+
     /// <summary>GetEagerStateCommand / GetEagerStateKeysCommand carry the result inline.</summary>
     public bool HasEagerResult { get; init; }
     public bool EagerIsVoid { get; init; }

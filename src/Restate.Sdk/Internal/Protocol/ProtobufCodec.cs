@@ -191,11 +191,17 @@ internal static class ProtobufCodec
             case MessageType.SendSignalCommand:
                 {
                     var m = Gen.SendSignalCommandMessage.Parser.ParseFrom(payload);
+                    // signal_id oneof (idx field 2 / name field 3) — exactly one variant per the proto,
+                    // mirrored into ReplayCommand for the replay target/signal-identity check below.
+                    var hasName = m.SignalIdCase == Gen.SendSignalCommandMessage.SignalIdOneofCase.Name;
                     return new ReplayCommand
                     {
                         MessageType = type,
                         EntryType = JournalEntryType.SendSignal,
-                        Name = m.EntryName                                         // entry_name, proto field 12
+                        Name = m.EntryName,                                        // entry_name, proto field 12
+                        SignalTargetInvocationId = m.TargetInvocationId,           // target_invocation_id, field 1
+                        SignalIdx = hasName ? null : m.Idx,
+                        SignalName = hasName ? m.Name : null
                     };
                 }
             case MessageType.RunCommand:
