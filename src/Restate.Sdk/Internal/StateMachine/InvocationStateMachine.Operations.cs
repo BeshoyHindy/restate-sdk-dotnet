@@ -268,6 +268,35 @@ internal sealed partial class InvocationStateMachine
     private void WriteRunProposal(uint completionId, ReadOnlySpan<byte> serialized) =>
         WriteCommand(MessageType.ProposeRunCompletion, ProtobufCodec.CreateRunProposal(completionId, serialized));
 
+    /// <summary>
+    ///     Observes a fire-and-forget prefix flush issued from a SYNCHRONOUS future-creating method
+    ///     (which cannot await it) and routes any flush fault into the future's completion slot via
+    ///     TryFail, so the failure surfaces through the future's await path rather than being lost on
+    ///     a discarded ValueTask. The fast path (flush already completed synchronously, e.g. the pipe
+    ///     had buffer capacity) costs nothing. A success leaves the slot untouched — the real
+    ///     notification resolves it. (Issue 1 hardening: surface, don't swallow, prefix-flush faults.)
+    /// </summary>
+    private void ObserveFlushFault(ValueTask flush, uint completionId)
+    {
+        if (flush.IsCompletedSuccessfully) return;
+        _ = RouteFlushFaultAsync(flush, completionId);
+    }
+
+    private async Task RouteFlushFaultAsync(ValueTask flush, uint completionId)
+    {
+        try
+        {
+            await flush.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Same containment as the detached-execute catch: a write/flush failure (NOT a
+            // TerminalException, which travels via the proposal) faults the slot so the future's
+            // awaiter observes it and nothing goes unobserved.
+            _completions.TryFail((int)completionId, 500, ex.Message);
+        }
+    }
+
     // ------- Non-blocking Run (RunFuture) -------
 
     /// <summary>
@@ -281,8 +310,14 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
         var (completionId, executesLocally, _) = RunPrefix(name);
 
-        // Flush the prefix before user code proceeds (matches the blocking path); cheap.
-        _ = FlushGatedAsync(ct);
+        // Flush the prefix before user code proceeds (matches the blocking path). RunFutureAsync is
+        // SYNCHRONOUS (it returns a resolve thunk, so it cannot await the flush). We therefore OBSERVE
+        // the discarded flush ValueTask's fault and route any exception into THIS run's completion
+        // slot, so a flush failure surfaces through the future's await path (completion.ThrowIfFailure
+        // after AwaitNotificationAsync) instead of being silently swallowed by a discarded ValueTask.
+        // This is the same infrastructure-failure containment the detached-execute catch below uses,
+        // and it keeps wire order and the synchronous return intact (Issue 1 hardening).
+        ObserveFlushFault(FlushGatedAsync(ct), completionId);
 
         if (executesLocally)
         {
@@ -495,7 +530,11 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask SleepAsync(TimeSpan duration, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SleepPrefix(duration, ct);
+        var (completionId, needsFlush) = SleepPrefix(duration);
+        // Issue 2 hardening: SleepAsync is already async, so AWAIT the prefix flush BEFORE parking.
+        // A flush fault now surfaces here instead of being masked by the subsequent park (where the
+        // discarded fire-and-forget flush would have left the failure unobserved).
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
     }
@@ -503,11 +542,20 @@ internal sealed partial class InvocationStateMachine
     public Func<ValueTask<CompletionResult>> SleepFutureAsync(TimeSpan duration, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SleepPrefix(duration, ct);
+        var (completionId, needsFlush) = SleepPrefix(duration);
+        // SleepFutureAsync is SYNCHRONOUS (returns a resolve thunk) so it cannot await the flush;
+        // observe the flush ValueTask's fault and route it into the slot, mirroring RunFutureAsync.
+        if (needsFlush) ObserveFlushFault(FlushGatedAsync(ct), completionId);
         return () => AwaitNotificationAsync(completionId, NotificationKind.Completion);
     }
 
-    private uint SleepPrefix(TimeSpan duration, CancellationToken ct)
+    /// <summary>
+    ///     Sleep locked prefix. Allocates the deterministic completion id in both branches; replay
+    ///     dequeues+validates, processing writes+records. Returns the id and whether a live flush is
+    ///     owed (Processing only) so the async caller can AWAIT it before parking and a sync
+    ///     future-creating caller can observe its fault.
+    /// </summary>
+    private (uint CompletionId, bool NeedsFlush) SleepPrefix(TimeSpan duration)
     {
         uint completionId;
         bool replaying;
@@ -529,8 +577,7 @@ internal sealed partial class InvocationStateMachine
             }
         }
 
-        if (!replaying) _ = FlushGatedAsync(ct);
-        return completionId;
+        return (completionId, !replaying);
     }
 
     // ------- Attach / GetInvocationOutput -------
@@ -538,8 +585,9 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<TResponse> AttachInvocationAsync<TResponse>(string invocationId, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SimpleCompletablePrefix(JournalEntryType.AttachInvocation,
-            id => ProtobufCodec.CreateAttachInvocationCommand(invocationId, id), MessageType.AttachInvocationCommand, ct);
+        var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.AttachInvocation,
+            id => ProtobufCodec.CreateAttachInvocationCommand(invocationId, id), MessageType.AttachInvocationCommand);
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
@@ -548,9 +596,10 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<TResponse?> GetInvocationOutputAsync<TResponse>(string invocationId, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SimpleCompletablePrefix(JournalEntryType.GetInvocationOutput,
+        var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.GetInvocationOutput,
             id => ProtobufCodec.CreateGetInvocationOutputCommand(invocationId, id),
-            MessageType.GetInvocationOutputCommand, ct);
+            MessageType.GetInvocationOutputCommand);
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
         // Void/empty completion means not yet completed — return default
@@ -560,10 +609,13 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Template A locked prefix for completable ops whose only parameters are a key/id and the
     ///     completion id (Attach, GetInvocationOutput, GetPromise, PeekPromise). Allocates the id in
-    ///     BOTH branches; replay dequeues+validates, processing writes+records+flushes.
+    ///     BOTH branches; replay dequeues+validates, processing writes+records. Returns the id and
+    ///     whether a live flush is owed (Processing only); every caller is already async and AWAITS
+    ///     that flush before parking, so a flush fault surfaces instead of being masked by the park
+    ///     (Issue 2 hardening).
     /// </summary>
-    private uint SimpleCompletablePrefix(JournalEntryType type,
-        Func<uint, Google.Protobuf.IMessage> create, MessageType wireType, CancellationToken ct, string? name = null)
+    private (uint CompletionId, bool NeedsFlush) SimpleCompletablePrefix(JournalEntryType type,
+        Func<uint, Google.Protobuf.IMessage> create, MessageType wireType, string? name = null)
     {
         uint completionId;
         bool replaying;
@@ -584,8 +636,7 @@ internal sealed partial class InvocationStateMachine
             }
         }
 
-        if (!replaying) _ = FlushGatedAsync(ct);
-        return completionId;
+        return (completionId, !replaying);
     }
 
     // ------- State -------
@@ -829,8 +880,9 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<T> GetPromiseAsync<T>(string name, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SimpleCompletablePrefix(JournalEntryType.GetPromise,
-            id => ProtobufCodec.CreateGetPromiseCommand(name, id), MessageType.GetPromiseCommand, ct, name);
+        var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.GetPromise,
+            id => ProtobufCodec.CreateGetPromiseCommand(name, id), MessageType.GetPromiseCommand, name);
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<T>(completion.Value);
@@ -839,8 +891,9 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<T?> PeekPromiseAsync<T>(string name, CancellationToken ct)
     {
         EnsureActive();
-        var completionId = SimpleCompletablePrefix(JournalEntryType.PeekPromise,
-            id => ProtobufCodec.CreatePeekPromiseCommand(name, id), MessageType.PeekPromiseCommand, ct, name);
+        var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.PeekPromise,
+            id => ProtobufCodec.CreatePeekPromiseCommand(name, id), MessageType.PeekPromiseCommand, name);
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return completion.Value.IsEmpty ? default : Deserialize<T>(completion.Value);
