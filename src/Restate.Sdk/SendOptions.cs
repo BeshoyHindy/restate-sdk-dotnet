@@ -26,6 +26,15 @@ public readonly record struct SendOptions
     /// </summary>
     public string? Name { get; init; }
 
+    /// <summary>
+    ///     Per-op payload serialization options for the send request parameter (shared-core
+    ///     <c>sys_send</c> PayloadOptions, mapped onto <c>OneWayCallCommandMessage.parameter</c>; the
+    ///     replay byte-compare arm is messages.rs:207 <c>ignore_payload_equality || self.parameter ==
+    ///     other.parameter</c>). Only consulted under global <see cref="Hosting.PayloadReplayChecks.Strict" />;
+    ///     set <see cref="PayloadOptions.Unstable" /> to skip the request-bytes compare for this send.
+    /// </summary>
+    public PayloadOptions Payload { get; init; }
+
     /// <inheritdoc cref="Delay" />
     public static SendOptions AfterDelay(TimeSpan delay)
     {
@@ -48,5 +57,11 @@ public readonly record struct SendOptions
     public static SendOptions WithName(string name)
     {
         return new SendOptions { Name = name };
+    }
+
+    /// <inheritdoc cref="Payload" />
+    public static SendOptions WithPayloadOptions(PayloadOptions payload)
+    {
+        return new SendOptions { Payload = payload };
     }
 }

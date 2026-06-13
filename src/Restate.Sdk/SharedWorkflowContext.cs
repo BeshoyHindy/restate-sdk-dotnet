@@ -12,6 +12,15 @@ public abstract class SharedWorkflowContext : SharedObjectContext, ISharedWorkfl
     /// <summary>Resolves a workflow promise with a payload, awaiting the runtime acknowledgement.</summary>
     public abstract ValueTask ResolvePromise<T>(string name, T payload);
 
+    /// <summary>
+    ///     Resolves a workflow promise with per-op <see cref="PayloadOptions" /> (G19). The default body
+    ///     drops the options and delegates to <see cref="ResolvePromise{T}(string, T)" /> so existing
+    ///     implementations keep working; the durable runtime context overrides this to honor the per-op
+    ///     unstable opt-out under global <see cref="Hosting.PayloadReplayChecks.Strict" /> mode.
+    /// </summary>
+    public virtual ValueTask ResolvePromise<T>(string name, T value, PayloadOptions payload) =>
+        ResolvePromise(name, value);
+
     /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
     public abstract ValueTask RejectPromise(string name, string reason);
 

@@ -25,6 +25,7 @@ public sealed class RestateHostBuilder
 {
     private readonly List<Type> _serviceTypes = [];
     private int _port = 9080;
+    private PayloadReplayChecks _payloadReplayChecks = PayloadReplayChecks.Disabled;
 
     internal RestateHostBuilder()
     {
@@ -63,6 +64,18 @@ public sealed class RestateHostBuilder
     }
 
     /// <summary>
+    ///     G13 — opts into <see cref="PayloadReplayChecks.Strict" /> replay payload byte-equality checks
+    ///     for this endpoint. Default is <see cref="PayloadReplayChecks.Disabled" />. Only safe for handlers
+    ///     whose payloads serialize to byte-stable output; see <see cref="PayloadReplayChecks" /> for the
+    ///     dictionary/hashset caveat.
+    /// </summary>
+    public RestateHostBuilder WithStrictPayloadChecks()
+    {
+        _payloadReplayChecks = PayloadReplayChecks.Strict;
+        return this;
+    }
+
+    /// <summary>
     ///     Builds a <see cref="WebApplication" /> with Restate routes mapped.
     /// </summary>
     [RequiresUnreferencedCode("Build uses reflection-based DI and JSON serialization.")]
@@ -73,10 +86,12 @@ public sealed class RestateHostBuilder
         builder.WebHost.ConfigureRestate(_port);
 
         var types = _serviceTypes;
+        var payloadReplayChecks = _payloadReplayChecks;
         builder.Services.AddRestate(opts =>
         {
             foreach (var type in types)
                 opts.ServiceTypes.Add(type);
+            opts.PayloadReplayChecks = payloadReplayChecks;
         });
 
         var app = builder.Build();

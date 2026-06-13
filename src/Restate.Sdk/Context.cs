@@ -171,6 +171,15 @@ public abstract class Context : IContext
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     public abstract void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);
 
+    /// <summary>
+    ///     Resolves an awakeable with per-op <see cref="PayloadOptions" /> (G19). The default body drops the
+    ///     options and delegates to <see cref="ResolveAwakeable{T}(string, T, ISerde{T})" /> so existing
+    ///     implementations keep working; the durable runtime context overrides this to honor the per-op
+    ///     unstable opt-out under global <see cref="Hosting.PayloadReplayChecks.Strict" /> mode.
+    /// </summary>
+    public virtual void ResolveAwakeable<T>(string id, T payload, PayloadOptions options, ISerde<T>? serde = null) =>
+        ResolveAwakeable(id, payload, serde);
+
     /// <summary>Rejects a previously created awakeable with a failure reason.</summary>
     public abstract void RejectAwakeable(string id, string reason);
 

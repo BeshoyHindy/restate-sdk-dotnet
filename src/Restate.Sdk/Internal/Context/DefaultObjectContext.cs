@@ -32,6 +32,11 @@ internal sealed class DefaultObjectContext : ObjectContext
         _sm.SetState(key.Name, value);
     }
 
+    public override void Set<T>(StateKey<T> key, T value, PayloadOptions payload)
+    {
+        _sm.SetState(key.Name, value, payload);
+    }
+
     public override void Clear(string key)
     {
         _sm.ClearState(key);

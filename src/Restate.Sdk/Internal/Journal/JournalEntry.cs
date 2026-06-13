@@ -155,4 +155,20 @@ internal readonly struct ReplayCommand
 
     /// <summary>Eager value bytes; for GetEagerStateKeys this is the keys re-encoded as JSON string[].</summary>
     public ReadOnlyMemory<byte> EagerValue { get; init; }
+
+    /// <summary>
+    ///     G13 — the journaled command's serialized PAYLOAD bytes, for the strict replay byte-equality
+    ///     check. Populated by ParseReplayCommand ONLY for the payload-bearing commands and ONLY when the
+    ///     command actually carried a value (the <c>Value</c> arm of each result/completion oneof):
+    ///     SetState (value), Call/OneWayCall (request parameter), CompletePromise (CompletionValue),
+    ///     CompleteAwakeable (Value), Output (result Value). The Failure/Void arms set
+    ///     <see cref="HasPayloadValue" /> = false so the existing full structural eq still governs them —
+    ///     parity with Rust's <c>match (Some(Value), Some(Value)) =&gt; true</c> which short-circuits ONLY
+    ///     the Value/Value case (messages.rs:90-95/112-114/164-168/240-244). Consulted only under global
+    ///     strict mode; in the default Disabled mode these bytes are never compared.
+    /// </summary>
+    public bool HasPayloadValue { get; init; }
+
+    /// <inheritdoc cref="HasPayloadValue" />
+    public ReadOnlyMemory<byte> PayloadValue { get; init; }
 }

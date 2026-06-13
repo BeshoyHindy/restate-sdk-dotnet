@@ -758,6 +758,75 @@ public sealed class ContextSurfaceTests : IDisposable
         await AwaitBounded(pump);
     }
 
+    // ---- G19/G31 — per-op PayloadOptions overrides on the durable contexts -------------------
+    // The new context overrides forward the PayloadOptions to the SM; in the default Disabled mode the
+    // options are inert, so the processing path behaves identically — these tests pin the override
+    // delegation (not the strict compare, which is covered at the SM level by ParityPayloadChecksTests).
+
+    [Fact]
+    public void ObjectContext_Set_WithPayloadOptions_Delegates()
+    {
+        var eager = new Dictionary<string, ReadOnlyMemory<byte>?>();
+        InitProcessing(key: "the-key", eagerState: eager, partialState: false);
+        var ctx = new DefaultObjectContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        // The PayloadOptions overload reaches _sm.SetState(key, value, payload); Unstable is inert under
+        // the default Disabled mode but the override line is exercised.
+        ctx.Set(new StateKey<int>("count"), 7, PayloadOptions.Unstable);
+        Assert.Equal(InvocationState.Processing, _rig.StateMachine.State);
+    }
+
+    [Fact]
+    public void WorkflowContext_Set_WithPayloadOptions_Delegates()
+    {
+        InitProcessing(key: "wf-key");
+        var ctx = new DefaultWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        ctx.Set(new StateKey<string>("w"), "x", PayloadOptions.Unstable);
+        Assert.Equal(InvocationState.Processing, _rig.StateMachine.State);
+    }
+
+    [Fact]
+    public void ServiceContext_ResolveAwakeable_WithPayloadOptions_Delegates()
+    {
+        InitProcessing();
+        var ctx = NewServiceContext();
+
+        // CompleteAwakeable is written synchronously (no park) on the processing path.
+        ctx.ResolveAwakeable("sign_1abc", "payload", PayloadOptions.Unstable);
+        Assert.Equal(InvocationState.Processing, _rig.StateMachine.State);
+    }
+
+    [Fact]
+    public async Task WorkflowContext_ResolvePromise_WithPayloadOptions_Delegates()
+    {
+        InitProcessing(key: "wf-key");
+        var pump = StartPump();
+        var ctx = new DefaultWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        var resolve = ctx.ResolvePromise("approval", "yes", PayloadOptions.Unstable);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(resolve);
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    [Fact]
+    public async Task SharedWorkflowContext_ResolvePromise_WithPayloadOptions_Delegates()
+    {
+        InitProcessing(key: "swf-key");
+        var pump = StartPump();
+        var ctx = new DefaultSharedWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
+
+        var resolve = ctx.ResolvePromise("p", "v", PayloadOptions.Unstable);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(resolve);
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
     // ---- Unkeyed Call / CallFuture overloads (object?-cast request forces the 3-arg overload) -
 
     [Fact]

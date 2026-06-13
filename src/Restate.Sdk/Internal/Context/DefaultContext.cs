@@ -126,28 +126,30 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         CallOptions options)
     {
         return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey,
-            options.Headers, options.Name, Aborted);
+            options.Headers, options.Name, Aborted, options.Payload.UnstableSerialization);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
         CallOptions options)
     {
         return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey,
-            options.Headers, options.Name, Aborted);
+            options.Headers, options.Name, Aborted, options.Payload.UnstableSerialization);
     }
 
     public override CallHandle<TResponse> CallHandle<TResponse>(string service, string handler, object? request = null,
         CallOptions? options = null)
     {
         return _stateMachine.CallHandleAsync<TResponse>(service, null, handler, request,
-            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted);
+            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted,
+            options?.Payload.UnstableSerialization ?? false);
     }
 
     public override CallHandle<TResponse> CallHandle<TResponse>(string service, string key, string handler,
         object? request, CallOptions? options = null)
     {
         return _stateMachine.CallHandleAsync<TResponse>(service, key, handler, request,
-            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted);
+            options?.IdempotencyKey, options?.Headers, options?.Name, Aborted,
+            options?.Payload.UnstableSerialization ?? false);
     }
 
     public override ValueTask CancelInvocation(string invocationId)
@@ -192,14 +194,14 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         SendOptions options)
     {
         return _stateMachine.SendAsync(service, null, handler, request, options.Delay, options.IdempotencyKey,
-            options.Headers, options.Name, Aborted);
+            options.Headers, options.Name, Aborted, options.Payload.UnstableSerialization);
     }
 
     public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
         SendOptions options)
     {
         return _stateMachine.SendAsync(service, key, handler, request, options.Delay, options.IdempotencyKey,
-            options.Headers, options.Name, Aborted);
+            options.Headers, options.Name, Aborted, options.Payload.UnstableSerialization);
     }
 
     public override TClient ServiceClient<TClient>()
@@ -326,6 +328,12 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     {
         var bytes = _stateMachine.SerializeWithSerde(payload, serde);
         _stateMachine.ResolveAwakeable(id, bytes);
+    }
+
+    public override void ResolveAwakeable<T>(string id, T payload, PayloadOptions options, ISerde<T>? serde = null)
+    {
+        var bytes = _stateMachine.SerializeWithSerde(payload, serde);
+        _stateMachine.ResolveAwakeable(id, bytes, options);
     }
 
     public override void RejectAwakeable(string id, string reason)

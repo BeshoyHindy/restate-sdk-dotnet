@@ -17,6 +17,16 @@ internal sealed class InvocationJournal
 {
     private readonly Queue<ReplayCommand> _replayCommands = new();
 
+    /// <summary>
+    ///     G13 — global strict payload byte-equality mode. <see langword="false" /> (the default) is the
+    ///     shared-core <c>NonDeterministicChecksOption::PayloadChecksDisabled</c> behavior: the journaled
+    ///     command's payload BYTES (state value, call request parameter, awakeable/promise/output value)
+    ///     are NOT compared on replay. <see langword="true" /> is <c>NonDeterministicChecksOption::Enabled</c>:
+    ///     the byte-compare runs (unless the per-op unstable flag is set). Set once from the SM before
+    ///     replay; lives inside the _commandLock domain like every other journal member (THREAD-SAFETY note).
+    /// </summary>
+    public bool StrictPayloadChecks { get; set; }
+
     /// <summary>StartMessage.known_entries — commands + notifications. Preflight loop bound + logging ONLY.</summary>
     public int KnownEntries { get; private set; }
 
@@ -190,4 +200,45 @@ internal sealed class InvocationJournal
     private static string FormatSignalId(uint? idx, string? name) =>
         name is not null ? name
             : idx?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<empty>";
+
+    /// <summary>
+    ///     G13 — strict replay payload byte-equality check. Byte-compares the journaled command's payload
+    ///     (<paramref name="command" />.<see cref="ReplayCommand.PayloadValue" />) against the live
+    ///     re-serialized bytes the handler just produced, throwing JOURNAL_MISMATCH (570) on divergence.
+    ///     <para>
+    ///         EFFECTIVE GATE: compare iff <c>StrictPayloadChecks &amp;&amp; !unstableThisOp &amp;&amp;
+    ///         command.HasPayloadValue</c>. This is the .NET inversion of Rust's
+    ///         <c>should_ignore_payload_equality(global_ignore, options) = global_ignore ||
+    ///         options.unstable_serialization</c> (journal.rs:32-34): Rust tracks "ignore" and skips when
+    ///         either is true; this SDK tracks "enabled" (the default is OFF), so by De Morgan the compare
+    ///         runs only when the global flag is ON (<c>StrictPayloadChecks</c>) AND the per-op opt-out is
+    ///         OFF (<c>!unstableThisOp</c>). The <c>HasPayloadValue</c> guard mirrors Rust's
+    ///         <c>match (Some(Value), Some(Value)) =&gt; true</c> short-circuit: only the Value/Value arm is
+    ///         byte-compared; Failure/Void arms (HasPayloadValue=false) keep the existing full structural eq.
+    ///     </para>
+    ///     <para>
+    ///         NO FALSE POSITIVE: both the journaled bytes and <paramref name="liveSerialized" /> are
+    ///         produced by the IDENTICAL Serialize() path, so a deterministic value round-trips
+    ///         byte-identical and passes. The known residual is System.Text.Json's unordered-collection
+    ///         (Dictionary/HashSet) key order — handled by DEFAULT OFF plus the per-op unstable opt-out;
+    ///         see <see cref="StrictPayloadChecks" /> and PayloadOptions.
+    ///     </para>
+    /// </summary>
+    public void CheckPayloadStrict(in ReplayCommand command, ReadOnlySpan<byte> liveSerialized, bool unstableThisOp)
+    {
+        if (!StrictPayloadChecks || unstableThisOp || !command.HasPayloadValue)
+            return;
+        if (!command.PayloadValue.Span.SequenceEqual(liveSerialized))
+            // A payload that re-serializes to DIFFERENT bytes on replay is a non-deterministic serializer —
+            // a recorded-vs-current command divergence → JOURNAL_MISMATCH (570), parity with Rust's
+            // CommandMismatchError when header_eq's parameter/value arm fails (errors.rs:396).
+            throw new ProtocolException(
+                $"Command payload mismatch at command index {CommandIndex}: the replayed " +
+                $"{LastCommandType} payload ({command.PayloadValue.Length} bytes) differs from the " +
+                $"re-serialized live payload ({liveSerialized.Length} bytes). The handler produced " +
+                "different payload bytes for this command across replays (non-deterministic serialization). " +
+                "If this op serializes an unordered Dictionary/HashSet via System.Text.Json, mark it " +
+                "PayloadOptions.Unstable or use a deterministic shape (SortedDictionary / ordered KeyValue array).",
+                ProtocolException.JournalMismatchCode);
+    }
 }

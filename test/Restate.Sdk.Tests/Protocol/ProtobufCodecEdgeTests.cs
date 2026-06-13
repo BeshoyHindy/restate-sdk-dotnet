@@ -127,6 +127,69 @@ public class ProtobufCodecEdgeTests
         if (key is not null) Assert.Equal(key, command.TargetKey);
     }
 
+    // ---- G13 payload-value capture: the Value-present and Value-absent arms of each oneof ----------
+    // ParseReplayCommand sets HasPayloadValue/PayloadValue for the payload-bearing commands. The table
+    // above covers the Value-PRESENT arm of SetState/Call/OneWayCall/CompletePromise/CompleteAwakeable;
+    // these pin the VALUE-ABSENT (Failure/Void/unset) arm of each oneof so the conditional's other branch
+    // is exercised (Internal.Protocol holds a 98% branch budget). Failure/unset ⇒ HasPayloadValue=false,
+    // matching Rust's `match (Some(Value), Some(Value)) => true` short-circuit (only Value/Value compares).
+
+    [Fact]
+    public void ParseReplayCommand_OutputWithValue_CapturesPayloadBytes()
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes("out");
+        var command = ProtobufCodec.ParseReplayCommand(
+            MessageType.OutputCommand, ProtobufCodec.CreateOutputCommand(bytes).ToByteArray());
+        Assert.True(command.HasPayloadValue);
+        Assert.Equal(bytes, command.PayloadValue.ToArray());
+    }
+
+    [Fact]
+    public void ParseReplayCommand_OutputFailure_HasNoPayloadValue()
+    {
+        var command = ProtobufCodec.ParseReplayCommand(
+            MessageType.OutputCommand, ProtobufCodec.CreateOutputFailure(500, "boom").ToByteArray());
+        Assert.False(command.HasPayloadValue);
+    }
+
+    [Fact]
+    public void ParseReplayCommand_SetStateWithoutValue_HasNoPayloadValue()
+    {
+        // A SetStateCommand with the `value` message field UNSET (defensive: a conformant SDK always
+        // sets it) ⇒ HasPayloadValue=false. Drives the `value is null` arm of the conditional.
+        var msg = new Gen.SetStateCommandMessage { Key = ByteString.CopyFromUtf8("k") };
+        Assert.Null(msg.Value);
+        var command = ProtobufCodec.ParseReplayCommand(MessageType.SetStateCommand, msg.ToByteArray());
+        Assert.False(command.HasPayloadValue);
+    }
+
+    [Fact]
+    public void ParseReplayCommand_CompletePromiseFailure_HasNoPayloadValue()
+    {
+        var command = ProtobufCodec.ParseReplayCommand(MessageType.CompletePromiseCommand,
+            ProtobufCodec.CreateCompletePromiseFailure("p", 500, "denied", 1).ToByteArray());
+        Assert.False(command.HasPayloadValue);
+    }
+
+    [Fact]
+    public void ParseReplayCommand_CompleteAwakeableFailure_HasNoPayloadValue()
+    {
+        var command = ProtobufCodec.ParseReplayCommand(MessageType.CompleteAwakeableCommand,
+            ProtobufCodec.CreateCompleteAwakeableFailure("sign_1", 500, "boom").ToByteArray());
+        Assert.False(command.HasPayloadValue);
+    }
+
+    [Fact]
+    public void ParseReplayCommand_CallParameter_CapturesPayloadBytes()
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes("param");
+        var command = ProtobufCodec.ParseReplayCommand(MessageType.CallCommand,
+            ProtobufCodec.CreateCallCommand("Svc", "H", "key", bytes, 2, 1).ToByteArray());
+        // Call.parameter is unconditionally a candidate (HasPayloadValue always true), parity with Rust.
+        Assert.True(command.HasPayloadValue);
+        Assert.Equal(bytes, command.PayloadValue.ToArray());
+    }
+
     [Fact]
     public void ParseReplayCommand_UnknownCommandType_Throws()
     {

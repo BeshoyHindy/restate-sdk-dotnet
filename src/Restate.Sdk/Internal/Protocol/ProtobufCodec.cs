@@ -80,7 +80,20 @@ internal static class ProtobufCodec
         switch (type)
         {
             case MessageType.OutputCommand:
-                return new ReplayCommand { MessageType = type, EntryType = JournalEntryType.Output };
+                {
+                    // Extended for G13: carry the result VALUE bytes for the strict replay byte-compare.
+                    // Only the Value arm carries bytes; the Failure arm leaves HasPayloadValue false so the
+                    // existing structural path governs it (messages.rs:90-95 short-circuits only Value/Value).
+                    var m = Gen.OutputCommandMessage.Parser.ParseFrom(payload);
+                    var hasValue = m.ResultCase == Gen.OutputCommandMessage.ResultOneofCase.Value;
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.Output,
+                        HasPayloadValue = hasValue,
+                        PayloadValue = hasValue ? m.Value.Content.Memory : ReadOnlyMemory<byte>.Empty
+                    };
+                }
             case MessageType.GetLazyStateCommand:
                 {
                     var m = Gen.GetLazyStateCommandMessage.Parser.ParseFrom(payload);
@@ -134,11 +147,16 @@ internal static class ProtobufCodec
             case MessageType.SetStateCommand:
                 {
                     var m = Gen.SetStateCommandMessage.Parser.ParseFrom(payload);
+                    // G13: SetState.value is a plain message field (not a oneof) — present when set, null
+                    // when unset. A conformant SetState always sets a value, but guard for null defensively.
+                    var value = m.Value;
                     return new ReplayCommand
                     {
                         MessageType = type,
                         EntryType = JournalEntryType.SetState,
-                        Name = m.Key.ToStringUtf8()
+                        Name = m.Key.ToStringUtf8(),
+                        HasPayloadValue = value is not null,
+                        PayloadValue = value is not null ? value.Content.Memory : ReadOnlyMemory<byte>.Empty
                     };
                 }
             case MessageType.ClearStateCommand:
@@ -180,7 +198,12 @@ internal static class ProtobufCodec
                         CallHeaders = ParseHeaders(m.Headers),
                         CallIdempotencyKey = m.HasIdempotencyKey ? m.IdempotencyKey : null,
                         ResultCompletionId = m.ResultCompletionId,
-                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
+                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx,
+                        // G13: Call.parameter is a plain ByteString (no Value/None oneof) — Rust compares it
+                        // UNCONDITIONALLY when not ignored (messages.rs:190 `... || self.parameter == ...`).
+                        // So it is always a candidate (empty parameter still byte-compares as empty bytes).
+                        HasPayloadValue = true,
+                        PayloadValue = m.Parameter.Memory
                     };
                 }
             case MessageType.OneWayCallCommand:
@@ -196,7 +219,10 @@ internal static class ProtobufCodec
                         TargetKey = m.Key,
                         CallHeaders = ParseHeaders(m.Headers),                     // field 5
                         CallIdempotencyKey = m.HasIdempotencyKey ? m.IdempotencyKey : null,  // field 7
-                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
+                        InvocationIdNotificationIdx = m.InvocationIdNotificationIdx,
+                        // G13: OneWayCall.parameter — same unconditional compare as Call (messages.rs:207).
+                        HasPayloadValue = true,
+                        PayloadValue = m.Parameter.Memory
                     };
                 }
             case MessageType.SendSignalCommand:
@@ -251,12 +277,17 @@ internal static class ProtobufCodec
             case MessageType.CompletePromiseCommand:
                 {
                     var m = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(payload);
+                    // G13: only the CompletionValue arm carries comparable bytes; CompletionFailure leaves
+                    // HasPayloadValue false (messages.rs:164-168 short-circuits only Value/Value).
+                    var hasValue = m.CompletionCase == Gen.CompletePromiseCommandMessage.CompletionOneofCase.CompletionValue;
                     return new ReplayCommand
                     {
                         MessageType = type,
                         EntryType = JournalEntryType.CompletePromise,
                         Name = m.Key,
-                        ResultCompletionId = m.ResultCompletionId
+                        ResultCompletionId = m.ResultCompletionId,
+                        HasPayloadValue = hasValue,
+                        PayloadValue = hasValue ? m.CompletionValue.Content.Memory : ReadOnlyMemory<byte>.Empty
                     };
                 }
             case MessageType.AttachInvocationCommand:
@@ -300,7 +331,19 @@ internal static class ProtobufCodec
                     };
                 }
             case MessageType.CompleteAwakeableCommand:
-                return new ReplayCommand { MessageType = type, EntryType = JournalEntryType.CompleteAwakeable };
+                {
+                    // Extended for G13: carry the Value-arm bytes; Failure arm leaves HasPayloadValue false
+                    // (messages.rs:240-244 short-circuits only Value/Value).
+                    var m = Gen.CompleteAwakeableCommandMessage.Parser.ParseFrom(payload);
+                    var hasValue = m.ResultCase == Gen.CompleteAwakeableCommandMessage.ResultOneofCase.Value;
+                    return new ReplayCommand
+                    {
+                        MessageType = type,
+                        EntryType = JournalEntryType.CompleteAwakeable,
+                        HasPayloadValue = hasValue,
+                        PayloadValue = hasValue ? m.Value.Content.Memory : ReadOnlyMemory<byte>.Empty
+                    };
+                }
             default:
                 throw new ProtocolException($"Unknown replayed command type: {type}");
         }

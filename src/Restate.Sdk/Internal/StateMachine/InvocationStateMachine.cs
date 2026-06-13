@@ -202,6 +202,14 @@ internal sealed partial class InvocationStateMachine : IDisposable
     // host overwrites it per request. Mirrors Context.negotiated_protocol_version (vm/mod.rs).
     public int NegotiatedProtocolVersion { get; set; } = ProtocolVersion.MaximumSupported;
 
+    // G13: global strict replay payload byte-equality mode (shared-core
+    // NonDeterministicChecksOption::Enabled, lib.rs:242-243). Default false == PayloadChecksDisabled — the
+    // SDK's historical behavior and the safe default (avoids the System.Text.Json unordered-collection
+    // false-positive). Set via object initializer by the host from RestateOptions.PayloadReplayChecks;
+    // forwarded into the journal at Initialize so the per-op byte-compare can consult it inside _commandLock.
+    // Mirrors the proven NegotiatedProtocolVersion settable-property pattern (set once before the SM runs).
+    public bool StrictPayloadChecks { get; set; }
+
     // G11: terminal-error Failure.metadata is a V6 feature. The verify_error_metadata_feature_support
     // analogue (vm/mod.rs:118-124) — emission of metadata is gated on the negotiated version; on a
     // sub-V6 negotiation metadata is silently dropped from the outgoing Failure.
@@ -301,6 +309,9 @@ internal sealed partial class InvocationStateMachine : IDisposable
                 _eagerState[pair.Key] = pair.Value;
         _eagerStateIsPartial = partialState;
         _journal.Initialize(knownEntries);
+        // Forward the global strict-payload mode into the journal so DequeueReplay's byte-compare can
+        // consult it; the property was set by the host via object initializer before StartAsync ran.
+        _journal.StrictPayloadChecks = StrictPayloadChecks;
         // Provisional: entry 0 is the Input consumed by StartAsync itself, so > 1 commands/notifications
         // mean a replay batch. StartAsync finalizes State after buffering.
         State = knownEntries > 1 ? InvocationState.Replaying : InvocationState.Processing;

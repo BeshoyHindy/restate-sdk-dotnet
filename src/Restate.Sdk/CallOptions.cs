@@ -27,6 +27,15 @@ public readonly record struct CallOptions
     /// </summary>
     public string? Name { get; init; }
 
+    /// <summary>
+    ///     Per-op payload serialization options for the call request parameter (shared-core
+    ///     <c>sys_call</c> PayloadOptions, mapped onto <c>CallCommandMessage.parameter</c>; the replay
+    ///     byte-compare arm is messages.rs:190 <c>ignore_payload_equality || self.parameter ==
+    ///     other.parameter</c>). Only consulted under global <see cref="Hosting.PayloadReplayChecks.Strict" />;
+    ///     set <see cref="PayloadOptions.Unstable" /> to skip the request-bytes compare for this call.
+    /// </summary>
+    public PayloadOptions Payload { get; init; }
+
     /// <inheritdoc cref="IdempotencyKey" />
     public static CallOptions WithIdempotencyKey(string key) =>
         new() { IdempotencyKey = key };
@@ -38,4 +47,8 @@ public readonly record struct CallOptions
     /// <inheritdoc cref="Name" />
     public static CallOptions WithName(string name) =>
         new() { Name = name };
+
+    /// <inheritdoc cref="Payload" />
+    public static CallOptions WithPayloadOptions(PayloadOptions payload) =>
+        new() { Payload = payload };
 }

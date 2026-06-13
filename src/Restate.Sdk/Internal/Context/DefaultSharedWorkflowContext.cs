@@ -37,6 +37,11 @@ internal sealed class DefaultSharedWorkflowContext : SharedWorkflowContext
         return _sm.ResolvePromise(name, payload, _ct);
     }
 
+    public override ValueTask ResolvePromise<T>(string name, T value, PayloadOptions payload)
+    {
+        return _sm.ResolvePromise(name, value, payload, _ct);
+    }
+
     public override ValueTask RejectPromise(string name, string reason)
     {
         return _sm.RejectPromise(name, reason, _ct);

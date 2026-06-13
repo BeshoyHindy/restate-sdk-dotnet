@@ -32,6 +32,11 @@ internal sealed class DefaultWorkflowContext : WorkflowContext
         _sm.SetState(key.Name, value);
     }
 
+    public override void Set<T>(StateKey<T> key, T value, PayloadOptions payload)
+    {
+        _sm.SetState(key.Name, value, payload);
+    }
+
     public override void Clear(string key)
     {
         _sm.ClearState(key);
@@ -55,6 +60,11 @@ internal sealed class DefaultWorkflowContext : WorkflowContext
     public override ValueTask ResolvePromise<T>(string name, T payload)
     {
         return _sm.ResolvePromise(name, payload, _ct);
+    }
+
+    public override ValueTask ResolvePromise<T>(string name, T value, PayloadOptions payload)
+    {
+        return _sm.ResolvePromise(name, value, payload, _ct);
     }
 
     public override ValueTask RejectPromise(string name, string reason)

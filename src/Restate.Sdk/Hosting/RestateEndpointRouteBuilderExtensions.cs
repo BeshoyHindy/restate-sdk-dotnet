@@ -111,6 +111,10 @@ public static class RestateEndpointRouteBuilderExtensions
         var registry = endpoints.ServiceProvider.GetRequiredService<ServiceRegistry>();
         var handler = endpoints.ServiceProvider.GetRequiredService<InvocationHandler>();
         var identityVerifier = endpoints.ServiceProvider.GetRequiredService<IRequestIdentityVerifier>();
+        // G13: the endpoint-wide payload-check policy captured at AddRestate/AddRestateAot. Optional so a
+        // host that wired the handler by hand (without the carrier) keeps the safe default.
+        var invocationOptions = endpoints.ServiceProvider.GetService<RestateInvocationOptions>()
+            ?? RestateInvocationOptions.Default;
 
         // Cache the discovery manifest as a byte[] — it never changes after startup.
         // Uses source-generated DiscoveryJsonContext for AOT compatibility.
@@ -203,7 +207,8 @@ public static class RestateEndpointRouteBuilderExtensions
                     handlerDef,
                     context.RequestServices,
                     context.RequestAborted,
-                    negotiatedVersion);
+                    negotiatedVersion,
+                    invocationOptions.StrictPayloadChecks);
             }
             catch
             {

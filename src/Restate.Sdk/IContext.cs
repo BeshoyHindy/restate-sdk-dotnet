@@ -144,6 +144,17 @@ public interface IContext
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);
 
+    /// <summary>
+    ///     Resolves a previously created awakeable with per-op <see cref="PayloadOptions" /> (G19). Under
+    ///     global <see cref="Hosting.PayloadReplayChecks.Strict" /> the journaled awakeable value bytes are
+    ///     byte-compared on replay against the live re-serialized bytes, unless
+    ///     <paramref name="payload" />.<see cref="PayloadOptions.UnstableSerialization" /> opts out. The
+    ///     default forwards to <see cref="ResolveAwakeable{T}(string, T, ISerde{T})" /> (Stable) so existing
+    ///     implementors need no change.
+    /// </summary>
+    void ResolveAwakeable<T>(string id, T payload, PayloadOptions options, ISerde<T>? serde = null) =>
+        ResolveAwakeable(id, payload, serde);
+
     /// <summary>Rejects a previously created awakeable with a failure reason.</summary>
     void RejectAwakeable(string id, string reason);
 

@@ -159,4 +159,68 @@ public class OptionsTests
         var opts = new RestateOptions();
         Assert.Empty(opts.ServiceTypes);
     }
+
+    // ── G13 PayloadOptions / PayloadReplayChecks surface ──
+
+    [Fact]
+    public void PayloadOptions_Stable_IsDefault_NotUnstable()
+    {
+        Assert.False(PayloadOptions.Stable.UnstableSerialization);
+        Assert.Equal(default, PayloadOptions.Stable);
+    }
+
+    [Fact]
+    public void PayloadOptions_Unstable_SetsFlag()
+    {
+        Assert.True(PayloadOptions.Unstable.UnstableSerialization);
+    }
+
+    [Fact]
+    public void CallOptions_WithPayloadOptions_SetsPayload()
+    {
+        var opts = CallOptions.WithPayloadOptions(PayloadOptions.Unstable);
+        Assert.True(opts.Payload.UnstableSerialization);
+    }
+
+    [Fact]
+    public void CallOptions_Payload_DefaultsToStable()
+    {
+        Assert.False(new CallOptions().Payload.UnstableSerialization);
+    }
+
+    [Fact]
+    public void SendOptions_WithPayloadOptions_SetsPayload()
+    {
+        var opts = SendOptions.WithPayloadOptions(PayloadOptions.Unstable);
+        Assert.True(opts.Payload.UnstableSerialization);
+    }
+
+    [Fact]
+    public void RunOptions_WithPayloadOptions_SetsPayload()
+    {
+        var opts = RunOptions.WithPayloadOptions(PayloadOptions.Unstable);
+        Assert.True(opts.Payload.UnstableSerialization);
+    }
+
+    [Fact]
+    public void RunOptions_Payload_DefaultsToStable()
+    {
+        Assert.False(new RunOptions().Payload.UnstableSerialization);
+    }
+
+    [Fact]
+    public void RestateOptions_PayloadReplayChecks_DefaultsToDisabled()
+    {
+        Assert.Equal(PayloadReplayChecks.Disabled, new RestateOptions().PayloadReplayChecks);
+    }
+
+    [Fact]
+    public void RestateOptions_WithStrictPayloadChecks_SetsStrict_AndChains()
+    {
+        var opts = new RestateOptions();
+        var returned = opts.WithStrictPayloadChecks();
+
+        Assert.Same(opts, returned);
+        Assert.Equal(PayloadReplayChecks.Strict, opts.PayloadReplayChecks);
+    }
 }

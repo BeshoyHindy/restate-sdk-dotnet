@@ -11,6 +11,19 @@ using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Internal;
 
+/// <summary>
+///     Endpoint-wide invocation settings resolved once at startup and shared by every /invoke. Registered
+///     as a singleton from the host's <c>RestateOptions</c> (composition root) so the per-request endpoint
+///     handler can forward them to <see cref="InvocationHandler.HandleAsync" /> without the SM ever
+///     touching the DI container. Today it carries only G13's global strict-payload flag; defaults preserve
+///     historical behavior when no host opted in.
+/// </summary>
+internal sealed record RestateInvocationOptions(bool StrictPayloadChecks)
+{
+    /// <summary>The behavior-preserving default (strict payload checks OFF == PayloadChecksDisabled).</summary>
+    public static readonly RestateInvocationOptions Default = new(StrictPayloadChecks: false);
+}
+
 internal sealed class InvocationHandler
 {
     private static readonly ActivitySource ActivitySource = new("Restate.Sdk");
@@ -28,7 +41,8 @@ internal sealed class InvocationHandler
         HandlerDefinition handler,
         IServiceProvider serviceProvider,
         CancellationToken ct,
-        int negotiatedProtocolVersion = Protocol.ProtocolVersion.MaximumSupported)
+        int negotiatedProtocolVersion = Protocol.ProtocolVersion.MaximumSupported,
+        bool strictPayloadChecks = false)
     {
         var logger = _loggerFactory.CreateLogger("Restate.Invocation");
         var jsonOptions = JsonSerde.SerializerOptions;
@@ -39,7 +53,10 @@ internal sealed class InvocationHandler
         // passes the negotiated number here so V6-gated features (Failure.metadata) can check it.
         using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger)
         {
-            NegotiatedProtocolVersion = negotiatedProtocolVersion
+            NegotiatedProtocolVersion = negotiatedProtocolVersion,
+            // G13: the host fills this from RestateOptions.PayloadReplayChecks == Strict. Default false
+            // keeps the composition root at the edge — business logic stays unaware of the knob.
+            StrictPayloadChecks = strictPayloadChecks
         };
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;

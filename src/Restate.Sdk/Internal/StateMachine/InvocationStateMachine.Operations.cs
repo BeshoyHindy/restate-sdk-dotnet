@@ -459,7 +459,8 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     private async ValueTask<(uint ResultCompletionId, uint InvocationIdCompletionId)> CallPrefixAsync(
         string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
-        string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
+        string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct,
+        bool unstablePayload = false)
     {
         // G8 — empty-idempotency-key parity (shared-core EMPTY_IDEMPOTENCY_KEY, mod.rs:735-740). An
         // empty (but non-null) key is a caller bug: Rust transitions to HitError BEFORE journaling, so
@@ -491,6 +492,10 @@ internal sealed partial class InvocationStateMachine
                     expectedHeaders: headers, expectedIdempotencyKey: idempotencyKey);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, resultCompletionId);
+                // G13: byte-compare the journaled request parameter against the live requestBytes (gated on
+                // global strict mode + the per-op unstable opt-out). Call.parameter is always a candidate
+                // (HasPayloadValue=true on the parsed command), matching Rust's unconditional compare.
+                _journal.CheckPayloadStrict(cmd, requestBytes.Span, unstablePayload);
             }
             else if (idempotencyKey is not null || headers is not null || hasName)
             {
@@ -548,12 +553,14 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public async ValueTask<TResponse> CallAsync<TResponse>(
         string service, string? key, string handler, object? request, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct,
+        bool unstablePayload = false)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
         var (resultCompletionId, _) = await CallPrefixAsync(
-            service, key, handler, requestBytes, idempotencyKey, headers, name, ct).ConfigureAwait(false);
+            service, key, handler, requestBytes, idempotencyKey, headers, name, ct, unstablePayload)
+            .ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
             .ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -582,7 +589,8 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public CallHandle<TResponse> CallHandleAsync<TResponse>(
         string service, string? key, string handler, object? request, string? idempotencyKey,
-        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, string? name, CancellationToken ct,
+        bool unstablePayload = false)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
@@ -590,7 +598,8 @@ internal sealed partial class InvocationStateMachine
         // both completion ids are captured once the (cheap) flush completes. The same prefix Task is
         // shared by both thunks, so the command is emitted exactly once regardless of which (or both)
         // the caller awaits.
-        var prefixTask = CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, headers, name, ct);
+        var prefixTask = CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, headers, name, ct,
+            unstablePayload);
         return new CallHandle<TResponse>(
             async () =>
             {
@@ -640,12 +649,12 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
         TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name,
-        CancellationToken ct)
+        CancellationToken ct, bool unstablePayload = false)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
         var invocationIdCompletionId =
-            SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers, name);
+            SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers, name, unstablePayload);
         await FlushGatedAsync(ct).ConfigureAwait(false);
         // Fire-and-forget: the handle resolves the invocation id lazily through the park API, so an
         // unawaited handle never parks/suspends (Rust sys_send returns SendHandle immediately).
@@ -665,7 +674,8 @@ internal sealed partial class InvocationStateMachine
     }
 
     private uint SendPrefix(string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
-        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name)
+        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, string? name,
+        bool unstablePayload = false)
     {
         // G8 — same empty-idempotency-key guard as the call path (mod.rs:810-815). Thrown BEFORE the
         // lock / NextCompletionId / RecordCommand so an invalid key never mutates the journal.
@@ -685,6 +695,9 @@ internal sealed partial class InvocationStateMachine
                     expectedService: service, expectedHandler: handler, expectedKey: key,
                     expectedHeaders: headers, expectedIdempotencyKey: idempotencyKey);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
+                // G13: byte-compare the journaled OneWayCall.parameter against the live requestBytes (gated
+                // on global strict mode + the per-op unstable opt-out), parity with Rust messages.rs:207.
+                _journal.CheckPayloadStrict(cmd, requestBytes.Span, unstablePayload);
             }
             else
             {
@@ -907,7 +920,14 @@ internal sealed partial class InvocationStateMachine
         return DeserializeStateValue<T>(isVoid: false, completion.Value);
     }
 
-    public void SetState<T>(string key, T value)
+    public void SetState<T>(string key, T value) => SetState(key, value, PayloadOptions.Stable);
+
+    /// <summary>
+    ///     SetState with per-op <see cref="PayloadOptions" /> (G19/G31). Under global strict mode the
+    ///     journaled value bytes are byte-compared on replay against the live re-serialized bytes, unless
+    ///     <paramref name="payload" />.<see cref="PayloadOptions.UnstableSerialization" /> opts this op out.
+    /// </summary>
+    public void SetState<T>(string key, T value, PayloadOptions payload)
     {
         EnsureActive();
         lock (_commandLock)   // sync ops take the SAME Monitor as async prefixes — no barging
@@ -917,7 +937,11 @@ internal sealed partial class InvocationStateMachine
             _eagerState[key] = CopyToPooled(serialized);       // unconditional, replay included
             if (State == InvocationState.Replaying)
             {
-                DequeueReplayCommand(JournalEntryType.SetState, key);
+                var cmd = DequeueReplayCommand(JournalEntryType.SetState, key);
+                // G13: byte-compare the journaled value against the live re-serialized bytes (gated on
+                // global strict mode + the per-op unstable opt-out). _eagerState already copied to a pooled
+                // buffer, so `serialized` (the shared buffer) is still valid for the compare here.
+                _journal.CheckPayloadStrict(cmd, serialized.Span, payload.UnstableSerialization);
             }
             else
             {
@@ -1048,7 +1072,17 @@ internal sealed partial class InvocationStateMachine
         return new string(charBuffer[..(6 + charsWritten)]);
     }
 
-    public void ResolveAwakeable(string id, ReadOnlyMemory<byte> payload)
+    public void ResolveAwakeable(string id, ReadOnlyMemory<byte> payload) =>
+        ResolveAwakeable(id, payload, PayloadOptions.Stable);
+
+    /// <summary>
+    ///     ResolveAwakeable with per-op <see cref="PayloadOptions" /> (G19). Under global strict mode the
+    ///     journaled awakeable value bytes are byte-compared on replay against <paramref name="payload" />,
+    ///     unless <paramref name="options" />.<see cref="PayloadOptions.UnstableSerialization" /> opts out.
+    ///     The value arrives already serialized, so the compare is against the SAME bytes the live emit
+    ///     would write — a deterministic value round-trips byte-identical.
+    /// </summary>
+    public void ResolveAwakeable(string id, ReadOnlyMemory<byte> payload, PayloadOptions options)
     {
         EnsureActive();
         lock (_commandLock)
@@ -1056,7 +1090,8 @@ internal sealed partial class InvocationStateMachine
             ThrowIfClosedLocked();
             if (State == InvocationState.Replaying)
             {
-                DequeueReplayCommand(JournalEntryType.CompleteAwakeable);
+                var cmd = DequeueReplayCommand(JournalEntryType.CompleteAwakeable);
+                _journal.CheckPayloadStrict(cmd, payload.Span, options.UnstableSerialization);
                 return;
             }
 
@@ -1115,11 +1150,22 @@ internal sealed partial class InvocationStateMachine
         return completion.Value.IsEmpty ? default : Deserialize<T>(completion.Value);
     }
 
-    public async ValueTask ResolvePromise<T>(string name, T payload, CancellationToken ct)
+    public ValueTask ResolvePromise<T>(string name, T payload, CancellationToken ct) =>
+        ResolvePromise(name, payload, PayloadOptions.Stable, ct);
+
+    /// <summary>
+    ///     ResolvePromise with per-op <see cref="PayloadOptions" /> (G19). Under global strict mode the
+    ///     journaled CompletionValue bytes are byte-compared on replay against the live re-serialized
+    ///     bytes, unless <paramref name="options" />.<see cref="PayloadOptions.UnstableSerialization" />
+    ///     opts out.
+    /// </summary>
+    public async ValueTask ResolvePromise<T>(string name, T payload, PayloadOptions options, CancellationToken ct)
     {
         EnsureActive();
-        var (completionId, needsFlush) = CompletePromisePrefix(name,
-            id => ProtobufCodec.CreateCompletePromiseSuccess(name, Serialize(payload).Span, id));
+        // The prefix serializes the value once via this closure: on the processing branch it builds the
+        // command bytes, on the replay branch (strict) it byte-compares the SAME bytes against the journal.
+        var (completionId, needsFlush) = CompletePromiseValuePrefix(name,
+            () => Serialize(payload), options.UnstableSerialization);
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // command on the wire before parking
         // CompletePromiseCommand is COMPLETABLE (proto field 11): await the
         // CompletePromiseCompletionNotification. The Failure arm (resolving an already-completed
@@ -1172,6 +1218,41 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteCommand(MessageType.CompletePromiseCommand, create(completionId));
+                RecordCommandLocked(JournalEntryType.CompletePromise, name);
+            }
+        }
+
+        return (completionId, !replaying);
+    }
+
+    /// <summary>
+    ///     CompletePromise prefix for the VALUE variant (ResolvePromise). Serializes the value once via
+    ///     <paramref name="serializeLive" /> inside the lock: on processing it builds the command bytes,
+    ///     on replay (G13 strict) it byte-compares those SAME bytes against the journaled CompletionValue.
+    ///     Kept separate from the no-value <see cref="CompletePromisePrefix" /> (used by RejectPromise,
+    ///     whose journaled Failure arm sets HasPayloadValue=false and is never byte-compared).
+    /// </summary>
+    private (uint CompletionId, bool NeedsFlush) CompletePromiseValuePrefix(string name,
+        Func<ReadOnlyMemory<byte>> serializeLive, bool unstableThisOp)
+    {
+        uint completionId;
+        bool replaying;
+        lock (_commandLock)
+        {
+            ThrowIfClosedLocked();
+            completionId = NextCompletionId();
+            replaying = State == InvocationState.Replaying;
+            var live = serializeLive();   // shared buffer — valid until the next Serialize call
+            if (replaying)
+            {
+                var cmd = DequeueReplayCommand(JournalEntryType.CompletePromise, name);
+                ValidateReplayCompletionId(cmd.ResultCompletionId, completionId);
+                _journal.CheckPayloadStrict(cmd, live.Span, unstableThisOp);
+            }
+            else
+            {
+                WriteCommand(MessageType.CompletePromiseCommand,
+                    ProtobufCodec.CreateCompletePromiseSuccess(name, live.Span, completionId));
                 RecordCommandLocked(JournalEntryType.CompletePromise, name);
             }
         }
@@ -1265,7 +1346,14 @@ internal sealed partial class InvocationStateMachine
                 // Rust SysWriteOutput pops the journaled Output; SysEnd then succeeds only in
                 // Processing — commands left AFTER the Output mean the journal recorded more than the
                 // code produced (terminal.rs:56-73).
-                DequeueReplayCommand(JournalEntryType.Output);
+                var cmd = DequeueReplayCommand(JournalEntryType.Output);
+                // G13: the Output result has NO per-op opt-in point (it is the handler return, a single
+                // serializer path), so its strict byte-compare is governed solely by the global flag —
+                // unstableThisOp is hard-false. Re-serialize the live result the SAME way the live branch
+                // does so a deterministic return round-trips byte-identical; a journaled Failure Output
+                // sets HasPayloadValue=false and is never compared here (failures go via FailTerminalAsync).
+                var liveOutput = result is null ? ReadOnlyMemory<byte>.Empty : SerializeObject(result);
+                _journal.CheckPayloadStrict(cmd, liveOutput.Span, unstableThisOp: false);
                 if (_journal.IsReplaying)
                     // Journaled-more-than-the-code-produced is a recorded-vs-current divergence →
                     // JOURNAL_MISMATCH (570), the terminal.rs:56-73 analogue.

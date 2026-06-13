@@ -1,3 +1,4 @@
+using Restate.Sdk;
 using Restate.Sdk.Testing;
 
 namespace Restate.Sdk.Tests.Testing;
@@ -165,6 +166,46 @@ public class MockContextFeatureTests
             async () => await ctx.Call<string>("RemoteObject", "key-2", "update"));
 
         Assert.Same(expected, ex);
+    }
+
+    // ---- G19 — the per-op PayloadOptions overloads default-forward to the no-options method ------
+    // The abstract ObjectContext/WorkflowContext/SharedWorkflowContext/Context expose the new overloads
+    // as `virtual` bodies that drop the options and delegate to the existing method (so external/mock
+    // implementors need no change). The mocks DON'T override the new overloads, so calling them on a mock
+    // exercises exactly those base-class default-forward bodies and the value still lands in the store.
+
+    [Fact]
+    public void MockObjectContext_Set_WithPayloadOptions_ForwardsToSet()
+    {
+        var ctx = new MockObjectContext();
+        ctx.Set(new StateKey<int>("count"), 7, PayloadOptions.Unstable);
+        Assert.Equal(7, ctx.GetStateValue<int>("count"));
+    }
+
+    [Fact]
+    public void MockContext_ResolveAwakeable_WithPayloadOptions_ForwardsToResolve()
+    {
+        var ctx = new MockContext();
+        // MockContext.ResolveAwakeable is a no-op; calling the PayloadOptions overload simply exercises
+        // the base virtual default-forward without throwing.
+        ctx.ResolveAwakeable("awk-1", "value", PayloadOptions.Unstable);
+    }
+
+    [Fact]
+    public async Task MockWorkflowContext_ResolvePromise_WithPayloadOptions_ForwardsToResolve()
+    {
+        var ctx = new MockWorkflowContext();
+        await ctx.ResolvePromise("p", "v", PayloadOptions.Unstable);
+        Assert.True(ctx.IsPromiseResolved("p"));
+        Assert.Equal("v", ctx.GetPromiseValue<string>("p"));
+    }
+
+    [Fact]
+    public async Task MockSharedWorkflowContext_ResolvePromise_WithPayloadOptions_ForwardsToResolve()
+    {
+        var ctx = new MockSharedWorkflowContext();
+        await ctx.ResolvePromise("p", "v", PayloadOptions.Unstable);
+        Assert.True(ctx.IsPromiseResolved("p"));
     }
 
     #endregion

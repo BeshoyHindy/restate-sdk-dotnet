@@ -12,6 +12,16 @@ public interface ISharedWorkflowContext : ISharedObjectContext
     /// <summary>Resolves a workflow promise with a payload, awaiting the runtime acknowledgement.</summary>
     ValueTask ResolvePromise<T>(string name, T payload);
 
+    /// <summary>
+    ///     Resolves a workflow promise with per-op <see cref="PayloadOptions" /> (G19). Under global
+    ///     <see cref="Hosting.PayloadReplayChecks.Strict" /> the journaled CompletionValue bytes are
+    ///     byte-compared on replay against the live re-serialized bytes, unless
+    ///     <paramref name="payload" />.<see cref="PayloadOptions.UnstableSerialization" /> opts out. The
+    ///     default forwards to <see cref="ResolvePromise{T}(string, T)" /> (Stable) so existing implementors
+    ///     need no change.
+    /// </summary>
+    ValueTask ResolvePromise<T>(string name, T value, PayloadOptions payload) => ResolvePromise(name, value);
+
     /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
     ValueTask RejectPromise(string name, string reason);
 

@@ -32,6 +32,10 @@ public static class RestateServiceCollectionExtensions
         var registry = ServiceRegistry.FromTypes(options.ServiceTypes);
         services.AddSingleton(registry);
         services.TryAddSingleton<InvocationHandler>();
+        // G13: capture the host's global payload-check policy once as an immutable singleton so the
+        // per-request endpoint can forward it (composition root at the edge).
+        services.TryAddSingleton(new RestateInvocationOptions(
+            StrictPayloadChecks: options.PayloadReplayChecks == PayloadReplayChecks.Strict));
         services.TryAddSingleton<IRequestIdentityVerifier>(NoOpRequestIdentityVerifier.Instance);
 
         foreach (var type in options.ServiceTypes)
@@ -48,10 +52,14 @@ public static class RestateServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="definitions">Service definitions resolved from the source-generated registry.</param>
+    /// <param name="payloadReplayChecks">
+    ///     G13 global replay payload byte-equality policy (default <see cref="PayloadReplayChecks.Disabled" />).
+    /// </param>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public static IServiceCollection AddRestateAot(
         this IServiceCollection services,
-        ServiceDefinition[] definitions
+        ServiceDefinition[] definitions,
+        PayloadReplayChecks payloadReplayChecks = PayloadReplayChecks.Disabled
     )
     {
         var registry = new ServiceRegistry();
@@ -61,6 +69,10 @@ public static class RestateServiceCollectionExtensions
 
         services.AddSingleton(registry);
         services.TryAddSingleton<InvocationHandler>();
+        // G13: same immutable global-policy singleton as the reflection path. Defaults to Disabled so an
+        // AOT endpoint behaves identically unless the caller opts into Strict.
+        services.TryAddSingleton(new RestateInvocationOptions(
+            StrictPayloadChecks: payloadReplayChecks == PayloadReplayChecks.Strict));
         services.TryAddSingleton<IRequestIdentityVerifier>(NoOpRequestIdentityVerifier.Instance);
 
         return services;
