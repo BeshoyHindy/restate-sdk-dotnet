@@ -78,12 +78,18 @@ internal sealed class InvocationJournal
     }
 
     /// <summary>
-    ///     Call/OneWayCall replay validation — type/name PLUS the target triple, so two swapped
-    ///     calls with identical id shapes fail loudly instead of cross-wiring values
-    ///     (check_entry_header_match compares service_name/handler_name/key too).
+    ///     Call/OneWayCall replay validation — type/name PLUS the target triple, the custom headers, and
+    ///     the idempotency_key, so two swapped calls with identical id shapes fail loudly instead of
+    ///     cross-wiring values (Rust header_eq compares service_name/handler_name/key/headers/idempotency_key;
+    ///     messages.rs:186-213). Headers come from an UNORDERED IReadOnlyDictionary, so they are compared
+    ///     as an order-INDEPENDENT key→value SET (HeadersEqual) rather than by byte/sequence order — a
+    ///     byte-order compare would spuriously fail a CORRECT replay whose Dictionary enumeration order
+    ///     happened to differ. idempotency_key is a plain string compare. Payload bytes are NOT compared
+    ///     (the deferred G13 item).
     /// </summary>
     public ReplayCommand DequeueReplay(JournalEntryType expectedType, string? expectedName,
-        string expectedService, string expectedHandler, string? expectedKey)
+        string expectedService, string expectedHandler, string? expectedKey,
+        IReadOnlyDictionary<string, string>? expectedHeaders = null, string? expectedIdempotencyKey = null)
     {
         var command = DequeueReplay(expectedType, expectedName);
         if (!string.Equals(command.TargetService ?? "", expectedService, StringComparison.Ordinal)
@@ -94,7 +100,65 @@ internal sealed class InvocationJournal
                 $"'{command.TargetService}/{command.TargetHandler}' key '{command.TargetKey}', " +
                 $"expected '{expectedService}/{expectedHandler}' key '{expectedKey}'",
                 ProtocolException.JournalMismatchCode);
+        if (!HeadersEqual(command.CallHeaders, expectedHeaders))
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count - 1}: replayed call headers differ from the " +
+                "re-supplied ones (order-independent key/value set mismatch)",
+                ProtocolException.JournalMismatchCode);
+        if (!string.Equals(command.CallIdempotencyKey ?? "", expectedIdempotencyKey ?? "", StringComparison.Ordinal))
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count - 1}: replayed idempotency key " +
+                $"'{command.CallIdempotencyKey}', expected '{expectedIdempotencyKey}'",
+                ProtocolException.JournalMismatchCode);
         return command;
+    }
+
+    /// <summary>
+    ///     Attach/GetOutput replay validation — type PLUS the structural <c>target</c> identity (the oneof
+    ///     kind and its string fields), so a non-deterministic handler that on replay attaches to a
+    ///     DIFFERENT invocation/workflow/idempotency target than was journaled fails loudly. Mirrors the
+    ///     Call target-triple overload and Rust's derived header_eq (the whole target oneof participates;
+    ///     messages.rs:227/230). Value PAYLOAD bytes are not relevant here (Attach/GetOutput carry no request).
+    /// </summary>
+    public ReplayCommand DequeueReplay(JournalEntryType expectedType, AttachReplayIdentity expected)
+    {
+        var command = DequeueReplay(expectedType);
+        // Single record-struct value equality over the whole target identity (kind + fields), so there is
+        // no per-field branch fan-out. Normalize the journaled command into the same AttachReplayIdentity
+        // shape the live target produces (ToReplayIdentity); unset string fields default to null on BOTH
+        // sides, so a corrupt/foreign None-kind journal (kind None, all fields null) can never equal a live
+        // target (always a concrete kind). The mismatch message renders each side's kind for diagnostics.
+        var replayed = new AttachReplayIdentity(
+            command.AttachTargetKind, command.AttachInvocationId, command.AttachWorkflowName,
+            command.AttachWorkflowKey, command.AttachServiceName, command.AttachHandlerName,
+            command.AttachIdempotencyKey, command.AttachServiceKey);
+        if (replayed != expected)
+            throw new ProtocolException(
+                $"Command mismatch at command index {Count - 1}: replayed attach target kind " +
+                $"'{replayed.Kind}' identity differs from the re-supplied '{expected.Kind}' target",
+                ProtocolException.JournalMismatchCode);
+        return command;
+    }
+
+    /// <summary>
+    ///     Order-independent header set-equality: the journaled and live header maps are equal iff they
+    ///     have the same key count and every key maps to the same value (ordinal). Both-null/both-empty
+    ///     are equal; null and empty are treated as equivalent (a header-less command). This is the
+    ///     false-positive-free analogue of Rust's <c>Vec&lt;Header&gt;</c> equality for a .NET source that
+    ///     produces headers from an UNORDERED dictionary, so journal byte order is not reproducible.
+    /// </summary>
+    private static bool HeadersEqual(
+        IReadOnlyDictionary<string, string>? replayed, IReadOnlyDictionary<string, string>? expected)
+    {
+        var replayedCount = replayed?.Count ?? 0;
+        var expectedCount = expected?.Count ?? 0;
+        if (replayedCount != expectedCount) return false;
+        if (replayedCount == 0) return true;
+        foreach (var (key, value) in replayed!)
+            if (!expected!.TryGetValue(key, out var expectedValue)
+                || !string.Equals(value, expectedValue, StringComparison.Ordinal))
+                return false;
+        return true;
     }
 
     /// <summary>

@@ -142,6 +142,32 @@ public class DefaultContextNamedSignalTests
         Assert.Equal("denied", parsed.Failure.Message);
     }
 
+    /// <summary>
+    ///     G29 — SendSignalFailure with a CUSTOM code emits that code on the SendSignalCommand failure
+    ///     result (shared-core sys_complete_signal carries an arbitrary TerminalFailure.code), instead of
+    ///     the hardcoded 500 the no-code overload uses.
+    /// </summary>
+    [Fact(Timeout = Timeout)]
+    public async Task SendSignalFailure_WithCustomCode_EmitsThatCode()
+    {
+        var (sm, ctx, inbound, outbound) = NewRig();
+        using var _ = sm;
+
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+        await AwaitBounded(ctx.SendSignalFailure("inv_target", "approval", "conflict", 409));
+
+        inbound.Writer.Complete();
+        await AwaitBounded(pump);
+        await AwaitBounded(sm.CompleteAsync(Array.Empty<byte>(), CancellationToken.None));
+
+        var command = await FirstOutboundAsync(outbound, MessageType.SendSignalCommand);
+        var parsed = Gen.SendSignalCommandMessage.Parser.ParseFrom(command);
+        Assert.Equal("approval", parsed.Name);
+        Assert.Equal(Gen.SendSignalCommandMessage.ResultOneofCase.Failure, parsed.ResultCase);
+        Assert.Equal(409u, parsed.Failure.Code);
+        Assert.Equal("conflict", parsed.Failure.Message);
+    }
+
     private static async Task<byte[]> FirstOutboundAsync(Pipe outbound, MessageType type)
     {
         var reader = new ProtocolReader(outbound.Reader);

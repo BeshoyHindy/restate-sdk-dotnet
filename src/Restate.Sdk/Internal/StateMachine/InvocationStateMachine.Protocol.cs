@@ -282,11 +282,32 @@ internal sealed partial class InvocationStateMachine
         return command;
     }
 
-    /// <summary>Call/OneWayCall replay-pop with target-triple validation. Caller MUST hold _commandLock.</summary>
+    /// <summary>
+    ///     Call/OneWayCall replay-pop with target-triple + headers (order-independent set) + idempotency_key
+    ///     validation. Caller MUST hold _commandLock.
+    /// </summary>
     private ReplayCommand DequeueReplayCommand(JournalEntryType expectedType, string? expectedName,
-        string expectedService, string expectedHandler, string? expectedKey)
+        string expectedService, string expectedHandler, string? expectedKey,
+        IReadOnlyDictionary<string, string>? expectedHeaders, string? expectedIdempotencyKey)
     {
-        var command = _journal.DequeueReplay(expectedType, expectedName, expectedService, expectedHandler, expectedKey);
+        var command = _journal.DequeueReplay(expectedType, expectedName, expectedService, expectedHandler,
+            expectedKey, expectedHeaders, expectedIdempotencyKey);
+        if (!_journal.IsReplaying)
+        {
+            State = InvocationState.Processing;
+            Log.ReplayCompleted(Logger, InvocationId);
+        }
+
+        return command;
+    }
+
+    /// <summary>
+    ///     Attach/GetOutput replay-pop with structural <c>target</c>-identity validation (oneof kind +
+    ///     fields). Caller MUST hold _commandLock.
+    /// </summary>
+    private ReplayCommand DequeueReplayCommand(JournalEntryType expectedType, AttachTarget expectedTarget)
+    {
+        var command = _journal.DequeueReplay(expectedType, expectedTarget.ToReplayIdentity());
         if (!_journal.IsReplaying)
         {
             State = InvocationState.Processing;

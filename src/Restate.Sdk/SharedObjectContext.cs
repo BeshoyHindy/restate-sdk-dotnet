@@ -153,6 +153,12 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason, ushort code)
+    {
+        return BaseContext.SendSignalFailure(targetInvocationId, name, reason, code);
+    }
+
+    /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {

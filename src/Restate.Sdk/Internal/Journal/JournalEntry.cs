@@ -26,6 +26,46 @@ internal enum JournalEntryType
 }
 
 /// <summary>
+///     Which arm of the Attach/GetOutput <c>target</c> oneof a replayed command carried — the structural
+///     discriminant validated on replay (Rust's AttachInvocationCommand/GetInvocationOutputCommand derive
+///     header_eq via <c>eq</c>, so the whole target oneof participates; messages.rs:227/230). <c>None</c>
+///     is only reached on a corrupt/foreign journal with the oneof unset.
+/// </summary>
+internal enum AttachReplayTargetKind
+{
+    None,
+    InvocationId,
+    WorkflowTarget,
+    IdempotentRequestTarget
+}
+
+/// <summary>
+///     The flat structural identity of an Attach/GetOutput <c>target</c> oneof used for replay equality —
+///     the <see cref="Kind" /> plus whichever string fields that arm carries (the rest null). A positional
+///     <c>record struct</c> so the journaled and live identities compare by VALUE in one equality (no
+///     per-field branch fan-out); unset fields are null on both sides, so normalization is symmetric.
+///     <para>
+///         Coverage: every member (the primary ctor, the eight property getters, and
+///         Equals/GetHashCode/ToString/PrintMembers/Deconstruct/EqualityContract) is COMPILER-SYNTHESIZED —
+///         this type has no hand-written body. The replay equality is exercised end-to-end by
+///         ParityBatchETests (matching + every divergence), but the synthesized members are pure data
+///         plumbing with nothing hand-written to instrument, so the type carries
+///         <c>[ExcludeFromCodeCoverage]</c> and is listed in eng/coverage-gate.ts
+///         SANCTIONED_EXCLUSIONS — the same treatment as the synthesized <c>SendResponse</c> record.
+///     </para>
+/// </summary>
+[System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+internal readonly record struct AttachReplayIdentity(
+    AttachReplayTargetKind Kind,
+    string? InvocationId,
+    string? WorkflowName,
+    string? WorkflowKey,
+    string? ServiceName,
+    string? HandlerName,
+    string? IdempotencyKey,
+    string? ServiceKey);
+
+/// <summary>
 ///     One buffered replayed command, parsed during StartAsync preflight.
 ///     The C# analogue of one element of Rust's State::Replaying{ commands: VecDeque&lt;RawMessage&gt; }
 ///     (vm/transitions/journal.rs), pre-decoded so replay never re-parses or re-reads the wire.
@@ -62,6 +102,39 @@ internal readonly struct ReplayCommand
     public string? TargetService { get; init; }
     public string? TargetHandler { get; init; }
     public string? TargetKey { get; init; }
+
+    /// <summary>
+    ///     Call/OneWayCall custom request headers (CallCommand field 4 / OneWayCall field 5) parsed as
+    ///     an order-INDEPENDENT key→value map. Rust's header_eq compares <c>self.headers == other.headers</c>
+    ///     (messages.rs:191/208), but the live headers originate from an UNORDERED IReadOnlyDictionary,
+    ///     so the journal byte order is NOT reproducible from the live source: a byte/sequence compare
+    ///     would spuriously fail a CORRECT replay. We therefore compare as a SET (key→value map equality),
+    ///     which is the deterministic, false-positive-free analogue. Null = the command carried no headers.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? CallHeaders { get; init; }
+
+    /// <summary>
+    ///     Call/OneWayCall idempotency_key (CallCommand field 6 / OneWayCall field 7) — a plain optional
+    ///     string, replay-validated by exact equality (Rust header_eq: <c>self.idempotency_key ==
+    ///     other.idempotency_key</c>, messages.rs:193/210). Null = field unset (no idempotency).
+    /// </summary>
+    public string? CallIdempotencyKey { get; init; }
+
+    /// <summary>
+    ///     Attach/GetOutput target identity (the whole <c>target</c> oneof — Rust derives header_eq via
+    ///     <c>impl_message_traits!(... eq)</c> so it compares the FULL struct incl. target, messages.rs:227/230).
+    ///     The oneof kind plus its string fields are mirrored here so a non-deterministic handler that on
+    ///     replay attaches to a DIFFERENT invocation/workflow/idempotency target than was journaled fails
+    ///     loudly. <see cref="AttachTargetKind" /> selects which fields are meaningful.
+    /// </summary>
+    public AttachReplayTargetKind AttachTargetKind { get; init; }
+    public string? AttachInvocationId { get; init; }
+    public string? AttachWorkflowName { get; init; }
+    public string? AttachWorkflowKey { get; init; }
+    public string? AttachServiceName { get; init; }
+    public string? AttachHandlerName { get; init; }
+    public string? AttachIdempotencyKey { get; init; }
+    public string? AttachServiceKey { get; init; }
 
     /// <summary>
     ///     SendSignalCommand target + signal identity (target_invocation_id field 1; signal_id oneof:

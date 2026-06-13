@@ -1,3 +1,4 @@
+using Restate.Sdk.Internal.Journal;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk;
@@ -48,6 +49,14 @@ public abstract class AttachTarget
 
     internal abstract void ApplyTo(Gen.GetInvocationOutputCommandMessage message);
 
+    /// <summary>
+    ///     Projects this live target into the flat structural identity the replay validator compares
+    ///     against a journaled Attach/GetOutput command's <c>target</c> oneof (see
+    ///     <c>InvocationJournal.DequeueReplay(...attach...)</c>). Polymorphic so each variant fills only
+    ///     the fields its oneof arm carries; the unused fields stay null and compare as "".
+    /// </summary>
+    internal abstract AttachReplayIdentity ToReplayIdentity();
+
     private static Gen.WorkflowTarget BuildWorkflowTarget(ByWorkflowId target) =>
         new() { WorkflowName = target.Name, WorkflowKey = target.Key };
 
@@ -72,6 +81,9 @@ public abstract class AttachTarget
         internal override void ApplyTo(Gen.AttachInvocationCommandMessage message) => message.InvocationId = Id;
 
         internal override void ApplyTo(Gen.GetInvocationOutputCommandMessage message) => message.InvocationId = Id;
+
+        internal override AttachReplayIdentity ToReplayIdentity() =>
+            new(AttachReplayTargetKind.InvocationId, Id, null, null, null, null, null, null);
     }
 
     private sealed class ByWorkflowId(string name, string key) : AttachTarget
@@ -84,6 +96,9 @@ public abstract class AttachTarget
 
         internal override void ApplyTo(Gen.GetInvocationOutputCommandMessage message) =>
             message.WorkflowTarget = BuildWorkflowTarget(this);
+
+        internal override AttachReplayIdentity ToReplayIdentity() =>
+            new(AttachReplayTargetKind.WorkflowTarget, null, Name, Key, null, null, null, null);
     }
 
     private sealed class ByIdempotencyId(
@@ -99,5 +114,9 @@ public abstract class AttachTarget
 
         internal override void ApplyTo(Gen.GetInvocationOutputCommandMessage message) =>
             message.IdempotentRequestTarget = BuildIdempotentRequestTarget(this);
+
+        internal override AttachReplayIdentity ToReplayIdentity() =>
+            new(AttachReplayTargetKind.IdempotentRequestTarget, null, null, null,
+                ServiceName, HandlerName, IdempotencyKey, ServiceKey);
     }
 }

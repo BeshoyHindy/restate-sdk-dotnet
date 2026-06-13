@@ -99,6 +99,16 @@ public interface IContext
     /// </summary>
     ValueTask SendSignalFailure(string targetInvocationId, string name, string reason);
 
+    /// <summary>
+    ///     Sends a named signal carrying a terminal failure with a custom Restate/HTTP error
+    ///     <paramref name="code" /> (G29). Shared-core's <c>sys_complete_signal</c> failure carries an
+    ///     arbitrary <c>TerminalFailure.code</c> (lib.rs:191-194); the no-code overload uses 500. The
+    ///     default forwards to <see cref="SendSignalFailure(string, string, string)" /> (code dropped) so
+    ///     existing <see cref="IContext" /> implementors need no change.
+    /// </summary>
+    ValueTask SendSignalFailure(string targetInvocationId, string name, string reason, ushort code) =>
+        SendSignalFailure(targetInvocationId, name, reason);
+
     /// <summary>Sends a one-way invocation to a stateless service. Returns a handle to track the invocation.</summary>
     ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null);

@@ -157,12 +157,16 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return _stateMachine.SendSignalAsync(targetInvocationId, name, bytes, Aborted);
     }
 
-    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason)
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason) =>
+        // 500 mirrors the RejectAwakeable default failure code (a generic terminal/business failure).
+        SendSignalFailure(targetInvocationId, name, reason, 500);
+
+    public override ValueTask SendSignalFailure(string targetInvocationId, string name, string reason, ushort code)
     {
-        // Failure variant: no value bytes; the SM writes the failure result oneof. 500 mirrors the
-        // RejectAwakeable failure code (a generic terminal/business failure).
+        // G29 — failure variant: no value bytes; the SM writes the failure result oneof carrying the
+        // supplied code (matching the named-signal complete failure code, not a hardcoded 500).
         return _stateMachine.SendSignalAsync(targetInvocationId, name, ReadOnlyMemory<byte>.Empty,
-            Aborted, (500, reason));
+            Aborted, (code, reason));
     }
 
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,

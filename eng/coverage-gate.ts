@@ -310,6 +310,14 @@ function* walkCsFiles(dir: string): Generator<string> {
 //           are private nested types coverlet attributes to the parent — their absence as separate
 //           entries is correct, not a stripped-coverage gap. The G6/G7 attach/get-output-by-target
 //           tests exercise all three variants through ParityBatchATests + ContextSurfaceTests.
+//         - AttachReplayIdentity (Batch E): `internal readonly record struct` whose EVERY member (the
+//           primary ctor, the eight property getters, and the synthesized
+//           Equals/GetHashCode/ToString/PrintMembers/Deconstruct/EqualityContract) is compiler-emitted —
+//           it has NO hand-written body. It exists solely to give the Attach/GetOutput target identity a
+//           single value-equality (used by the `!=` in InvocationJournal.DequeueReplay) instead of a
+//           per-field branch fan-out. The replay equality is exercised end-to-end (matching + every
+//           divergence) by ParityBatchETests, and the type carries [ExcludeFromCodeCoverage] so coverlet
+//           strips its synthesized-only IL — its absence is correct, not a stripped hand-written gap.
 const SANCTIONED_EXCLUSIONS = new Set<string>([
   "Log",
   "DiscoveryJsonContext",
@@ -322,6 +330,7 @@ const SANCTIONED_EXCLUSIONS = new Set<string>([
   "ByInvocationId",
   "ByWorkflowId",
   "ByIdempotencyId",
+  "AttachReplayIdentity",
 ]);
 
 // A declared type is "present" in the report if some class entry's simple type name (last

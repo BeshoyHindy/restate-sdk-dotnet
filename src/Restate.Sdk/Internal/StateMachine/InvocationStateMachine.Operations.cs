@@ -421,10 +421,13 @@ internal sealed partial class InvocationStateMachine
             replaying = State == InvocationState.Replaying;
             if (replaying)
             {
-                // Pass the LIVE name as expectedName so Rust's name equality is honored on replay
-                // (G20): a journaled non-empty name must match the re-supplied one, else JOURNAL_MISMATCH.
+                // Pass the LIVE name/headers/idempotency as the expected values so Rust's header_eq is
+                // honored on replay (G20 name + Batch E headers/idempotency): a journaled command whose
+                // headers (order-independent set) or idempotency_key differ from the re-supplied ones is
+                // JOURNAL_MISMATCH, just like a target-triple divergence.
                 var cmd = DequeueReplayCommand(JournalEntryType.Call, expectedName: name,
-                    expectedService: service, expectedHandler: handler, expectedKey: key);
+                    expectedService: service, expectedHandler: handler, expectedKey: key,
+                    expectedHeaders: headers, expectedIdempotencyKey: idempotencyKey);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, resultCompletionId);
             }
@@ -615,9 +618,11 @@ internal sealed partial class InvocationStateMachine
             if (State == InvocationState.Replaying)
             {
                 // G20 — thread the live name as expectedName so OneWayCall.name equality is honored on
-                // replay (Rust header_eq compares name); null/empty normalizes to "" on both sides.
+                // replay (Rust header_eq compares name); null/empty normalizes to "" on both sides. Batch E
+                // also threads the live headers (order-independent set) + idempotency_key for header_eq.
                 var cmd = DequeueReplayCommand(JournalEntryType.OneWayCall, expectedName: name,
-                    expectedService: service, expectedHandler: handler, expectedKey: key);
+                    expectedService: service, expectedHandler: handler, expectedKey: key,
+                    expectedHeaders: headers, expectedIdempotencyKey: idempotencyKey);
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
             }
             else
@@ -712,7 +717,8 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.AttachInvocation,
-            id => ProtobufCodec.CreateAttachInvocationCommand(target, id), MessageType.AttachInvocationCommand);
+            id => ProtobufCodec.CreateAttachInvocationCommand(target, id), MessageType.AttachInvocationCommand,
+            attachTarget: target);
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -731,7 +737,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
         var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.GetInvocationOutput,
             id => ProtobufCodec.CreateGetInvocationOutputCommand(target, id),
-            MessageType.GetInvocationOutputCommand);
+            MessageType.GetInvocationOutputCommand, attachTarget: target);
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -748,7 +754,8 @@ internal sealed partial class InvocationStateMachine
     ///     (Issue 2 hardening).
     /// </summary>
     private (uint CompletionId, bool NeedsFlush) SimpleCompletablePrefix(JournalEntryType type,
-        Func<uint, Google.Protobuf.IMessage> create, MessageType wireType, string? name = null)
+        Func<uint, Google.Protobuf.IMessage> create, MessageType wireType, string? name = null,
+        AttachTarget? attachTarget = null)
     {
         uint completionId;
         bool replaying;
@@ -759,7 +766,11 @@ internal sealed partial class InvocationStateMachine
             replaying = State == InvocationState.Replaying;
             if (replaying)
             {
-                var cmd = DequeueReplayCommand(type, name);
+                // Attach/GetOutput validate the structural target identity (oneof kind + fields, Batch E);
+                // every other simple-completable op (GetPromise/PeekPromise) validates type/name only.
+                var cmd = attachTarget is not null
+                    ? DequeueReplayCommand(type, attachTarget)
+                    : DequeueReplayCommand(type, name);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, completionId);
             }
             else

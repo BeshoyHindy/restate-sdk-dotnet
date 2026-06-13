@@ -170,6 +170,10 @@ internal static class ProtobufCodec
                         TargetService = m.ServiceName,
                         TargetHandler = m.HandlerName,
                         TargetKey = m.Key,
+                        // headers (field 4) → set-equality map; idempotency_key (field 6, proto-optional)
+                        // → exact string, both part of Rust's header_eq (messages.rs:191/193).
+                        CallHeaders = ParseHeaders(m.Headers),
+                        CallIdempotencyKey = m.HasIdempotencyKey ? m.IdempotencyKey : null,
                         ResultCompletionId = m.ResultCompletionId,
                         InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
                     };
@@ -185,6 +189,8 @@ internal static class ProtobufCodec
                         TargetService = m.ServiceName,
                         TargetHandler = m.HandlerName,
                         TargetKey = m.Key,
+                        CallHeaders = ParseHeaders(m.Headers),                     // field 5
+                        CallIdempotencyKey = m.HasIdempotencyKey ? m.IdempotencyKey : null,  // field 7
                         InvocationIdNotificationIdx = m.InvocationIdNotificationIdx
                     };
                 }
@@ -251,21 +257,41 @@ internal static class ProtobufCodec
             case MessageType.AttachInvocationCommand:
                 {
                     var m = Gen.AttachInvocationCommandMessage.Parser.ParseFrom(payload);
+                    var t = ToAttachTarget(m.TargetCase, m.InvocationId, m.WorkflowTarget, m.IdempotentRequestTarget);
                     return new ReplayCommand
                     {
                         MessageType = type,
                         EntryType = JournalEntryType.AttachInvocation,
-                        ResultCompletionId = m.ResultCompletionId
+                        ResultCompletionId = m.ResultCompletionId,
+                        AttachTargetKind = t.Kind,
+                        AttachInvocationId = t.InvocationId,
+                        AttachWorkflowName = t.WorkflowName,
+                        AttachWorkflowKey = t.WorkflowKey,
+                        AttachServiceName = t.ServiceName,
+                        AttachHandlerName = t.HandlerName,
+                        AttachIdempotencyKey = t.IdempotencyKey,
+                        AttachServiceKey = t.ServiceKey
                     };
                 }
             case MessageType.GetInvocationOutputCommand:
                 {
                     var m = Gen.GetInvocationOutputCommandMessage.Parser.ParseFrom(payload);
+                    // Same target oneof shape as AttachInvocation; the generated TargetOneofCase enums are
+                    // distinct types, so the kind is mapped from each message's own enum in ToAttachTarget.
+                    var t = ToAttachTarget(m.TargetCase, m.InvocationId, m.WorkflowTarget, m.IdempotentRequestTarget);
                     return new ReplayCommand
                     {
                         MessageType = type,
                         EntryType = JournalEntryType.GetInvocationOutput,
-                        ResultCompletionId = m.ResultCompletionId
+                        ResultCompletionId = m.ResultCompletionId,
+                        AttachTargetKind = t.Kind,
+                        AttachInvocationId = t.InvocationId,
+                        AttachWorkflowName = t.WorkflowName,
+                        AttachWorkflowKey = t.WorkflowKey,
+                        AttachServiceName = t.ServiceName,
+                        AttachHandlerName = t.HandlerName,
+                        AttachIdempotencyKey = t.IdempotencyKey,
+                        AttachServiceKey = t.ServiceKey
                     };
                 }
             case MessageType.CompleteAwakeableCommand:
@@ -273,6 +299,51 @@ internal static class ProtobufCodec
             default:
                 throw new ProtocolException($"Unknown replayed command type: {type}");
         }
+    }
+
+    /// <summary>
+    ///     Decodes a journaled command's repeated <c>headers</c> field into an order-INDEPENDENT
+    ///     key→value map for replay set-equality (see <see cref="ReplayCommand.CallHeaders" />). Empty
+    ///     ⇒ null so a header-less command compares equal to a null live-headers source. A duplicate key
+    ///     (last-wins) cannot arise from the .NET writer — it serializes from an IReadOnlyDictionary whose
+    ///     keys are already unique — so no ambiguity is introduced by collapsing to a Dictionary.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ParseHeaders(
+        Google.Protobuf.Collections.RepeatedField<Gen.Header> headers)
+    {
+        if (headers.Count == 0) return null;
+        var map = new Dictionary<string, string>(headers.Count, StringComparer.Ordinal);
+        foreach (var h in headers) map[h.Key] = h.Value;
+        return map;
+    }
+
+    /// <summary>
+    ///     Flattens the Attach/GetOutput <c>target</c> oneof into the structural fields mirrored on
+    ///     <see cref="ReplayCommand" />. The two generated message types expose distinct TargetOneofCase
+    ///     enums, so the kind is resolved by which oneof accessor returned a set value (the unset accessors
+    ///     return the proto default — empty string / null message — and are ignored). A wholly-unset target
+    ///     yields <see cref="AttachReplayTargetKind.None" /> (corrupt/foreign journal).
+    /// </summary>
+    private static (AttachReplayTargetKind Kind, string? InvocationId, string? WorkflowName, string? WorkflowKey,
+        string? ServiceName, string? HandlerName, string? IdempotencyKey, string? ServiceKey)
+        ToAttachTarget(Enum targetCase, string invocationId,
+            Gen.WorkflowTarget? workflowTarget, Gen.IdempotentRequestTarget? idempotentRequestTarget)
+    {
+        // Both TargetOneofCase enums share the same underlying int layout (InvocationId=1, IdempotentRequestTarget=3,
+        // WorkflowTarget=4); we branch on the message that is non-default rather than the enum's CLR type.
+        if (workflowTarget is not null)
+            return (AttachReplayTargetKind.WorkflowTarget, null,
+                workflowTarget.WorkflowName, workflowTarget.WorkflowKey, null, null, null, null);
+        if (idempotentRequestTarget is not null)
+            return (AttachReplayTargetKind.IdempotentRequestTarget, null, null, null,
+                idempotentRequestTarget.ServiceName, idempotentRequestTarget.HandlerName,
+                idempotentRequestTarget.IdempotencyKey,
+                idempotentRequestTarget.HasServiceKey ? idempotentRequestTarget.ServiceKey : null);
+        // The InvocationId oneof accessor returns "" when unset; a set value is non-empty for a conformant
+        // journal. Convert<int> works for both distinct enums since their numeric InvocationId value is 1.
+        if (Convert.ToInt32(targetCase, System.Globalization.CultureInfo.InvariantCulture) == 1)
+            return (AttachReplayTargetKind.InvocationId, invocationId, null, null, null, null, null, null);
+        return (AttachReplayTargetKind.None, null, null, null, null, null, null, null);
     }
 
     public static (ReadOnlyMemory<byte> Input, Dictionary<string, string>? Headers) ParseInputCommand(ReadOnlySpan<byte> payload)
