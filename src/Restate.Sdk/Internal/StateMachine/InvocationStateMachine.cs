@@ -207,12 +207,22 @@ internal sealed partial class InvocationStateMachine : IDisposable
         throw new InvalidOperationException($"Cannot {operation} in state {state}");
     }
 
+    // Plan 07 §1.3 escape hatch: these two raw-bytes WriteCommand overloads have ZERO call sites —
+    // every command is written through the IMessage overload below (the codec factories all return
+    // Gen.* messages), so no internal test seam can reach them without re-introducing dead code. They
+    // are retained as a symmetric low-level API surface; excluded from coverage so the dead lines do
+    // not block the StateMachine 100% line target. See the "Coverage exclusions" appendix in
+    // docs/research/shared-core/07-coverage-and-e2e-plan.md.
+    [ExcludeFromCodeCoverage(Justification =
+        "Unused raw-span WriteCommand overload — every caller writes via the IMessage overload; no reachable trigger.")]
     private void WriteCommand(MessageType type, ReadOnlySpan<byte> payload)
     {
         Log.WritingCommand(Logger, InvocationId, type, payload.Length);
         _writer.WriteMessage(type, payload);
     }
 
+    [ExcludeFromCodeCoverage(Justification =
+        "Unused raw-memory WriteCommand overload — every caller writes via the IMessage overload; no reachable trigger.")]
     private void WriteCommand(MessageType type, ReadOnlyMemory<byte> payload)
     {
         WriteCommand(type, payload.Span);

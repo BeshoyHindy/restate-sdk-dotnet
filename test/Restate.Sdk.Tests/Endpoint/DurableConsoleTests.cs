@@ -82,6 +82,30 @@ public class DurableConsoleTests
     }
 
     [Fact]
+    public void Log_InterpolatedWithFormatSpecifier_AppliesFormat()
+    {
+        // A format specifier (`{value:X4}`) routes through the AppendFormatted<T>(T, string?) handler
+        // overload — distinct from the format-less overload the other tests exercise.
+        var console = new DurableConsole(() => false);
+        var originalOut = Console.Out;
+
+        try
+        {
+            using var sw = new StringWriter();
+            Console.SetOut(sw);
+
+            var value = 255;
+            console.Log($"hex {value:X4}");
+
+            Assert.Contains("hex 00FF", sw.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Fact]
     public void Log_Interpolated_OutputsWhenNotReplaying()
     {
         var console = new DurableConsole(() => false);

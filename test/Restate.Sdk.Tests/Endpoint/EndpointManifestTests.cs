@@ -266,6 +266,39 @@ public class EndpointManifestTests
         Assert.Contains(serviceManifest.Handlers, h => h.Name == "Get");
     }
 
+    // ---- ServiceManifest.FromDefinition type switch: all 4 arms (EndpointManifest.cs:52-57) ------
+
+    [Theory]
+    [InlineData(ServiceType.Service, "SERVICE")]
+    [InlineData(ServiceType.VirtualObject, "VIRTUAL_OBJECT")]
+    [InlineData(ServiceType.Workflow, "WORKFLOW")]
+    public void ServiceManifest_FromDefinition_MapsEachServiceType(ServiceType type, string expected)
+    {
+        // The three named arms of the `def.Type switch`. Each must map to its wire enum string.
+        var def = MakeServiceDefinition(type);
+        Assert.Equal(expected, ServiceManifest.FromDefinition(def).Type);
+    }
+
+    [Fact]
+    public void ServiceManifest_FromDefinition_UnknownServiceType_FallsBackToService()
+    {
+        // EndpointManifest.cs:57 — the `_ => "SERVICE"` default arm. An out-of-range ServiceType value
+        // (no enum member) must not throw; it defensively maps to the plain "SERVICE" wire type.
+        var def = MakeServiceDefinition((ServiceType)999);
+        Assert.Equal("SERVICE", ServiceManifest.FromDefinition(def).Type);
+    }
+
+    private static ServiceDefinition MakeServiceDefinition(ServiceType type) => new()
+    {
+        Name = "TypeSwitchService",
+        Type = type,
+        Factory = _ => new object(),
+        Handlers =
+        [
+            new HandlerDefinition { Name = "H", IsShared = false, Invoker = (_, _, _, _) => Task.FromResult<object?>(null) }
+        ]
+    };
+
     [Fact]
     public void Manifest_Json_ExcludesNullType_ForServiceHandlers()
     {
@@ -451,5 +484,42 @@ public class EndpointManifestTests
         var accept = "application/vnd.restate.endpointmanifest.v2+json, application/vnd.restate.endpointmanifest.v3+json, application/vnd.restate.endpointmanifest.v4+json";
         var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
         Assert.Equal("application/vnd.restate.endpointmanifest.v3+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_OnlyV1Requested_ReturnsV1()
+    {
+        // The lowest-priority substring arm: a runtime that only speaks v1 gets v1 (covers the
+        // explicit "endpointmanifest.v1" branch distinct from the no-Accept/wildcard default).
+        var accept = "application/vnd.restate.endpointmanifest.v1+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v1+json", result);
+    }
+
+    [Theory]
+    // restate-server negotiates the per-invocation protocol version and sends it as the request
+    // Content-Type; the /invoke response MUST echo the SAME version or the server rejects the
+    // stream with RT0012. Each negotiated version round-trips unchanged.
+    [InlineData("application/vnd.restate.invocation.v5", "application/vnd.restate.invocation.v5")]
+    [InlineData("application/vnd.restate.invocation.v6", "application/vnd.restate.invocation.v6")]
+    // Parameters (charset etc.) are stripped — only the bare media type must match.
+    [InlineData("application/vnd.restate.invocation.v5; charset=utf-8", "application/vnd.restate.invocation.v5")]
+    public void NegotiateInvocationContentType_EchoesRequestVersion(string request, string expected)
+    {
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationContentType(request);
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    // A request with no recognizable invocation content type (a hand-crafted client, or our own
+    // unit tests that post a bare ByteArrayContent) falls back to the manifest max (v6).
+    [InlineData("application/json")]
+    [InlineData("text/plain")]
+    public void NegotiateInvocationContentType_UnknownRequest_FallsBackToV6(string? request)
+    {
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationContentType(request);
+        Assert.Equal("application/vnd.restate.invocation.v6", result);
     }
 }

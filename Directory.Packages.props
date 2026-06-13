@@ -31,5 +31,9 @@
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.3" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- Coverage -->
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <!-- E2E (used by test/Restate.Sdk.E2E, added here so the props file is edited once) -->
+    <PackageVersion Include="Testcontainers" Version="4.4.0" />
   </ItemGroup>
 </Project>

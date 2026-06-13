@@ -162,5 +162,62 @@ public class CompletionManagerTests
         manager.CancelAll();
     }
 
+    // ---- Residual branch closure (plan 07 core-branches lane) ----------------------------------
+
+    [Fact]
+    public void TryComplete_OnBufferedResultSlot_ReturnsFalse_NoOverwrite()
+    {
+        // CompletionManager.cs:94 — the `slot.Kind == Tcs` guard's FALSE arm: a second early
+        // TryComplete (no GetOrRegister between them) lands on the buffered Result slot the first one
+        // created, so the `&&` short-circuits and the second delivery is dropped without overwrite.
+        var manager = new CompletionManager();
+        Assert.True(manager.TryComplete(3, CompletionResult.Success(new byte[] { 1 })));   // buffers a Result slot
+        Assert.False(manager.TryComplete(3, CompletionResult.Success(new byte[] { 2 })));  // hits Kind != Tcs arm
+    }
+
+    [Fact]
+    public void TryFail_AfterLatch_ReturnsFalse()
+    {
+        // CompletionManager.cs:105 — TryFail's latch guard. After FailAll the manager is latched, so a
+        // straggler failure delivery is dropped (returns false) rather than touching a cleared table.
+        var manager = new CompletionManager();
+        manager.FailAll(new SuspendedExceptionStub());
+        Assert.False(manager.TryFail(0, 500, "late"));
+    }
+
+    [Fact]
+    public void TryFail_OnBufferedResultSlot_ReturnsFalse_NoOverwrite()
+    {
+        // CompletionManager.cs:107 — TryFail's `slot.Kind == Tcs` FALSE arm: an early TryComplete
+        // buffers a Result slot, then a racing TryFail for the same id hits the non-Tcs branch and is
+        // dropped (the buffered success wins; no double-resolution).
+        var manager = new CompletionManager();
+        Assert.True(manager.TryComplete(4, CompletionResult.Success(new byte[] { 7 })));
+        Assert.False(manager.TryFail(4, 500, "late-failure"));
+    }
+
+    [Fact]
+    public void TryClaimForExecution_AfterLatch_ReturnsFalse()
+    {
+        // CompletionManager.cs:139 — TryClaimForExecution's latch guard. After CancelAll (which also
+        // latches) a Run that tries to claim its id for local execution is refused, so the unwinding
+        // closure never re-runs a side effect against a dead manager.
+        var manager = new CompletionManager();
+        manager.CancelAll();
+        Assert.False(manager.TryClaimForExecution(7));
+    }
+
+    [Fact]
+    public void TryClaimForExecution_OnCompletedTcsSlot_ReturnsFalse()
+    {
+        // CompletionManager.cs:140 — the `slot.Tcs.Task.IsCompleted` sub-branch of the claim guard: an
+        // id whose TCS was registered AND then resolved must NOT be claimable for local execution (the
+        // pump already delivered its notification), so the claim is refused even though Kind == Tcs.
+        var manager = new CompletionManager();
+        manager.GetOrRegister(9);                                                   // a Tcs slot
+        Assert.True(manager.TryComplete(9, CompletionResult.Success(ReadOnlyMemory<byte>.Empty)));  // now completed
+        Assert.False(manager.TryClaimForExecution(9));                              // completed Tcs → no claim
+    }
+
     private sealed class SuspendedExceptionStub : Exception;
 }

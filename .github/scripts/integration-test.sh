@@ -11,7 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PIDS=()
 AOT_DIR=""
-RESTATE_IMAGE="docker.io/restatedev/restate:latest"
+# Pinned to the same tag as RestateContainerFixture.ImageTag and .github/workflows/e2e.yml —
+# one greppable restate-server version across the repo.
+RESTATE_IMAGE="docker.io/restatedev/restate:1.4"
 RESTATE_CONTAINER="restate-ci"
 SURREALDB_IMAGE="surrealdb/surrealdb:v2.1.4"
 SURREALDB_CONTAINER="surrealdb-ci"
@@ -182,12 +184,17 @@ echo "Starting SurrealDbInventory on port 9088..."
 dotnet run --project "$ROOT_DIR/samples/SurrealDbInventory" -c Release --no-build &
 PIDS+=($!)
 
+echo "Starting ReplayLab on port 9090..."
+dotnet run --project "$ROOT_DIR/samples/ReplayLab" -c Release --no-build &
+PIDS+=($!)
+
 echo "Waiting for services to start..."
 wait_for_port 9080
 wait_for_port 9081
 wait_for_port 9082
 wait_for_port 9084
 wait_for_port 9088
+wait_for_port 9090
 echo "All services ready."
 echo ""
 
@@ -198,6 +205,7 @@ register_deployment 9081
 register_deployment 9082
 register_deployment 9084
 register_deployment 9088
+register_deployment 9090
 echo ""
 
 # Give Restate a moment to discover handlers
@@ -490,6 +498,25 @@ elif [ "$saga_code" = "500" ]; then
 else
     fail "AOT TripBookingService/Book: expected HTTP 200 or 500, got HTTP $saga_code: $saga_body"
 fi
+
+# --- ReplayLab (suspend/resume replay smoke) ---
+# Keeps the standalone sample honest: one genuine suspend/resume (the 8s sleep exceeds the
+# container's inactivity timeout) plus a probe assertion that the journaled run "a" ran exactly
+# once. The deep, discriminating replay assertions live in test/Restate.Sdk.E2E (e2e.yml); this is
+# only a liveness smoke so a broken standalone ReplayLab fails CI here too.
+REPLAY_PROBE="ci-smoke-$$"
+
+assert_response \
+    "ReplayLab RunSleepRunService/Execute (suspend+resume)" \
+    "http://localhost:8080/RunSleepRunService/Execute" \
+    "{\"probeId\":\"$REPLAY_PROBE\"}" \
+    "|"
+
+assert_response \
+    "ReplayLab ProbeService/Get (run:a executed exactly once)" \
+    "http://localhost:8080/ProbeService/Get" \
+    "{\"probeId\":\"$REPLAY_PROBE\"}" \
+    '"run:a":1'
 
 echo ""
 echo "=== All Tests Passed (Regular + AOT) ==="

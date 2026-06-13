@@ -134,4 +134,73 @@ public class InvocationJournalTests
             journal.DequeueReplay(JournalEntryType.Call, null, "Other", "Handler", "k"));
         Assert.Contains("target", ex.Message);
     }
+
+    // ---- Triple overload: full branch matrix (InvocationJournal.cs:85-87, 11/14 → 14/14) --------
+
+    private static ReplayCommand Call(string? service, string? handler, string? key) => new()
+    {
+        MessageType = MessageType.CallCommand,
+        EntryType = JournalEntryType.Call,
+        TargetService = service,
+        TargetHandler = handler,
+        TargetKey = key,
+        ResultCompletionId = 2,
+        InvocationIdNotificationIdx = 1
+    };
+
+    [Fact]
+    public void DequeueReplay_TargetTriple_AllMatch_ReturnsCommand()
+    {
+        // The happy path: all three operands of the compound `||` evaluate equal, so the throw is
+        // skipped and the command is returned — the FALSE arm of every comparison.
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Call("Svc", "Handler", "k"));
+
+        var cmd = journal.DequeueReplay(JournalEntryType.Call, null, "Svc", "Handler", "k");
+        Assert.Equal("Svc", cmd.TargetService);
+        Assert.Equal("Handler", cmd.TargetHandler);
+        Assert.Equal("k", cmd.TargetKey);
+    }
+
+    [Theory]
+    // Each row mismatches exactly one operand so every operand of the `||` is independently the TRUE
+    // (mismatch) arm at least once — the handler and key operands the single existing test never hits.
+    [InlineData("Other", "Handler", "k")]   // service operand mismatches (handler/key short-circuit past)
+    [InlineData("Svc", "Other", "k")]       // handler operand mismatches
+    [InlineData("Svc", "Handler", "other")] // key operand mismatches
+    public void DequeueReplay_TargetTriple_SingleOperandMismatch_Throws(
+        string expService, string expHandler, string expKey)
+    {
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Call("Svc", "Handler", "k"));
+
+        var ex = Assert.Throws<ProtocolException>(() =>
+            journal.DequeueReplay(JournalEntryType.Call, null, expService, expHandler, expKey));
+        Assert.Contains("target", ex.Message);
+    }
+
+    [Fact]
+    public void DequeueReplay_TargetTriple_NullJournaledTargets_NormalizeToEmpty_AndMatchEmptyExpected()
+    {
+        // The `command.TargetService ?? ""` / `TargetHandler ?? ""` / `TargetKey ?? ""` null-coalescing
+        // arms: a journaled command with NULL targets (a keyless OneWayCall to a plain service) must
+        // normalize to "" and MATCH empty-string expectations — the null branch of each `??`.
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Call(null, null, null));
+
+        var cmd = journal.DequeueReplay(JournalEntryType.Call, null, "", "", null);
+        Assert.Null(cmd.TargetService);
+    }
+
+    [Fact]
+    public void DequeueReplay_TargetTriple_NullExpectedKey_NormalizesToEmpty()
+    {
+        // The `expectedKey ?? ""` null arm on the EXPECTED side: a keyless live call (null expectedKey)
+        // against a journaled empty-string key matches.
+        var journal = new InvocationJournal();
+        journal.EnqueueReplay(Call("Svc", "Handler", ""));
+
+        var cmd = journal.DequeueReplay(JournalEntryType.Call, null, "Svc", "Handler", null);
+        Assert.Equal("", cmd.TargetKey);
+    }
 }

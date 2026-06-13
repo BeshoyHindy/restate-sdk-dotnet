@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <!-- Coverage target is the SDK core only. -->
+          <Include>[Restate.Sdk]*</Include>
+          <!-- Strip ALL source-generated code so the gate measures hand-written SDK code only:
+                 1. Generated protobuf (Gen.* under Internal.Protocol.Generated) — the .proto codec.
+                 2. The source-generated System.Text.Json JsonSerializerContext bodies. Our context
+                    is Restate.Sdk.Internal.Discovery.DiscoveryJsonContext; the generator emits its
+                    GetJsonTypeInfo / property-name / per-type converter partials into
+                    obj/**/System.Text.Json.SourceGeneration/**/*.g.cs (hundreds of lines that no
+                    hand-written test exercises directly). The trailing *JsonContext / *SerializerContext
+                    wildcards future-proof against any further STJ contexts added later, so a new
+                    AOT context can never silently re-tank the Internal namespace.
+                 3. The [LoggerMessage]-generated Log bodies (the hand-written declarations are
+                    bodiless partial methods; only the generated half has IL).
+               Mechanism choice — WHY the explicit <Exclude> and NOT ExcludeByAttribute=GeneratedCodeAttribute:
+               plan 07 §1.1(4) NOTE + Open Issue 3 prescribe the attribute first, but coverlet.collector
+               6.0.4's GeneratedCodeAttribute SHORT-NAME match cascades and ZEROES the entire report
+               (verified: every Restate.Sdk class drops to 0/0 because the attribute resolution misfires).
+               The STJ-generated members DO carry [GeneratedCode], yet relying on the attribute is the
+               very failure the plan warns against; the explicit namespace/type <Exclude> is the
+               sanctioned fallback and is mirrored by reportgenerator -classfilters for the merged report.
+               ExcludeFromCodeCoverage is kept (it does NOT cascade) so the §1.3 escape-hatch attribute
+               still works. CompilerGeneratedAttribute is deliberately ABSENT: async state-machine types,
+               lambda display classes (every ctx.Run closure) and local functions are
+               [CompilerGenerated] — listing it would silently strip the async core from the
+               report and fake the §1.1(5) thresholds.
+               DeterministicReport/UseSourceLink are deliberately ABSENT: deterministic
+               reporting requires ContinuousIntegrationBuild (CI-only per Directory.Build.props)
+               and adds nothing to threshold gating — the gate must run green locally too (GATE 4a). -->
+          <Exclude>[Restate.Sdk]Restate.Sdk.Internal.Protocol.Generated.*,[Restate.Sdk]Restate.Sdk.Internal.Discovery.DiscoveryJsonContext,[Restate.Sdk]*JsonContext,[Restate.Sdk]*SerializerContext,[Restate.Sdk]Restate.Sdk.Internal.Log</Exclude>
+          <ExcludeByAttribute>ExcludeFromCodeCoverage</ExcludeByAttribute>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

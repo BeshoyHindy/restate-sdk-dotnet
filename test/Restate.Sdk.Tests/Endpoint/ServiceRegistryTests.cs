@@ -198,4 +198,51 @@ public class ServiceRegistryTests
         Assert.True(registry.TryGetHandler("CounterObject", "Get", out var getHandler));
         Assert.True(getHandler!.IsShared);
     }
+
+    // ---- Residual branch closure (plan 07 core-branches lane) ----------------------------------
+
+    [Fact]
+    public void FromTypes_TypeWithoutGeneratedDefinition_Throws()
+    {
+        // ServiceRegistry.cs:28 — the `?? throw` arm of FromTypes: a type the source generator never
+        // produced a ServiceDefinition for (a plain CLR type) yields null from
+        // ServiceDefinitionRegistry.TryGet, so FromTypes must fail loudly with the generator hint.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ServiceRegistry.FromTypes([typeof(string)]));
+        Assert.Contains("No generated service definition", ex.Message);
+    }
+
+    [Fact]
+    public void FromTypes_ResolvesGeneratedDefinitions_AndFreezes()
+    {
+        // The success arm of the same line: a real generated type resolves and the registry is frozen.
+        var registry = ServiceRegistry.FromTypes([typeof(GreeterService)]);
+        Assert.True(registry.TryGetService("GreeterService", out _));
+        Assert.Throws<InvalidOperationException>(() =>
+            registry.Register(ServiceDefinitionRegistry.TryGet(typeof(CounterObject))!));   // frozen
+    }
+
+    [Fact]
+    public void Register_DuplicateHandlerNameWithinService_Throws()
+    {
+        // ServiceRegistry.cs:48-50 — the handler-collision throw arm. A hand-built ServiceDefinition
+        // with two handlers sharing a name must be rejected when the second TryAdd fails (the service
+        // TryAdd at line 44 succeeds first, so this is a distinct collision from Register_ThrowsOnDuplicate).
+        var service = new ServiceDefinition
+        {
+            Name = "DupHandlerService",
+            Type = ServiceType.Service,
+            Factory = _ => new object(),
+            Handlers =
+            [
+                new HandlerDefinition { Name = "Same", IsShared = false, Invoker = (_, _, _, _) => Task.FromResult<object?>(null) },
+                new HandlerDefinition { Name = "Same", IsShared = false, Invoker = (_, _, _, _) => Task.FromResult<object?>(null) }
+            ]
+        };
+
+        var registry = new ServiceRegistry();
+        var ex = Assert.Throws<InvalidOperationException>(() => registry.Register(service));
+        Assert.Contains("already registered", ex.Message);
+        Assert.Contains("Same", ex.Message);
+    }
 }

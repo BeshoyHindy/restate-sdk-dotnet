@@ -85,4 +85,72 @@ public class RetryPolicyTests
         Assert.Null(original.MaxAttempts);
         Assert.Equal(3, modified.MaxAttempts);
     }
+
+    // ---- Internal GetDelay / ShouldRetry (plan 07 §1.3 hosting-client lane, lines 61-77) -------
+    // These drive the backoff math the Run-retry loop consumes; the public property tests above
+    // never call them, leaving the whole computation uncovered.
+
+    [Fact]
+    public void GetDelay_GrowsExponentially_FromInitialDelay()
+    {
+        var policy = new RetryPolicy
+        {
+            InitialDelay = TimeSpan.FromMilliseconds(100),
+            ExponentiationFactor = 2.0,
+            MaxDelay = TimeSpan.FromSeconds(60)
+        };
+
+        // attempt 0 → 100 * 2^0, attempt 1 → 100 * 2^1, attempt 2 → 100 * 2^2.
+        Assert.Equal(TimeSpan.FromMilliseconds(100), policy.GetDelay(0));
+        Assert.Equal(TimeSpan.FromMilliseconds(200), policy.GetDelay(1));
+        Assert.Equal(TimeSpan.FromMilliseconds(400), policy.GetDelay(2));
+    }
+
+    [Fact]
+    public void GetDelay_IsCappedAtMaxDelay()
+    {
+        var policy = new RetryPolicy
+        {
+            InitialDelay = TimeSpan.FromMilliseconds(100),
+            ExponentiationFactor = 10.0,
+            MaxDelay = TimeSpan.FromMilliseconds(500)
+        };
+
+        // 100 * 10^3 = 100_000ms but the Math.Min cap clamps it to MaxDelay.
+        Assert.Equal(TimeSpan.FromMilliseconds(500), policy.GetDelay(3));
+    }
+
+    [Fact]
+    public void ShouldRetry_ReturnsTrue_WhenNoLimitsConfigured()
+    {
+        // RetryPolicy.Default has neither MaxAttempts nor MaxDuration → always retry.
+        Assert.True(RetryPolicy.Default.ShouldRetry(1000, TimeSpan.FromHours(1)));
+    }
+
+    [Fact]
+    public void ShouldRetry_StopsAtMaxAttempts()
+    {
+        var policy = RetryPolicy.FixedAttempts(3);
+
+        Assert.True(policy.ShouldRetry(2, TimeSpan.Zero));
+        Assert.False(policy.ShouldRetry(3, TimeSpan.Zero));
+        Assert.False(policy.ShouldRetry(4, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void ShouldRetry_StopsAtMaxDuration()
+    {
+        var policy = RetryPolicy.WithMaxDuration(TimeSpan.FromSeconds(10));
+
+        Assert.True(policy.ShouldRetry(0, TimeSpan.FromSeconds(9)));
+        Assert.False(policy.ShouldRetry(0, TimeSpan.FromSeconds(10)));
+        Assert.False(policy.ShouldRetry(0, TimeSpan.FromSeconds(11)));
+    }
+
+    [Fact]
+    public void ShouldRetry_None_NeverRetries()
+    {
+        // MaxAttempts == 0 means even attempt 0 is past the limit.
+        Assert.False(RetryPolicy.None.ShouldRetry(0, TimeSpan.Zero));
+    }
 }

@@ -4,6 +4,15 @@
         <IsTestProject>true</IsTestProject>
         <!-- Suppress Restate generator diagnostics for file-scoped test service classes -->
         <NoWarn>$(NoWarn);RESTATE003;RESTATE008</NoWarn>
+        <!-- The referenced Restate.Sdk is <IsAotCompatible>/<IsTrimmable>, which flows
+             JsonSerializerIsReflectionEnabledByDefault=false into the test host's runtimeconfig.
+             RestateClient.CreateJsonOptions() builds a resolver-less JsonSerializerOptions and
+             calls MakeReadOnly(), which throws when reflection-based JSON is disabled. The §2 E2E
+             suite runs RestateClient in a non-trimmed host where reflection is on; to exercise the
+             same code under the unit-coverage report we re-enable the STJ reflection fallback for
+             the test assembly only. This is a test-host runtime switch — it changes no SDK source
+             and only ADDS a fallback, so no existing test's behavior regresses. -->
+        <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
     </PropertyGroup>
 
     <ItemGroup>
@@ -15,6 +24,10 @@
         <PackageReference Include="Microsoft.AspNetCore.TestHost"/>
         <PackageReference Include="xunit"/>
         <PackageReference Include="xunit.runner.visualstudio">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="coverlet.collector">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
