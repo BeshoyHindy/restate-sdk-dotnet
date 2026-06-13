@@ -300,6 +300,16 @@ function* walkCsFiles(dir: string): Generator<string> {
 //           invocation-id round-trip IS exercised by RestateClientTests). Its absence is correct,
 //           not a stripped-coverage gap; the executable RestateClient/ServiceHandle code that USES
 //           it is present and covered.
+//         - ByInvocationId / ByWorkflowId / ByIdempotencyId: the three `private sealed class`
+//           variants of the AttachTarget sum type. coverlet FOLDS their IL (the ApplyTo overrides,
+//           ctors and property getters) into the single declaring-type entry
+//           `Restate.Sdk.AttachTarget`, which IS present in the report and measures 100% line / 100%
+//           branch — every nested member shows there (verified: InvocationId/WorkflowId/IdempotencyId
+//           factories, both ApplyTo overloads, BuildWorkflowTarget/BuildIdempotentRequestTarget,
+//           get_Id/get_Name, the nested ctors). They get no DISTINCT <class> entry only because they
+//           are private nested types coverlet attributes to the parent — their absence as separate
+//           entries is correct, not a stripped-coverage gap. The G6/G7 attach/get-output-by-target
+//           tests exercise all three variants through ParityBatchATests + ContextSurfaceTests.
 const SANCTIONED_EXCLUSIONS = new Set<string>([
   "Log",
   "DiscoveryJsonContext",
@@ -309,6 +319,9 @@ const SANCTIONED_EXCLUSIONS = new Set<string>([
   "WorkflowContext",
   "SharedWorkflowContext",
   "SendResponse",
+  "ByInvocationId",
+  "ByWorkflowId",
+  "ByIdempotencyId",
 ]);
 
 // A declared type is "present" in the report if some class entry's simple type name (last

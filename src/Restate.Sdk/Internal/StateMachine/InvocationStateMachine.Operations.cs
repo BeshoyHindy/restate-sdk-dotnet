@@ -365,21 +365,24 @@ internal sealed partial class InvocationStateMachine
     }
 
     private void WriteCallCommandMessageWithOptions(string service, string handler, string? key,
-        ReadOnlyMemory<byte> requestBytes, uint invocationIdNotificationIdx, uint completionId, string? idempotencyKey)
+        ReadOnlyMemory<byte> requestBytes, uint invocationIdNotificationIdx, uint completionId, string? idempotencyKey,
+        IReadOnlyDictionary<string, string>? headers)
     {
         var msg = ProtobufCodec.CreateCallCommandWithOptions(
-            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx, idempotencyKey);
+            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx, idempotencyKey,
+            headers);
         WriteCommand(MessageType.CallCommand, msg);
     }
 
     private void WriteSendCommandMessage(string service, string handler, string? key, ReadOnlyMemory<byte> requestBytes,
-        TimeSpan? delay, string? idempotencyKey, uint notificationIdx)
+        TimeSpan? delay, string? idempotencyKey, uint notificationIdx,
+        IReadOnlyDictionary<string, string>? headers)
     {
         var invokeTime = delay.HasValue && delay.Value > TimeSpan.Zero
             ? (ulong)DateTimeOffset.UtcNow.Add(delay.Value).ToUnixTimeMilliseconds()
             : 0UL;
-        var msg = ProtobufCodec.CreateSendCommand(
-            service, handler, key, requestBytes.Span, invokeTime, idempotencyKey, notificationIdx);
+        var msg = ProtobufCodec.CreateSendCommandWithOptions(
+            service, handler, key, requestBytes.Span, invokeTime, idempotencyKey, notificationIdx, headers);
         WriteCommand(MessageType.OneWayCallCommand, msg);
     }
 
@@ -388,9 +391,16 @@ internal sealed partial class InvocationStateMachine
     ///     order vm/mod.rs:742-744). The dummy-journal-slot hack is gone; the request is serialized
     ///     inside _commandLock and the result is resolved from the notification via the park API.
     /// </summary>
-    private async ValueTask<uint> CallPrefixAsync(string service, string? key, string handler,
-        ReadOnlyMemory<byte> requestBytes, string? idempotencyKey, CancellationToken ct)
+    private async ValueTask<(uint ResultCompletionId, uint InvocationIdCompletionId)> CallPrefixAsync(
+        string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
+        string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
     {
+        // G8 — empty-idempotency-key parity (shared-core EMPTY_IDEMPOTENCY_KEY, mod.rs:735-740). An
+        // empty (but non-null) key is a caller bug: Rust transitions to HitError BEFORE journaling, so
+        // we throw a non-retryable TerminalException here, BEFORE NextCompletionId / RecordCommand, to
+        // avoid mutating the journal. A null key (no idempotency) is the normal path and is allowed.
+        ThrowIfEmptyIdempotencyKey(idempotencyKey);
+
         uint invocationIdCompletionId, resultCompletionId;
         bool replaying;
         lock (_commandLock)
@@ -406,10 +416,12 @@ internal sealed partial class InvocationStateMachine
                 ValidateReplayCompletionId(cmd.InvocationIdNotificationIdx, invocationIdCompletionId);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, resultCompletionId);
             }
-            else if (idempotencyKey is not null)
+            else if (idempotencyKey is not null || headers is not null)
             {
+                // Any optional command field (idempotency key OR custom headers) routes through the
+                // options writer; both default-absent when null so the emitted command stays minimal.
                 WriteCallCommandMessageWithOptions(service, handler, key, requestBytes,
-                    invocationIdCompletionId, resultCompletionId, idempotencyKey);
+                    invocationIdCompletionId, resultCompletionId, idempotencyKey, headers);
                 _journal.RecordCommand(JournalEntryType.Call);
             }
             else
@@ -431,29 +443,40 @@ internal sealed partial class InvocationStateMachine
         }
 
         if (!replaying) await FlushGatedAsync(ct).ConfigureAwait(false);
-        return resultCompletionId;
+        return (resultCompletionId, invocationIdCompletionId);
+    }
+
+    /// <summary>
+    ///     G8 — rejects a supplied-but-empty idempotency key before any journal mutation, matching
+    ///     shared-core EMPTY_IDEMPOTENCY_KEY (errors.rs:114, codes::INTERNAL=500). A null key means
+    ///     "no idempotency" and is permitted; only an empty string is the programming error.
+    /// </summary>
+    private static void ThrowIfEmptyIdempotencyKey(string? idempotencyKey)
+    {
+        if (idempotencyKey is { Length: 0 })
+            throw new TerminalException(
+                "Trying to execute an idempotent request with an empty idempotency key. " +
+                "The idempotency key must be non-empty.");
     }
 
     public async ValueTask<TResponse> CallAsync<TResponse>(
         string service, string? key, string handler, object? request, CancellationToken ct)
     {
-        EnsureActive();
-        var requestBytes = SerializeRequest(request);
-        var resultCompletionId = await CallPrefixAsync(service, key, handler, requestBytes, null, ct)
-            .ConfigureAwait(false);
-        var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
-            .ConfigureAwait(false);
-        completion.ThrowIfFailure();
-        return Deserialize<TResponse>(completion.Value);
+        return await CallAsync<TResponse>(service, key, handler, request, null, null, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Full-option blocking Call: idempotency key (G8-validated) + custom headers (G5). All other
+    ///     CallAsync overloads funnel through here so the option-threading lives in one place.
+    /// </summary>
     public async ValueTask<TResponse> CallAsync<TResponse>(
-        string service, string? key, string handler, object? request, string? idempotencyKey, CancellationToken ct)
+        string service, string? key, string handler, object? request, string? idempotencyKey,
+        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
-        var resultCompletionId = await CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, ct)
-            .ConfigureAwait(false);
+        var (resultCompletionId, _) = await CallPrefixAsync(
+            service, key, handler, requestBytes, idempotencyKey, headers, ct).ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
             .ConfigureAwait(false);
         completion.ThrowIfFailure();
@@ -465,12 +488,46 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         var requestBytes = CopyToPooled(Serialize(request));
-        var resultCompletionId = await CallPrefixAsync(service, key, handler, requestBytes, null, ct)
+        var (resultCompletionId, _) = await CallPrefixAsync(service, key, handler, requestBytes, null, null, ct)
             .ConfigureAwait(false);
         var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
             .ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
+    }
+
+    /// <summary>
+    ///     G4 — get_call_invocation_id: a blocking Call that exposes BOTH the result and the child's
+    ///     invocation id. The prefix already allocates the invocation-id completion id alongside the
+    ///     result id; we hand both to a <see cref="CallHandle{TResponse}" /> so the handler can await
+    ///     the response AND resolve the id (mirroring the Send lazy-id round trip). The id thunk is
+    ///     lazy: asking only for the response never parks on the id slot.
+    /// </summary>
+    public CallHandle<TResponse> CallHandleAsync<TResponse>(
+        string service, string? key, string handler, object? request, string? idempotencyKey,
+        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+    {
+        EnsureActive();
+        var requestBytes = SerializeRequest(request);
+        // Journal synchronously inside the prefix before its first await so the command order is fixed;
+        // both completion ids are captured once the (cheap) flush completes. The same prefix Task is
+        // shared by both thunks, so the command is emitted exactly once regardless of which (or both)
+        // the caller awaits.
+        var prefixTask = CallPrefixAsync(service, key, handler, requestBytes, idempotencyKey, headers, ct);
+        return new CallHandle<TResponse>(
+            async () =>
+            {
+                var (resultCompletionId, _) = await prefixTask.ConfigureAwait(false);
+                var completion = await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
+                    .ConfigureAwait(false);
+                completion.ThrowIfFailure();
+                return Deserialize<TResponse>(completion.Value);
+            },
+            async () =>
+            {
+                var (_, invocationIdCompletionId) = await prefixTask.ConfigureAwait(false);
+                return await ResolveInvocationIdAsync(invocationIdCompletionId).ConfigureAwait(false);
+            });
     }
 
     // ------- Non-blocking Call (CallFuture) -------
@@ -480,12 +537,12 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
-        var resultIdTask = CallPrefixAsync(service, key, handler, requestBytes, null, ct);
+        var resultIdTask = CallPrefixAsync(service, key, handler, requestBytes, null, null, ct);
         // The prefix journals synchronously inside CallPrefixAsync before its first await, so the
         // command order is fixed; we capture the result id once the (cheap) flush completes.
         return async () =>
         {
-            var resultCompletionId = await resultIdTask.ConfigureAwait(false);
+            var (resultCompletionId, _) = await resultIdTask.ConfigureAwait(false);
             return await AwaitNotificationAsync(resultCompletionId, NotificationKind.Completion)
                 .ConfigureAwait(false);
         };
@@ -496,9 +553,19 @@ internal sealed partial class InvocationStateMachine
     public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
         TimeSpan? delay, string? idempotencyKey, CancellationToken ct)
     {
+        return await SendAsync(service, key, handler, request, delay, idempotencyKey, null, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Full-option send: idempotency key (G8-validated) + delay + custom headers (G5). The
+    ///     object-request and typed-request send overloads funnel through here.
+    /// </summary>
+    public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
+        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+    {
         EnsureActive();
         var requestBytes = SerializeRequest(request);
-        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey);
+        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers);
         await FlushGatedAsync(ct).ConfigureAwait(false);
         // Fire-and-forget: the handle resolves the invocation id lazily through the park API, so an
         // unawaited handle never parks/suspends (Rust sys_send returns SendHandle immediately).
@@ -507,18 +574,22 @@ internal sealed partial class InvocationStateMachine
 
     public async ValueTask<InvocationHandle> SendAsync<TRequest>(
         string service, string handler, TRequest request, string? key, TimeSpan? delay, string? idempotencyKey,
-        CancellationToken ct)
+        IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
     {
         EnsureActive();
         var requestBytes = CopyToPooled(Serialize(request));
-        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey);
+        var invocationIdCompletionId = SendPrefix(service, key, handler, requestBytes, delay, idempotencyKey, headers);
         await FlushGatedAsync(ct).ConfigureAwait(false);
         return new InvocationHandle(() => ResolveInvocationIdAsync(invocationIdCompletionId));
     }
 
     private uint SendPrefix(string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes,
-        TimeSpan? delay, string? idempotencyKey)
+        TimeSpan? delay, string? idempotencyKey, IReadOnlyDictionary<string, string>? headers)
     {
+        // G8 — same empty-idempotency-key guard as the call path (mod.rs:810-815). Thrown BEFORE the
+        // lock / NextCompletionId / RecordCommand so an invalid key never mutates the journal.
+        ThrowIfEmptyIdempotencyKey(idempotencyKey);
+
         uint invocationIdCompletionId;
         lock (_commandLock)
         {
@@ -533,7 +604,7 @@ internal sealed partial class InvocationStateMachine
             else
             {
                 WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
-                    invocationIdCompletionId);
+                    invocationIdCompletionId, headers);
                 _journal.RecordCommand(JournalEntryType.OneWayCall);
             }
 
@@ -610,22 +681,37 @@ internal sealed partial class InvocationStateMachine
 
     // ------- Attach / GetInvocationOutput -------
 
-    public async ValueTask<TResponse> AttachInvocationAsync<TResponse>(string invocationId, CancellationToken ct)
+    public ValueTask<TResponse> AttachInvocationAsync<TResponse>(string invocationId, CancellationToken ct) =>
+        AttachInvocationAsync<TResponse>(AttachTarget.InvocationId(invocationId), ct);
+
+    /// <summary>
+    ///     G6 — attach by an arbitrary <see cref="AttachTarget" /> (invocation id, workflow id, or
+    ///     idempotency id). The string-id overload delegates here with the InvocationId variant so the
+    ///     command-build/replay path is shared; the target only changes which oneof the codec sets.
+    /// </summary>
+    public async ValueTask<TResponse> AttachInvocationAsync<TResponse>(AttachTarget target, CancellationToken ct)
     {
         EnsureActive();
         var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.AttachInvocation,
-            id => ProtobufCodec.CreateAttachInvocationCommand(invocationId, id), MessageType.AttachInvocationCommand);
+            id => ProtobufCodec.CreateAttachInvocationCommand(target, id), MessageType.AttachInvocationCommand);
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
     }
 
-    public async ValueTask<TResponse?> GetInvocationOutputAsync<TResponse>(string invocationId, CancellationToken ct)
+    public ValueTask<TResponse?> GetInvocationOutputAsync<TResponse>(string invocationId, CancellationToken ct) =>
+        GetInvocationOutputAsync<TResponse>(AttachTarget.InvocationId(invocationId), ct);
+
+    /// <summary>
+    ///     G7 — get-output by an arbitrary <see cref="AttachTarget" /> (the get-output twin of
+    ///     <see cref="AttachInvocationAsync{TResponse}(AttachTarget, CancellationToken)" />).
+    /// </summary>
+    public async ValueTask<TResponse?> GetInvocationOutputAsync<TResponse>(AttachTarget target, CancellationToken ct)
     {
         EnsureActive();
         var (completionId, needsFlush) = SimpleCompletablePrefix(JournalEntryType.GetInvocationOutput,
-            id => ProtobufCodec.CreateGetInvocationOutputCommand(invocationId, id),
+            id => ProtobufCodec.CreateGetInvocationOutputCommand(target, id),
             MessageType.GetInvocationOutputCommand);
         if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // await the flush before parking (Issue 2)
         var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);

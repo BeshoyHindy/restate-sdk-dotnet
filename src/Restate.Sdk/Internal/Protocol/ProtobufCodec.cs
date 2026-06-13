@@ -429,6 +429,22 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
+    ///     Appends custom request <paramref name="headers" /> onto a journaled command's repeated
+    ///     <c>headers</c> field (CallCommand field 4 / OneWayCall field 5), mirroring Rust's
+    ///     <c>Target.headers: Vec&lt;Header&gt;</c> (vm/mod.rs:752-756, 824-828). The list is appended
+    ///     in iteration order so the journal bytes are deterministic across replay — the caller passes
+    ///     an already-ordered sequence. Null skips entirely (no empty repeated field is emitted).
+    /// </summary>
+    public static void AddHeaders(
+        Google.Protobuf.Collections.RepeatedField<Gen.Header> target,
+        IEnumerable<KeyValuePair<string, string>>? headers)
+    {
+        if (headers is null) return;
+        foreach (var (name, value) in headers)
+            target.Add(new Gen.Header { Key = name, Value = value });
+    }
+
+    /// <summary>
     ///     Creates an OutputCommandMessage. Always sets the Value oneof even when content is empty.
     ///     BUG 2 FIX: Previously, empty content caused the result oneof to be absent entirely.
     /// </summary>
@@ -610,6 +626,34 @@ internal static class ProtobufCodec
         };
     }
 
+    /// <summary>
+    ///     Creates an AttachInvocationCommand whose <c>target</c> oneof is set from an
+    ///     <see cref="AttachTarget" /> (vm/mod.rs:1199-1234): InvocationId, WorkflowTarget, or
+    ///     IdempotentRequestTarget. Mirrors <see cref="CreateGetInvocationOutputCommand(AttachTarget, uint)" />.
+    /// </summary>
+    public static Gen.AttachInvocationCommandMessage CreateAttachInvocationCommand(
+        AttachTarget target, uint completionId)
+    {
+        var msg = new Gen.AttachInvocationCommandMessage { ResultCompletionId = completionId };
+        // Polymorphic dispatch on the sealed AttachTarget hierarchy (no switch/default): each variant
+        // knows which target oneof to set, so there is no unreachable fallback arm to leave uncovered.
+        target.ApplyTo(msg);
+        return msg;
+    }
+
+    /// <summary>
+    ///     Creates a GetInvocationOutputCommand whose <c>target</c> oneof is set from an
+    ///     <see cref="AttachTarget" /> (vm/mod.rs:1238-1268) — the get-output twin of
+    ///     <see cref="CreateAttachInvocationCommand(AttachTarget, uint)" />.
+    /// </summary>
+    public static Gen.GetInvocationOutputCommandMessage CreateGetInvocationOutputCommand(
+        AttachTarget target, uint completionId)
+    {
+        var msg = new Gen.GetInvocationOutputCommandMessage { ResultCompletionId = completionId };
+        target.ApplyTo(msg);
+        return msg;
+    }
+
     public static Gen.ErrorMessage CreateErrorMessage(uint code, string message,
         ulong? nextRetryDelayMs = null)
     {
@@ -669,15 +713,31 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
-    ///     Creates a CallCommandMessage with an optional idempotency key.
+    ///     Creates a CallCommandMessage with an optional idempotency key and optional custom headers
+    ///     (CallCommand fields 4/12-adjacent — see <see cref="AddHeaders" />).
     /// </summary>
     public static Gen.CallCommandMessage CreateCallCommandWithOptions(
         string service, string handler, string? key,
         ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx,
-        string? idempotencyKey)
+        string? idempotencyKey, IEnumerable<KeyValuePair<string, string>>? headers = null)
     {
         var msg = CreateCallCommand(service, handler, key, parameter, completionId, invocationIdNotificationIdx);
         if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
+        AddHeaders(msg.Headers, headers);
+        return msg;
+    }
+
+    /// <summary>
+    ///     Creates a OneWayCallCommandMessage with optional custom headers (OneWayCall field 5),
+    ///     mirroring <see cref="CreateCallCommandWithOptions" /> for the send path.
+    /// </summary>
+    public static Gen.OneWayCallCommandMessage CreateSendCommandWithOptions(
+        string service, string handler, string? key,
+        ReadOnlySpan<byte> parameter, ulong invokeTime, string? idempotencyKey, uint notificationIdx,
+        IEnumerable<KeyValuePair<string, string>>? headers = null)
+    {
+        var msg = CreateSendCommand(service, handler, key, parameter, invokeTime, idempotencyKey, notificationIdx);
+        AddHeaders(msg.Headers, headers);
         return msg;
     }
 }

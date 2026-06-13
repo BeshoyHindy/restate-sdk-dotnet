@@ -303,6 +303,147 @@ public sealed class ContextSurfaceTests : IDisposable
         await AwaitBounded(pump);
     }
 
+    // ---- Batch A parity (G4-G7) through the real DefaultContext ------------------------------
+
+    /// <summary>
+    ///     G4 — both CallHandle overloads (unkeyed + keyed) round-trip through the DefaultContext: the
+    ///     handle resolves the child invocation id from the CallInvocationIdCompletion AND the response
+    ///     from the CallCompletion. Each call burns two completion ids (invocation-id then result).
+    /// </summary>
+    [Fact]
+    public async Task CallHandle_BothOverloads_ResolveIdAndResultThroughContext()
+    {
+        InitProcessing();
+        var pump = StartPump();
+        var ctx = NewServiceContext();
+
+        // Drive all FOUR shapes so both the null-options and non-null-options branches of BOTH
+        // CallHandle overloads (unkeyed + keyed) are covered. Each call burns two completion ids
+        // (invocation id, then result) in allocation order: 1/2, 3/4, 5/6, 7/8.
+        var unkeyedNoOpts = ctx.CallHandle<string>("Svc", "Echo", "a");
+        await DeliverAsync(MessageType.CallInvocationIdCompletion, CreateCallInvocationIdCompletion(1, "child_1"));
+        await DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, JsonSerializer.SerializeToUtf8Bytes("A")));
+        Assert.Equal("child_1", await AwaitBounded(unkeyedNoOpts.GetInvocationIdAsync()));
+        Assert.Equal("A", await AwaitBounded(unkeyedNoOpts.GetResponseAsync()));
+
+        var unkeyedWithOpts = ctx.CallHandle<string>("Svc", "Echo", "a2",
+            CallOptions.WithIdempotencyKey("idem-u"));
+        await DeliverAsync(MessageType.CallInvocationIdCompletion, CreateCallInvocationIdCompletion(3, "child_1b"));
+        await DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(4, JsonSerializer.SerializeToUtf8Bytes("A2")));
+        Assert.Equal("child_1b", await AwaitBounded(unkeyedWithOpts.GetInvocationIdAsync()));
+        Assert.Equal("A2", await AwaitBounded(unkeyedWithOpts.GetResponseAsync()));
+
+        var keyedNoOpts = ctx.CallHandle<string>("Svc", "k", "Echo", "b");
+        await DeliverAsync(MessageType.CallInvocationIdCompletion, CreateCallInvocationIdCompletion(5, "child_2"));
+        await DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(6, JsonSerializer.SerializeToUtf8Bytes("B")));
+        Assert.Equal("child_2", await AwaitBounded(keyedNoOpts.GetInvocationIdAsync()));
+        Assert.Equal("B", await AwaitBounded(keyedNoOpts.GetResponseAsync()));
+
+        var keyedWithOpts = ctx.CallHandle<string>("Svc", "k", "Echo", "b2",
+            CallOptions.WithIdempotencyKey("idem-h"));
+        await DeliverAsync(MessageType.CallInvocationIdCompletion, CreateCallInvocationIdCompletion(7, "child_2b"));
+        await DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(8, JsonSerializer.SerializeToUtf8Bytes("B2")));
+        Assert.Equal("child_2b", await AwaitBounded(keyedWithOpts.GetInvocationIdAsync()));
+        Assert.Equal("B2", await AwaitBounded(keyedWithOpts.GetResponseAsync()));
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+    }
+
+    /// <summary>
+    ///     G5 — Call with custom headers (via CallOptions.Headers) round-trips through the context and
+    ///     the headers land on the emitted CallCommand.
+    /// </summary>
+    [Fact]
+    public async Task Call_WithHeaders_ThroughContext_EmitsHeaders()
+    {
+        InitProcessing();
+        var pump = StartPump();
+        var ctx = NewServiceContext();
+
+        var headers = new Dictionary<string, string> { ["x-trace"] = "t1" };
+        var call = ctx.Call<string>("Svc", "Echo", (object?)"a", CallOptions.WithHeaders(headers));
+        await DeliverAsync(MessageType.CallCompletion, CreateCallCompletion(2, JsonSerializer.SerializeToUtf8Bytes("A")));
+        Assert.Equal("A", await AwaitBounded(call));
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+
+        var frames = await DrainOutboundAsync();
+        var cmd = Gen.CallCommandMessage.Parser.ParseFrom(
+            Assert.Single(frames, f => f.Header.Type == MessageType.CallCommand).Payload);
+        var header = Assert.Single(cmd.Headers);
+        Assert.Equal("x-trace", header.Key);
+        Assert.Equal("t1", header.Value);
+    }
+
+    /// <summary>
+    ///     G5 — both SendOptions-based Send overloads (unkeyed + keyed) emit OneWayCallCommands whose
+    ///     headers field carries the SendOptions.Headers.
+    /// </summary>
+    [Fact]
+    public async Task Send_WithSendOptions_ThroughContext_EmitsHeaders()
+    {
+        InitProcessing();
+        var pump = StartPump();
+        var ctx = NewServiceContext();
+
+        var headers = new Dictionary<string, string> { ["x-src"] = "ctx" };
+        await AwaitBounded(ctx.Send("Svc", "Fire", (object?)"x", SendOptions.WithHeaders(headers)));
+        await AwaitBounded(ctx.Send("Svc", "k", "Fire", (object?)"y",
+            new SendOptions { Delay = TimeSpan.FromSeconds(1), Headers = headers }));
+        // Typed Send<TRequest> with NULL options exercises the options?.* null-conditional branches
+        // (Delay/IdempotencyKey/Headers all default-absent) — the no-header send below carries none.
+        await AwaitBounded(ctx.Send<string>("Svc", "Fire", request: "z", key: "k"));
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+
+        var frames = await DrainOutboundAsync();
+        var sends = frames.Where(f => f.Header.Type == MessageType.OneWayCallCommand).ToArray();
+        Assert.Equal(3, sends.Length);
+        var withHeaders = sends.Take(2)
+            .Select(s => Gen.OneWayCallCommandMessage.Parser.ParseFrom(s.Payload)).ToArray();
+        foreach (var cmd in withHeaders)
+            Assert.Equal("x-src", Assert.Single(cmd.Headers).Key);
+        // The typed null-options send emits no headers.
+        Assert.Empty(Gen.OneWayCallCommandMessage.Parser.ParseFrom(sends[2].Payload).Headers);
+    }
+
+    /// <summary>
+    ///     G6/G7 — Attach and GetOutput by an AttachTarget round-trip through the context and emit the
+    ///     correct target oneof (WorkflowTarget / IdempotentRequestTarget).
+    /// </summary>
+    [Fact]
+    public async Task AttachAndGetOutput_ByTarget_ThroughContext()
+    {
+        InitProcessing();
+        var pump = StartPump();
+        var ctx = NewServiceContext();
+
+        var attach = ctx.Attach<string>(AttachTarget.WorkflowId("Wf", "k-1"));
+        await DeliverCompletionAsync(MessageType.AttachInvocationCompletion, 1,
+            JsonSerializer.SerializeToUtf8Bytes("attached"));
+        Assert.Equal("attached", await AwaitBounded(attach));
+
+        var output = ctx.GetOutput<string>(AttachTarget.IdempotencyId("Svc", "h", "idem"));
+        await DeliverCompletionAsync(MessageType.GetInvocationOutputCompletion, 2,
+            JsonSerializer.SerializeToUtf8Bytes("out"));
+        Assert.Equal("out", await AwaitBounded(output));
+
+        _rig.CompleteInbound();
+        await AwaitBounded(pump);
+
+        var frames = await DrainOutboundAsync();
+        var attachCmd = Gen.AttachInvocationCommandMessage.Parser.ParseFrom(
+            Assert.Single(frames, f => f.Header.Type == MessageType.AttachInvocationCommand).Payload);
+        Assert.Equal(Gen.AttachInvocationCommandMessage.TargetOneofCase.WorkflowTarget, attachCmd.TargetCase);
+        var outputCmd = Gen.GetInvocationOutputCommandMessage.Parser.ParseFrom(
+            Assert.Single(frames, f => f.Header.Type == MessageType.GetInvocationOutputCommand).Payload);
+        Assert.Equal(Gen.GetInvocationOutputCommandMessage.TargetOneofCase.IdempotentRequestTarget,
+            outputCmd.TargetCase);
+    }
+
     [Fact]
     public async Task CancelInvocation_AndAwakeable_WriteThroughTheContext()
     {
@@ -785,4 +926,27 @@ public sealed class ContextSurfaceTests : IDisposable
         _rig.DeliverAsync(type, message);
 
     private Task DeliverAsync(MessageType type, byte[] payload) => _rig.DeliverAsync(type, payload);
+
+    /// <summary>
+    ///     Drains every outbound frame currently buffered. The SM never completes the outbound writer
+    ///     (only Dispose does), so a 250 ms idle cancellation ends the read once nothing more is
+    ///     immediately available — within the watchdog, never a hang (mirrors SendHandleTests).
+    /// </summary>
+    private async Task<IReadOnlyList<(MessageHeader Header, byte[] Payload)>> DrainOutboundAsync()
+    {
+        var reader = new ProtocolReader(_rig.OutboundReader);
+        var frames = new List<(MessageHeader, byte[])>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        try
+        {
+            while (await reader.ReadMessageAsync(cts.Token).ConfigureAwait(false) is { } message)
+            {
+                frames.Add((message.Header, message.Payload.ToArray()));
+                message.Dispose();
+            }
+        }
+        catch (OperationCanceledException) { /* no more buffered frames */ }
+
+        return frames;
+    }
 }

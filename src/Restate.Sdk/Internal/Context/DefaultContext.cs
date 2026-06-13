@@ -118,13 +118,29 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
         CallOptions options)
     {
-        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey,
+            options.Headers, Aborted);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
         CallOptions options)
     {
-        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey,
+            options.Headers, Aborted);
+    }
+
+    public override CallHandle<TResponse> CallHandle<TResponse>(string service, string handler, object? request = null,
+        CallOptions? options = null)
+    {
+        return _stateMachine.CallHandleAsync<TResponse>(service, null, handler, request,
+            options?.IdempotencyKey, options?.Headers, Aborted);
+    }
+
+    public override CallHandle<TResponse> CallHandle<TResponse>(string service, string key, string handler,
+        object? request, CallOptions? options = null)
+    {
+        return _stateMachine.CallHandleAsync<TResponse>(service, key, handler, request,
+            options?.IdempotencyKey, options?.Headers, Aborted);
     }
 
     public override ValueTask CancelInvocation(string invocationId)
@@ -159,6 +175,20 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
         return _stateMachine.SendAsync(service, key, handler, request, delay, idempotencyKey, Aborted);
+    }
+
+    public override ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options)
+    {
+        return _stateMachine.SendAsync(service, null, handler, request, options.Delay, options.IdempotencyKey,
+            options.Headers, Aborted);
+    }
+
+    public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options)
+    {
+        return _stateMachine.SendAsync(service, key, handler, request, options.Delay, options.IdempotencyKey,
+            options.Headers, Aborted);
     }
 
     public override TClient ServiceClient<TClient>()
@@ -201,7 +231,7 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         TRequest request, string? key = null, SendOptions? options = null)
     {
         return _stateMachine.SendAsync(service, handler, request, key, options?.Delay, options?.IdempotencyKey,
-            Aborted);
+            options?.Headers, Aborted);
     }
 
     public override ValueTask<T> Attach<T>(string invocationId)
@@ -209,9 +239,19 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return _stateMachine.AttachInvocationAsync<T>(invocationId, Aborted);
     }
 
+    public override ValueTask<T> Attach<T>(AttachTarget target)
+    {
+        return _stateMachine.AttachInvocationAsync<T>(target, Aborted);
+    }
+
     public override ValueTask<T?> GetOutput<T>(string invocationId) where T : default
     {
         return _stateMachine.GetInvocationOutputAsync<T>(invocationId, Aborted);
+    }
+
+    public override ValueTask<T?> GetOutput<T>(AttachTarget target) where T : default
+    {
+        return _stateMachine.GetInvocationOutputAsync<T>(target, Aborted);
     }
 
     public override ValueTask Sleep(TimeSpan duration)

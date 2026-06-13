@@ -74,6 +74,20 @@ public abstract class Context : IContext
         CallOptions options);
 
     /// <summary>
+    ///     Calls a handler and returns a <c>CallHandle&lt;TResponse&gt;</c> exposing BOTH the
+    ///     response and the callee's invocation id (shared-core get_call_invocation_id).
+    /// </summary>
+    public abstract CallHandle<TResponse> CallHandle<TResponse>(string service, string handler, object? request = null,
+        CallOptions? options = null);
+
+    /// <summary>
+    ///     Calls a handler on a keyed virtual object or workflow and returns a
+    ///     <c>CallHandle&lt;TResponse&gt;</c> exposing both the response and the callee's invocation id.
+    /// </summary>
+    public abstract CallHandle<TResponse> CallHandle<TResponse>(string service, string key, string handler,
+        object? request, CallOptions? options = null);
+
+    /// <summary>
     ///     Cancels a running invocation by sending a cancel signal.
     ///     The target invocation will be aborted with a cancellation error.
     /// </summary>
@@ -99,6 +113,20 @@ public abstract class Context : IContext
     /// <summary>Sends a one-way invocation to a keyed virtual object or workflow. Returns a handle to track the invocation.</summary>
     public abstract ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null);
+
+    /// <summary>
+    ///     Sends a one-way invocation with full <see cref="SendOptions" /> (delay, idempotency key, and
+    ///     custom headers).
+    /// </summary>
+    public abstract ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options);
+
+    /// <summary>
+    ///     Sends a one-way invocation to a keyed virtual object or workflow with full
+    ///     <see cref="SendOptions" /> (delay, idempotency key, and custom headers).
+    /// </summary>
+    public abstract ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options);
 
     /// <summary>Gets a source-generated typed call client for a stateless service.</summary>
     public abstract TClient ServiceClient<TClient>() where TClient : class;
@@ -142,8 +170,20 @@ public abstract class Context : IContext
     /// <summary>Attaches to a running invocation and awaits its result.</summary>
     public abstract ValueTask<T> Attach<T>(string invocationId);
 
+    /// <summary>
+    ///     Attaches to a running invocation identified by an <see cref="AttachTarget" /> (invocation
+    ///     id, workflow id, or idempotency id) and awaits its result.
+    /// </summary>
+    public abstract ValueTask<T> Attach<T>(AttachTarget target);
+
     /// <summary>Gets the output of a completed invocation, or default if not yet completed.</summary>
     public abstract ValueTask<T?> GetOutput<T>(string invocationId);
+
+    /// <summary>
+    ///     Gets the output of a completed invocation identified by an <see cref="AttachTarget" />
+    ///     (invocation id, workflow id, or idempotency id), or default if not yet completed.
+    /// </summary>
+    public abstract ValueTask<T?> GetOutput<T>(AttachTarget target);
 
     /// <summary>
     ///     Calls a handler by service and handler name with typed request/response serialization.

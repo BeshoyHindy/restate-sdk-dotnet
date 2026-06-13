@@ -120,6 +120,20 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override CallHandle<TResponse> CallHandle<TResponse>(string service, string handler, object? request = null,
+        CallOptions? options = null)
+    {
+        return BaseContext.CallHandle<TResponse>(service, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override CallHandle<TResponse> CallHandle<TResponse>(string service, string key, string handler,
+        object? request, CallOptions? options = null)
+    {
+        return BaseContext.CallHandle<TResponse>(service, key, handler, request, options);
+    }
+
+    /// <inheritdoc />
     public override ValueTask CancelInvocation(string invocationId)
     {
         return BaseContext.CancelInvocation(invocationId);
@@ -150,6 +164,20 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
         return BaseContext.Send(service, key, handler, request, delay, idempotencyKey);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options)
+    {
+        return BaseContext.Send(service, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options)
+    {
+        return BaseContext.Send(service, key, handler, request, options);
     }
 
     /// <inheritdoc />
@@ -225,9 +253,21 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask<T> Attach<T>(AttachTarget target)
+    {
+        return BaseContext.Attach<T>(target);
+    }
+
+    /// <inheritdoc />
     public override ValueTask<T?> GetOutput<T>(string invocationId) where T : default
     {
         return BaseContext.GetOutput<T>(invocationId);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<T?> GetOutput<T>(AttachTarget target) where T : default
+    {
+        return BaseContext.GetOutput<T>(target);
     }
 
     /// <inheritdoc />
