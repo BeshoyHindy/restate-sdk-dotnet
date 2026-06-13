@@ -158,8 +158,20 @@ internal sealed partial class InvocationStateMachine
             {
                 var signalIndex = (int)signal.Idx.Value;
 
-                // Reserved built-in range (1..16) is not consumed as a user signal — CANCEL handling
-                // and named-signal consumption remain out of scope; log-and-ignore (§5 divergence).
+                // Inbound CANCEL (idx=1, CANCEL_SIGNAL_ID): cancels THIS invocation. Shared-core tags
+                // it NotificationMetadata::Cancellation (async_results.rs:88-93) and do_progress returns
+                // DoProgressResponse::CancelSignalReceived (mod.rs:432-492). This is the ONE detection
+                // point — StartAsync also routes a buffered CANCEL through here, so a CANCEL inside the
+                // known-entries batch is handled identically. TriggerCancellation faults parked awaits
+                // with TerminalException(409); the handler unwinds and emits OutputCommand{409} + End.
+                if (signalIndex == CancelSignalId)
+                {
+                    TriggerCancellation();
+                    return;
+                }
+
+                // Reserved built-in range (2..16) is not consumed as a user signal — only idx==1 is
+                // meaningful; the rest are reserved with no SDK semantics. Log-and-ignore (§5).
                 if (signalIndex < FirstUserSignalId)
                 {
                     Log.BuiltInSignalIgnored(Logger, InvocationId, signalIndex);
@@ -184,7 +196,13 @@ internal sealed partial class InvocationStateMachine
             }
             else
             {
-                Log.BuiltInSignalIgnored(Logger, InvocationId, -1);   // named signal — not yet consumed
+                // Named signal (oneof name, no numeric idx). There is provably NO named-signal waiter:
+                // Awakeable() only allocates numeric ids (17+) and _signalCompletions is keyed by int
+                // id, so no one is ever parked on a name. SuspensionMessage.waiting_named_signals is
+                // never populated either. Buffering or ignoring is therefore correct and strands no
+                // one — a deliberate named divergence (no named-signal user API in this SDK). Safe
+                // ignore (no routing into _signalCompletions, which has no slot for a name).
+                Log.NamedSignalIgnored(Logger, InvocationId, signal.Name ?? "");
             }
 
             return;

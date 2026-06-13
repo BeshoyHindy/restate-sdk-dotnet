@@ -310,21 +310,77 @@ public class InvocationStateMachineTests : IDisposable
     // ------- Promises -------
 
     [Fact]
-    public void ResolvePromise_InProcessingMode_WritesCommand()
+    public async Task ResolvePromise_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 1);
 
-        sm.ResolvePromise("approval", new { Approved = true });
+        // ResolvePromise now awaits the CompletePromiseCompletion ack (proto field 11): it writes the
+        // command, parks on completion id 1, and resolves when the ack lands. Start the pump so the
+        // ack we write to the inbound pipe routes into the completion table.
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+        var resolve = sm.ResolvePromise("approval", new { Approved = true }, CancellationToken.None);
+
+        var command = await ReadFirstCommandAsync(MessageType.CompletePromiseCommand);
+        var parsed = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(command);
+        Assert.Equal("approval", parsed.Key);
+        Assert.Equal(1u, parsed.ResultCompletionId);
+
+        await WriteCompletePromiseCompletionAsync(1, voidAck: true);   // benign Void ack resolves the await
+        await resolve.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
-    public void RejectPromise_InProcessingMode_WritesCommand()
+    public async Task RejectPromise_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 1);
 
-        sm.RejectPromise("approval", "denied");
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+        var reject = sm.RejectPromise("approval", "denied", CancellationToken.None);
+
+        var command = await ReadFirstCommandAsync(MessageType.CompletePromiseCommand);
+        var parsed = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(command);
+        Assert.Equal("approval", parsed.Key);
+        Assert.Equal(1u, parsed.ResultCompletionId);
+        Assert.Equal(Gen.CompletePromiseCommandMessage.CompletionOneofCase.CompletionFailure, parsed.CompletionCase);
+
+        await WriteCompletePromiseCompletionAsync(1, voidAck: true);
+        await reject.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await pump.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // Reads outbound frames until the first of the given type, returning its payload bytes.
+    private async Task<byte[]> ReadFirstCommandAsync(MessageType type)
+    {
+        var reader = new ProtocolReader(_outbound.Reader);
+        while (await reader.ReadMessageAsync(CancellationToken.None) is { } message)
+        {
+            if (message.Header.Type == type)
+            {
+                var payload = message.Payload.ToArray();
+                message.Dispose();
+                return payload;
+            }
+
+            message.Dispose();
+        }
+
+        throw new InvalidOperationException($"No {type} frame emitted");
+    }
+
+    // Writes one CompletePromiseCompletionNotification (Void success or Failure) and EOFs the inbound.
+    private async Task WriteCompletePromiseCompletionAsync(uint completionId, bool voidAck = false, string? failure = null)
+    {
+        var notification = new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = completionId };
+        if (failure is not null) notification.Failure = new Gen.Failure { Code = 409, Message = failure };
+        else if (voidAck) notification.Void = new Gen.Void();
+
+        var writer = new ProtocolWriter(_inbound.Writer);
+        writer.WriteMessage(MessageType.CompletePromiseCompletion, notification.ToByteArray());
+        await writer.FlushAsync(CancellationToken.None);
+        _inbound.Writer.Complete();   // EOF after the single ack
     }
 
     // ------- Output / Error -------

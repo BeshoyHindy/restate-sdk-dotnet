@@ -451,6 +451,26 @@ internal static class ProtocolTestHarness
         return msg;
     }
 
+    /// <summary>
+    ///     SignalNotification by NAME (the oneof name branch). This SDK has no named-signal user API,
+    ///     so such a frame must be handled (logged + ignored) without crashing and without resolving
+    ///     any numeric awakeable. value == null → Void; a non-null value → Value result.
+    /// </summary>
+    public static Gen.SignalNotificationMessage CreateNamedSignalNotification(
+        string? name, ReadOnlyMemory<byte>? value = null)
+    {
+        var msg = new Gen.SignalNotificationMessage();
+        // name == null leaves the signal_id oneof UNSET (a degenerate frame with neither idx nor
+        // name) so callers can exercise the null-name defensive path; a non-null name sets the oneof.
+        if (name is not null)
+            msg.Name = name;
+        if (value is { } content)
+            msg.Value = new Gen.Value { Content = ByteString.CopyFrom(content.Span) };
+        else
+            msg.Void = new Gen.Void();
+        return msg;
+    }
+
     /// <summary>SignalNotification carrying a terminal failure (rejected awakeable).</summary>
     public static Gen.SignalNotificationMessage CreateSignalNotificationFailure(
         uint idx, uint code, string message) =>

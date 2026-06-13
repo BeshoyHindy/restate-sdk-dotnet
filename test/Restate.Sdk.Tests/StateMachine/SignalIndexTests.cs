@@ -98,15 +98,13 @@ public sealed class SignalIndexTests : IDisposable
         await AwaitBounded(pump);
     }
 
-    // §4.3.2 — the CANCEL built-in (Idx=1, Void) after creating awakeables is logged-and-ignored;
-    // it must NOT resolve any user awakeable.
-    //
-    // DOCUMENTED DIVERGENCE (blueprint §5): Rust buffers CANCEL into async_results for later
-    // consumption; this fork logs-and-ignores it pending cancellation support. When cancellation
-    // lands, this expectation must be flipped DELIBERATELY (the CANCEL signal should then surface
-    // as a cancellation), not patched to silence a regression.
+    // §4.3.2 — inbound CANCEL (Idx=1, Void) cancels THIS invocation: every parked durable await
+    // FAULTS with TerminalException(409, "cancelled") — the Restate cross-SDK cancellation convention
+    // — rather than resolving as a user signal. This is the DELIBERATE flip of the former
+    // "CANCEL is ignored pending cancellation support" expectation (blueprint §5), now that inbound
+    // cancellation has landed: CANCEL must surface as a cancellation, not bleed into user signal state.
     [Fact(Timeout = 10_000)]
-    public async Task BuiltInCancelSignal_IsIgnored_PendingCancellationSupport()
+    public async Task BuiltInCancelSignal_FaultsParkedAwaits_WithTerminal409()
     {
         var pump = _sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
@@ -118,18 +116,83 @@ public sealed class SignalIndexTests : IDisposable
         var firstAwait = _sm.AwaitNotificationAsync(firstSignalId, InvocationStateMachine.NotificationKind.Signal);
         var secondAwait = _sm.AwaitNotificationAsync(secondSignalId, InvocationStateMachine.NotificationKind.Signal);
 
-        // CANCEL shape: reserved Idx=1 with a Void result. Must be routed to neither awakeable.
+        // CANCEL shape: reserved Idx=1 with a Void result. It must cancel the invocation, faulting
+        // BOTH parked awaits with a 409 TerminalException — not resolve either as a user signal.
         await DeliverSignalAsync(CreateSignalNotification(InvocationStateMachine.CancelSignalId));
 
-        // Neither awakeable resolves from CANCEL. A real awakeable signal (idx 17) then only
-        // resolves the FIRST — proving the CANCEL frame did not bleed into user signal state.
+        var firstEx = await Assert.ThrowsAsync<TerminalException>(async () => await AwaitBounded(firstAwait.AsTask()));
+        var secondEx = await Assert.ThrowsAsync<TerminalException>(async () => await AwaitBounded(secondAwait.AsTask()));
+        Assert.Equal(409, firstEx.Code);
+        Assert.Equal("cancelled", firstEx.Message);
+        Assert.Equal(409, secondEx.Code);
+
+        // The handler CancellationToken is also cancelled so non-awaiting handler code unwinds.
+        Assert.True(_sm.CancelToken.IsCancellationRequested);
+        Assert.True(_sm.IsCancellationRequested);
+
+        _inbound.Writer.Complete();
+        await AwaitBounded(pump);
+    }
+
+    // §5 — a RESERVED built-in signal in the 2..16 range (not CANCEL, not a user awakeable) is
+    // logged-and-ignored: it must NOT cancel the invocation and must NOT resolve any user awakeable.
+    // A real idx-17 signal then still resolves the awakeable, proving the reserved frame stranded
+    // no one. (idx==1 is CANCEL and is covered separately above.)
+    [Fact(Timeout = 10_000)]
+    public async Task ReservedBuiltInSignal_IsIgnored_DoesNotCancelOrResolve()
+    {
+        var pump = _sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        var (_, firstSignalId) = _sm.Awakeable();
+        Assert.Equal(17u, firstSignalId);
+        var awaitTask = _sm.AwaitNotificationAsync(firstSignalId, InvocationStateMachine.NotificationKind.Signal);
+
+        // A reserved built-in signal (idx 2) — in the 2..16 range — is ignored, not cancel, not user.
+        await DeliverSignalAsync(CreateSignalNotification(2u));
+
+        Assert.False(awaitTask.IsCompleted, "a reserved signal must not resolve a numeric awakeable");
+        Assert.False(_sm.IsCancellationRequested, "a reserved (non-CANCEL) signal must not cancel");
+
+        // A real idx-17 signal then resolves the awakeable normally.
         await DeliverSignalAsync(CreateSignalNotification(17u, new byte[] { 0x2A }));
+        var result = await AwaitBounded(awaitTask.AsTask());
+        Assert.True(result.IsSuccess);
+        Assert.Equal(new byte[] { 0x2A }, result.Value.ToArray());
 
-        var firstResult = await AwaitBounded(firstAwait.AsTask());
-        Assert.True(firstResult.IsSuccess);
-        Assert.Equal(new byte[] { 0x2A }, firstResult.Value.ToArray());
+        _inbound.Writer.Complete();
+        await AwaitBounded(pump);
+    }
 
-        Assert.False(secondAwait.IsCompleted, "CANCEL must not resolve the second awakeable");
+    // §5 — a NAMED signal (oneof name, no numeric idx) is handled without crashing: this SDK has no
+    // named-signal user API, so it is logged-and-ignored. It must NOT fault the invocation, must NOT
+    // resolve any numeric awakeable, and the handler proceeds normally — a real idx-17 signal then
+    // still resolves the FIRST awakeable, proving the named frame stranded no one.
+    [Fact(Timeout = 10_000)]
+    public async Task NamedSignal_IsIgnored_DoesNotResolveOrFaultAwakeable()
+    {
+        var pump = _sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        var (_, firstSignalId) = _sm.Awakeable();
+        Assert.Equal(17u, firstSignalId);
+        var awaitTask = _sm.AwaitNotificationAsync(firstSignalId, InvocationStateMachine.NotificationKind.Signal);
+
+        // A named signal with a payload — there is no numeric waiter for a name, so it is ignored.
+        await DeliverSignalAsync(CreateNamedSignalNotification("my-named-signal", new byte[] { 0x99 }));
+
+        // A degenerate signal with NEITHER idx NOR name set (oneof unset) also falls to the named
+        // branch (Idx is null) with a null Name — it must be ignored just as safely (covers the
+        // null-name path of the log). This is a malformed/empty frame defensive case.
+        await DeliverSignalAsync(CreateNamedSignalNotification(null, new byte[] { 0x88 }));
+
+        // The numeric awakeable is still unresolved and un-faulted (neither frame touched it).
+        Assert.False(awaitTask.IsCompleted, "a named signal must not resolve a numeric awakeable");
+        Assert.False(_sm.IsCancellationRequested, "a named signal must not cancel the invocation");
+
+        // A real idx-17 signal then resolves the awakeable normally.
+        await DeliverSignalAsync(CreateSignalNotification(17u, new byte[] { 0x2A }));
+        var result = await AwaitBounded(awaitTask.AsTask());
+        Assert.True(result.IsSuccess);
+        Assert.Equal(new byte[] { 0x2A }, result.Value.ToArray());
 
         _inbound.Writer.Complete();
         await AwaitBounded(pump);

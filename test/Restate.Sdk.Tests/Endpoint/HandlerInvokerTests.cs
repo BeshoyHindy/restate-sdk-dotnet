@@ -296,12 +296,8 @@ public class HandlerInvokerTests
             return new ValueTask<T?>(default(T));
         }
 
-        public override void ResolvePromise<T>(string name, T payload)
-        {
-        }
+        public override ValueTask ResolvePromise<T>(string name, T payload) => ValueTask.CompletedTask;
 
-        public override void RejectPromise(string name, string reason)
-        {
-        }
+        public override ValueTask RejectPromise(string name, string reason) => ValueTask.CompletedTask;
     }
 }

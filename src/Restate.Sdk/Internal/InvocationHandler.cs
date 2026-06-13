@@ -49,9 +49,14 @@ internal sealed class InvocationHandler
 
             incomingTask = sm.ProcessIncomingMessagesAsync(incomingCts.Token);
 
-            // Use the linked token so the handler cancels when either:
-            // (a) the external caller cancels, or (b) the incoming reader detects connection close.
-            var handlerToken = incomingCts.Token;
+            // Use the linked token so the handler cancels when ANY of:
+            // (a) the external caller cancels, (b) the incoming reader detects connection close, or
+            // (c) an inbound CANCEL signal (idx=1) fires sm.CancelToken. (c) is the durable-cancel
+            // path: a parked await unwinds via its faulted TCS (TerminalException 409), while
+            // non-awaiting (CPU/loop) handler code observes cancel through this linked token and stops
+            // cooperatively — both converge on the same terminal cancel Output.
+            using var handlerCts = CancellationTokenSource.CreateLinkedTokenSource(incomingCts.Token, sm.CancelToken);
+            var handlerToken = handlerCts.Token;
             var context = CreateContext(sm, service.Type, handler.IsShared, logger, handlerToken);
 
             object? input = null;
@@ -59,7 +64,20 @@ internal sealed class InvocationHandler
                 input = handler.InputDeserializer(new ReadOnlySequence<byte>(startInfo.Input));
 
             var serviceInstance = service.Factory(serviceProvider);
-            var result = await handler.Invoker(serviceInstance, context, input, handlerToken).ConfigureAwait(false);
+            object? result;
+            try
+            {
+                result = await handler.Invoker(serviceInstance, context, input, handlerToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (sm.IsCancellationRequested)
+            {
+                // SM-INTERNAL cancel (inbound CANCEL, not the external ct): non-awaiting handler code
+                // (a CPU loop observing handlerToken) threw OCE rather than a TerminalException.
+                // Translate it into the SAME 409 terminal cancel signal the parked-await and Run paths
+                // already use, so it unwinds through the single proven `catch (TerminalException)` arm
+                // below — one terminal cancel path, no separate wire-writing arm to cover.
+                throw new TerminalException("cancelled", InvocationStateMachine.CancelledStatusCode);
+            }
 
             // The result is serialized INSIDE CompleteAsync's _commandLock so it can no longer be
             // torn by a straggler Run proposal sharing _serializeBuffer (2.7.5/2.8).
@@ -76,6 +94,12 @@ internal sealed class InvocationHandler
         }
         catch (TerminalException ex)
         {
+            // A parked durable await faulted with TerminalException unwinds here. Inbound CANCEL uses
+            // the SAME arm (TerminalException 409 "cancelled" — from a faulted parked await, a Run-path
+            // OCE→Terminal translation, or the CPU-loop OCE translation above), so an inbound-cancelled
+            // handler emits its terminal OutputCommand{failure:409} + End through this exact proven
+            // path. If user code instead CATCHES the 409 and returns normally, CompleteAsync already
+            // wrote a normal Output — cooperative-cancellation parity with Rust.
             Log.TerminalException(logger, sm.InvocationId, ex.Code);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }

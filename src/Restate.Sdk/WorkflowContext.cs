@@ -12,9 +12,9 @@ public abstract class WorkflowContext : ObjectContext, IWorkflowContext
     /// <summary>Peeks at a workflow promise without blocking. Returns default if not yet resolved.</summary>
     public abstract ValueTask<T?> PeekPromise<T>(string name);
 
-    /// <summary>Resolves a workflow promise with a payload.</summary>
-    public abstract void ResolvePromise<T>(string name, T payload);
+    /// <summary>Resolves a workflow promise with a payload, awaiting the runtime acknowledgement.</summary>
+    public abstract ValueTask ResolvePromise<T>(string name, T payload);
 
-    /// <summary>Rejects a workflow promise with a reason.</summary>
-    public abstract void RejectPromise(string name, string reason);
+    /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
+    public abstract ValueTask RejectPromise(string name, string reason);
 }

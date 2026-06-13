@@ -32,13 +32,13 @@ internal sealed class DefaultSharedWorkflowContext : SharedWorkflowContext
         return _sm.PeekPromiseAsync<T>(name, _ct);
     }
 
-    public override void ResolvePromise<T>(string name, T payload)
+    public override ValueTask ResolvePromise<T>(string name, T payload)
     {
-        _sm.ResolvePromise(name, payload);
+        return _sm.ResolvePromise(name, payload, _ct);
     }
 
-    public override void RejectPromise(string name, string reason)
+    public override ValueTask RejectPromise(string name, string reason)
     {
-        _sm.RejectPromise(name, reason);
+        return _sm.RejectPromise(name, reason, _ct);
     }
 }

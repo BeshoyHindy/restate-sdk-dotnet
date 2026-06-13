@@ -213,16 +213,22 @@ public sealed class CoverageEdgeTests
         var sm = rig.StateMachine;
 
         // Journal one CompletePromiseCommand (ResolvePromise/RejectPromise share the journal entry
-        // type and burn id 1). Replaying RejectPromise validates the id and returns without writing.
+        // type and burn id 1) plus its buffered CompletePromiseCompletion ack — CompletePromiseCommand
+        // is COMPLETABLE, so the unified await consumes the parked early-completion slot on replay with
+        // no new wire command. known_entries = Input + command + notification = 3.
         var journaled = ProtobufCodec.CreateCompletePromiseFailure("approval", 500, "denied", 1);
+        var bufferedAck = new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() };
         await DeliverFramedAsync(rig,
-            (MessageType.Start, CreateStartMessage("inv-reject-replay", 2).ToByteArray()),
+            (MessageType.Start, CreateStartMessage("inv-reject-replay", 3).ToByteArray()),
             (MessageType.InputCommand, CreateInputCommand(Array.Empty<byte>()).ToByteArray()),
-            (MessageType.CompletePromiseCommand, journaled.ToByteArray()));
+            (MessageType.CompletePromiseCommand, journaled.ToByteArray()),
+            (MessageType.CompletePromiseCompletion, bufferedAck.ToByteArray()));
         await AwaitBounded(sm.StartAsync(CancellationToken.None));
         Assert.True(sm.IsReplaying);
 
-        sm.RejectPromise("approval", "denied");
+        // Replay: RejectPromise dequeues + validates id 1, then resolves against the buffered ack —
+        // no new command on the wire.
+        await AwaitBounded(sm.RejectPromise("approval", "denied", CancellationToken.None));
         Assert.False(sm.IsReplaying);
 
         var frames = await DrainOutboundAsync(rig);

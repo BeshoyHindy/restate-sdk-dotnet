@@ -46,10 +46,9 @@ file class SignupWorkflow
     }
 
     [SharedHandler]
-    public Task ResolveVerification(SharedWorkflowContext ctx, string code)
+    public async Task ResolveVerification(SharedWorkflowContext ctx, string code)
     {
-        ctx.ResolvePromise("verification", code);
-        return Task.CompletedTask;
+        await ctx.ResolvePromise("verification", code);
     }
 }
 

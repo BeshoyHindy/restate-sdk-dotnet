@@ -68,7 +68,7 @@ internal sealed class MockPromiseStore
         return new ValueTask<T?>(default(T));
     }
 
-    public void ResolvePromise<T>(string name, T payload)
+    public ValueTask ResolvePromise<T>(string name, T payload)
     {
         _resolved[name] = payload;
         if (_pending.TryGetValue(name, out var tcs))
@@ -76,9 +76,11 @@ internal sealed class MockPromiseStore
             tcs.TrySetResult(payload);
             _pending.Remove(name);
         }
+
+        return ValueTask.CompletedTask;
     }
 
-    public void RejectPromise(string name, string reason)
+    public ValueTask RejectPromise(string name, string reason)
     {
         _rejected[name] = reason;
         if (_pending.TryGetValue(name, out var tcs))
@@ -86,5 +88,7 @@ internal sealed class MockPromiseStore
             tcs.TrySetException(new TerminalException(reason));
             _pending.Remove(name);
         }
+
+        return ValueTask.CompletedTask;
     }
 }

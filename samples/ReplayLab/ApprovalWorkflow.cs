@@ -35,9 +35,8 @@ public sealed class ApprovalWorkflow
     ///     concurrently with the parked Run.
     /// </summary>
     [SharedHandler]
-    public Task Approve(SharedWorkflowContext ctx, ProbeRequest req)
+    public async Task Approve(SharedWorkflowContext ctx, ProbeRequest req)
     {
-        ctx.ResolvePromise("approval", req.ProbeId);
-        return Task.CompletedTask;
+        await ctx.ResolvePromise("approval", req.ProbeId);
     }
 }

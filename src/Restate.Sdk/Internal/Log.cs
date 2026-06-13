@@ -103,4 +103,8 @@ internal static partial class Log
     [LoggerMessage(EventId = 114, Level = LogLevel.Debug,
         Message = "Incoming message reader faulted: invocationId={InvocationId}")]
     public static partial void IncomingReaderFaulted(ILogger logger, Exception exception, string invocationId);
+
+    [LoggerMessage(EventId = 115, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Ignoring named signal '{SignalName}' — no named-signal API")]
+    public static partial void NamedSignalIgnored(ILogger logger, string invocationId, string signalName);
 }

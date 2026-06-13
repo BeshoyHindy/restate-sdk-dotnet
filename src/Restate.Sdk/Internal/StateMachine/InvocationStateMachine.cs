@@ -36,6 +36,12 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private const uint FirstUserSignalId = 17;
     internal const uint CancelSignalId = 1;
 
+    // Restate's cross-SDK cancellation status code (HTTP 409 Conflict). Shared-core defines NO
+    // cancellation code (errors.rs codes are protocol/journal errors); CANCEL surfaces only as the
+    // control enum DoProgressResponse::CancelSignalReceived and the SDK layer picks 409 "cancelled"
+    // — the convention used by the Rust/Java/TS SDKs — for the terminal OutputCommand failure.
+    internal const ushort CancelledStatusCode = 409;
+
     private uint _nextCompletionId = FirstCompletionId;
     private uint _nextSignalId = FirstUserSignalId;
 
@@ -64,6 +70,24 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private bool _suspended;
     private int _executingRuns;
     private readonly HashSet<(uint Id, NotificationKind Kind)> _awaiting = new();
+
+    // Inbound-CANCEL state (SignalNotification idx=1 cancels THIS invocation). Shared-core surfaces
+    // CANCEL purely as the control enum DoProgressResponse::CancelSignalReceived (lib.rs:275) — it
+    // defines NO cancellation error code and emits no terminal frame itself; the SDK layer owns the
+    // user-visible shape. This SDK follows the Restate cross-SDK convention: parked durable awaits
+    // throw TerminalException(409, "cancelled"), the handler unwinds through the EXISTING
+    // TerminalException catch arm, and the SDK writes a terminal OutputCommand{failure:409} + End.
+    // _cancelled is guarded by _commandLock; _cancelCts is the handler-token path so non-awaiting
+    // (CPU/loop) handler code observes cancel cooperatively (a parked await observes it via the
+    // faulted TCS — a bare `await tcs.Task` cannot observe a CancellationToken).
+    private bool _cancelled;
+    private readonly CancellationTokenSource _cancelCts = new();
+    internal CancellationToken CancelToken => _cancelCts.Token;
+
+    // True once an inbound CANCEL has fired. InvocationHandler reads this to translate a non-terminal
+    // unwind (e.g., an OperationCanceledException thrown by non-awaiting handler code observing the
+    // cancelled handler token) into the 409 terminal cancel Output instead of a 500 Error frame.
+    internal bool IsCancellationRequested => _cancelCts.IsCancellationRequested;
 
     // Reusable buffer for serialization — avoids allocating ArrayBufferWriter<byte> per call.
     // The returned ReadOnlyMemory is only valid until the next Serialize call.
@@ -123,6 +147,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
         _signalCompletions.CancelAll();
         _jsonWriter?.Dispose();
         _flushGate.Dispose();
+        _cancelCts.Dispose();
 
         if (_rentedBuffers is not null)
         {
@@ -205,27 +230,6 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private static void ThrowInvalidState(InvocationState state, string operation)
     {
         throw new InvalidOperationException($"Cannot {operation} in state {state}");
-    }
-
-    // Plan 07 §1.3 escape hatch: these two raw-bytes WriteCommand overloads have ZERO call sites —
-    // every command is written through the IMessage overload below (the codec factories all return
-    // Gen.* messages), so no internal test seam can reach them without re-introducing dead code. They
-    // are retained as a symmetric low-level API surface; excluded from coverage so the dead lines do
-    // not block the StateMachine 100% line target. See the "Coverage exclusions" appendix in
-    // docs/research/shared-core/07-coverage-and-e2e-plan.md.
-    [ExcludeFromCodeCoverage(Justification =
-        "Unused raw-span WriteCommand overload — every caller writes via the IMessage overload; no reachable trigger.")]
-    private void WriteCommand(MessageType type, ReadOnlySpan<byte> payload)
-    {
-        Log.WritingCommand(Logger, InvocationId, type, payload.Length);
-        _writer.WriteMessage(type, payload);
-    }
-
-    [ExcludeFromCodeCoverage(Justification =
-        "Unused raw-memory WriteCommand overload — every caller writes via the IMessage overload; no reachable trigger.")]
-    private void WriteCommand(MessageType type, ReadOnlyMemory<byte> payload)
-    {
-        WriteCommand(type, payload.Span);
     }
 
     /// <summary>
@@ -385,6 +389,11 @@ internal sealed partial class InvocationStateMachine : IDisposable
         lock (_commandLock)
         {
             if (State == InvocationState.Closed) return;   // already completed/aborted/suspended
+            // Cancel wins a concurrent suspension: an inbound CANCEL must NOT race a Suspension frame
+            // ahead of the terminal cancel Output. _cancelled is set under _commandLock by
+            // TriggerCancellation, so this check is coherent with it; the parked await already unwinds
+            // via the faulted TCS into FailTerminalAsync(409). Exactly one terminal frame is written.
+            if (_cancelled) return;
             if (!_inputClosed || _executingRuns > 0) return;
             waitingCompletions = new List<uint>();
             waitingSignals = new List<uint>();
@@ -414,6 +423,32 @@ internal sealed partial class InvocationStateMachine : IDisposable
     internal void MarkInputClosed()
     {
         lock (_commandLock) _inputClosed = true;
+    }
+
+    /// <summary>
+    ///     Inbound-CANCEL entry point (SignalNotification idx=1 → CANCEL_SIGNAL_ID). Faults every
+    ///     parked durable await with TerminalException(409, "cancelled") — the EXACT B8 suspension
+    ///     unwind mechanism, but with a terminal exception instead of SuspendedException so the await
+    ///     unwinds through InvocationHandler's existing `catch (TerminalException)` arm
+    ///     (FailTerminalAsync → OutputCommand{failure:409} + End). A bare `await tcs.Task` cannot
+    ///     observe a CancellationToken, so faulting the TCSs is the only way parked awaits unwind.
+    ///     The FailAll _terminal latch makes any await registered AFTER cancel born-faulted, so a
+    ///     straggler fan-out closure parking post-cancel unwinds immediately. _cancelCts cancels the
+    ///     handler token so non-awaiting (CPU/loop) handler code stops cooperatively. The _cancelled
+    ///     flag (set under _commandLock) suppresses a racing Suspension frame in TrySuspendAsync so
+    ///     exactly one terminal frame is written and cancel wins.
+    /// </summary>
+    private void TriggerCancellation()
+    {
+        lock (_commandLock) _cancelled = true;
+
+        // OUTSIDE the lock: FailAll resolves TCSs whose continuations run async
+        // (RunContinuationsAsynchronously), and _cancelCts.Cancel() may run synchronous registrations;
+        // neither may run while holding _commandLock. The shared _terminal latch makes a concurrent
+        // suspension's FailAll a no-op — whichever fires first wins.
+        _completions.FailAll(new TerminalException("cancelled", CancelledStatusCode));
+        _signalCompletions.FailAll(new TerminalException("cancelled", CancelledStatusCode));
+        _cancelCts.Cancel();
     }
 
     /// <summary>

@@ -509,9 +509,15 @@ public sealed class ContextSurfaceTests : IDisposable
         ctx.Clear("w");
         ctx.ClearAll();
 
-        // ResolvePromise / RejectPromise write CompletePromise commands synchronously.
-        ctx.ResolvePromise("approval", "yes");
-        ctx.RejectPromise("other", "no");
+        // ResolvePromise / RejectPromise write CompletePromise commands and AWAIT the
+        // CompletePromiseCompletion ack (proto field 11). Each burns one completion id (1 and 2) and
+        // parks until its ack lands; an empty (Void) ack resolves the await as a benign success.
+        var resolve = ctx.ResolvePromise("approval", "yes");
+        var reject = ctx.RejectPromise("other", "no");
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 2, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(resolve);
+        await AwaitBounded(reject);
 
         // Promise parks on a GetPromise completion (the next id). Set/Clear/ClearAll burn no ids;
         // ResolvePromise + RejectPromise each burn one (ids 1 and 2), so Promise's id is 3.
@@ -537,8 +543,13 @@ public sealed class ContextSurfaceTests : IDisposable
         var ctx = new DefaultSharedWorkflowContext(_rig.StateMachine, NullLogger.Instance, CancellationToken.None);
 
         Assert.Equal("swf-key", ctx.Key);
-        ctx.ResolvePromise("p", "v");
-        ctx.RejectPromise("q", "r");
+        // ResolvePromise / RejectPromise await the CompletePromiseCompletion ack (ids 1,2).
+        var resolve = ctx.ResolvePromise("p", "v");
+        var reject = ctx.RejectPromise("q", "r");
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 1, ReadOnlyMemory<byte>.Empty);
+        await DeliverCompletionAsync(MessageType.CompletePromiseCompletion, 2, ReadOnlyMemory<byte>.Empty);
+        await AwaitBounded(resolve);
+        await AwaitBounded(reject);
 
         // ResolvePromise + RejectPromise burn ids 1,2; PeekPromise parks on id 3.
         var peek = ctx.PeekPromise<string>("p");

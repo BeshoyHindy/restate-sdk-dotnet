@@ -9,9 +9,9 @@ public interface ISharedWorkflowContext : ISharedObjectContext
     /// <summary>Peeks at a workflow promise without blocking. Returns default if not yet resolved.</summary>
     ValueTask<T?> PeekPromise<T>(string name);
 
-    /// <summary>Resolves a workflow promise with a payload.</summary>
-    void ResolvePromise<T>(string name, T payload);
+    /// <summary>Resolves a workflow promise with a payload, awaiting the runtime acknowledgement.</summary>
+    ValueTask ResolvePromise<T>(string name, T payload);
 
-    /// <summary>Rejects a workflow promise with a reason.</summary>
-    void RejectPromise(string name, string reason);
+    /// <summary>Rejects a workflow promise with a reason, awaiting the runtime acknowledgement.</summary>
+    ValueTask RejectPromise(string name, string reason);
 }

@@ -212,9 +212,10 @@ public class PromiseTests
     }
 
     // ---- §4.10.4 ResolvePromise / RejectPromise processing -----------------------------------
-    // CompletePromiseCommand carries the allocated result_completion_id; the later ack lands as a
-    // benign early-completion slot (the void API never awaits it). Mirrors promise.rs
-    // resolve_promise_succeeds / reject_promise_succeeds command-shape assertions.
+    // CompletePromiseCommand carries the allocated result_completion_id and is COMPLETABLE (proto
+    // field 11): the op AWAITS the CompletePromiseCompletion ack. The happy path delivers a Void ack
+    // (success) and asserts both the command shape and that the await resolves. Mirrors promise.rs
+    // resolve_promise_succeeds / reject_promise_succeeds, now including the ack barrier.
 
     [Fact(Timeout = Timeout)]
     public async Task ResolvePromise_Processing_EmitsCompletePromiseCommandWithValueAndId()
@@ -224,7 +225,12 @@ public class PromiseTests
         sm.Initialize("abc", "key", 0, 1);
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
-        sm.ResolvePromise("my-prom", "my val");
+        var resolve = sm.ResolvePromise("my-prom", "my val", CancellationToken.None);
+
+        // First completable op → completion id 1. Deliver the Void ack so the await resolves.
+        await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
+            new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() });
+        await AwaitBounded(resolve);
 
         var command = await FirstCommandAsync(rig, sm, pump, MessageType.CompletePromiseCommand);
         var parsed = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(command);
@@ -242,7 +248,11 @@ public class PromiseTests
         sm.Initialize("abc", "key", 0, 1);
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
-        sm.RejectPromise("my-prom", "my failure");
+        var reject = sm.RejectPromise("my-prom", "my failure", CancellationToken.None);
+
+        await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
+            new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() });
+        await AwaitBounded(reject);
 
         var command = await FirstCommandAsync(rig, sm, pump, MessageType.CompletePromiseCommand);
         var parsed = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(command);
@@ -254,22 +264,74 @@ public class PromiseTests
     }
 
     [Fact(Timeout = Timeout)]
-    public async Task ResolvePromise_Processing_LateAck_IsBenign()
+    public async Task ResolvePromise_Processing_AckResolves()
     {
         using var rig = new StateMachineRig();
         var sm = rig.StateMachine;
         sm.Initialize("abc", "key", 0, 1);
 
-        // The void API does not await the ack; delivering it must neither throw nor block anything.
+        // The ack is now AWAITED: a Void completion (success) unparks the resolve without throwing.
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
-        sm.ResolvePromise("my-prom", "my val");
+        var resolve = sm.ResolvePromise("my-prom", "my val", CancellationToken.None);
         await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
             new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() });
+        await AwaitBounded(resolve);
 
-        // Handler completes normally — the unawaited early-completion slot is harmless.
         await AwaitBounded(sm.CompleteAsync(MyValueJson, CancellationToken.None));
         rig.CompleteInbound();
         await AwaitBounded(pump);
+    }
+
+    [Fact(Timeout = Timeout)]
+    public async Task ResolvePromise_Processing_FailureAck_ThrowsTerminalException()
+    {
+        using var rig = new StateMachineRig();
+        var sm = rig.StateMachine;
+        sm.Initialize("abc", "key", 0, 1);
+
+        // Resolving an ALREADY-completed promise returns a Failure (async_results parity, proto
+        // Failure=6). The awaited ack surfaces it as a TerminalException — the NEW failure branch.
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+        var resolve = sm.ResolvePromise("my-prom", "my val", CancellationToken.None);
+        await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
+            new Gen.CompletePromiseCompletionNotificationMessage
+            {
+                CompletionId = 1,
+                Failure = new Gen.Failure { Code = 409, Message = "promise already completed" }
+            });
+
+        var ex = await AwaitBounded(Assert.ThrowsAsync<TerminalException>(async () => await resolve));
+        Assert.Equal("promise already completed", ex.Message);
+        Assert.Equal(409, ex.Code);
+
+        rig.CompleteInbound();
+        await SwallowPumpAsync(pump);
+    }
+
+    [Fact(Timeout = Timeout)]
+    public async Task RejectPromise_Processing_FailureAck_ThrowsTerminalException()
+    {
+        using var rig = new StateMachineRig();
+        var sm = rig.StateMachine;
+        sm.Initialize("abc", "key", 0, 1);
+
+        // The Failure arm is shared by both variants: rejecting an already-completed promise also
+        // surfaces a TerminalException via the awaited ack.
+        var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+        var reject = sm.RejectPromise("my-prom", "denied", CancellationToken.None);
+        await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
+            new Gen.CompletePromiseCompletionNotificationMessage
+            {
+                CompletionId = 1,
+                Failure = new Gen.Failure { Code = 409, Message = "promise already completed" }
+            });
+
+        var ex = await AwaitBounded(Assert.ThrowsAsync<TerminalException>(async () => await reject));
+        Assert.Equal("promise already completed", ex.Message);
+        Assert.Equal(409, ex.Code);
+
+        rig.CompleteInbound();
+        await SwallowPumpAsync(pump);
     }
 
     // ---- §4.10.5 ResolvePromise / RejectPromise replay (id validation) -----------------------
@@ -280,16 +342,20 @@ public class PromiseTests
         using var rig = new StateMachineRig();
         var sm = rig.StateMachine;
 
-        // Journal: [Input, CompletePromiseCommand{key="my-prom", id=1}] (no notification needed —
-        // the void API never awaits). known_entries = Input + command = 2.
-        await DeliverReplayBatchAsync(rig, knownEntries: 2,
+        // Journal: [Input, CompletePromiseCommand{key="my-prom", id=1}] + buffered ack — the op is
+        // COMPLETABLE, so the unified await consumes the parked CompletePromiseCompletion slot on
+        // replay. known_entries = Input + command + notification = 3.
+        await DeliverReplayBatchAsync(rig, knownEntries: 3,
             (MessageType.CompletePromiseCommand,
-                ProtobufCodec.CreateCompletePromiseSuccess("my-prom", "\"my val\""u8, 1)));
+                ProtobufCodec.CreateCompletePromiseSuccess("my-prom", "\"my val\""u8, 1)),
+            (MessageType.CompletePromiseCompletion,
+                new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() }));
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
-        // Replay path: dequeue + ValidateReplayCompletionId(1, 1) succeeds, emits nothing.
-        sm.ResolvePromise("my-prom", "my val");
+        // Replay path: dequeue + ValidateReplayCompletionId(1, 1) succeeds, resolves from the buffered
+        // ack, emits nothing.
+        await AwaitBounded(sm.ResolvePromise("my-prom", "my val", CancellationToken.None));
 
         Assert.Empty(await CommandsOfTypeAsync(rig, sm, pump, MessageType.CompletePromiseCommand));
     }
@@ -308,7 +374,9 @@ public class PromiseTests
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
-        Assert.Throws<ProtocolException>(() => sm.ResolvePromise("my-prom", "my val"));
+        // The mismatch fires inside the locked prefix; in the async method it surfaces via the task.
+        await AwaitBounded(Assert.ThrowsAsync<ProtocolException>(async () =>
+            await sm.ResolvePromise("my-prom", "my val", CancellationToken.None)));
 
         rig.CompleteInbound();
         await SwallowPumpAsync(pump);
@@ -326,7 +394,8 @@ public class PromiseTests
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
-        Assert.Throws<ProtocolException>(() => sm.RejectPromise("live-prom", "denied"));
+        await AwaitBounded(Assert.ThrowsAsync<ProtocolException>(async () =>
+            await sm.RejectPromise("live-prom", "denied", CancellationToken.None)));
 
         rig.CompleteInbound();
         await SwallowPumpAsync(pump);
@@ -334,8 +403,9 @@ public class PromiseTests
 
     // ---- §4.10.6 Counter-burn determinism (the §4.6.7 analogue) ------------------------------
     // ResolvePromise burns completion id 1, so the FOLLOWING ctx.Sleep must journal id 2 — on BOTH
-    // a fresh run and a replayed run. An off-by-one in the void API's id accounting would shift the
-    // Sleep's id and brick replay; this is the load-bearing B1 regression for promises.
+    // a fresh run and a replayed run. Awaiting the ack does NOT change id order (the id is allocated
+    // under the lock before the await). An off-by-one in the id accounting would shift the Sleep's id
+    // and brick replay; this is the load-bearing B1 regression for promises.
 
     [Fact(Timeout = Timeout)]
     public async Task ResolvePromise_ThenSleep_BurnsCompletionId_Fresh()
@@ -345,7 +415,11 @@ public class PromiseTests
         sm.Initialize("abc", "key", 0, 1);
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
-        sm.ResolvePromise("my-prom", "my val");                    // burns id 1
+        var resolve = sm.ResolvePromise("my-prom", "my val", CancellationToken.None);   // burns id 1
+        await rig.DeliverAsync(MessageType.CompletePromiseCompletion,
+            new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() });
+        await AwaitBounded(resolve);
+
         var sleep = sm.SleepFutureAsync(TimeSpan.FromMilliseconds(1), CancellationToken.None);
 
         await rig.DeliverAsync(MessageType.SleepCompletion, CreateSleepCompletion(2));
@@ -363,18 +437,21 @@ public class PromiseTests
         var sm = rig.StateMachine;
 
         // Journal mirrors the fresh run: [Input, CompletePromiseCommand{id=1}, SleepCommand{id=2}]
-        // + buffered SleepCompletion{2}. known_entries = Input + 2 commands + 1 notification = 4.
-        await DeliverReplayBatchAsync(rig, knownEntries: 4,
+        // + buffered CompletePromiseCompletion{1} + buffered SleepCompletion{2}.
+        // known_entries = Input + 2 commands + 2 notifications = 5.
+        await DeliverReplayBatchAsync(rig, knownEntries: 5,
             (MessageType.CompletePromiseCommand,
                 ProtobufCodec.CreateCompletePromiseSuccess("my-prom", "\"my val\""u8, 1)),
             (MessageType.SleepCommand, ProtobufCodec.CreateSleepCommand(0, 2)),
+            (MessageType.CompletePromiseCompletion,
+                new Gen.CompletePromiseCompletionNotificationMessage { CompletionId = 1, Void = new Gen.Void() }),
             (MessageType.SleepCompletion, CreateSleepCompletion(2)));
 
         var pump = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
 
-        // Replay: ResolvePromise dequeues + validates id 1; the Sleep dequeues + validates id 2.
-        // Any drift in the void API's id burn would surface as a ProtocolException here.
-        sm.ResolvePromise("my-prom", "my val");
+        // Replay: ResolvePromise dequeues + validates id 1 and resolves from the buffered ack; the
+        // Sleep dequeues + validates id 2. Any drift in the id burn would surface as a ProtocolException.
+        await AwaitBounded(sm.ResolvePromise("my-prom", "my val", CancellationToken.None));
         var sleep = sm.SleepFutureAsync(TimeSpan.FromMilliseconds(1), CancellationToken.None);
         await AwaitBounded(sleep().AsTask());
 

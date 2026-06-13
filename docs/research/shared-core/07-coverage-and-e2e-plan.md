@@ -985,15 +985,19 @@ Cross-phase invariants:
 
 ## Coverage exclusions (§1.3 appendix)
 
-Recorded per §1.3 so every coverage carve-out stays auditable. Two mechanisms, both honest (each
-removes ONLY genuinely-unreachable code, never a testable gap):
+Recorded per §1.3 so every coverage carve-out stays auditable. Both honest (each removes ONLY
+genuinely-unreachable code, never a testable gap):
 
 ### (a) `[ExcludeFromCodeCoverage]` source members — whole dead members
 
-| Member | File | Why unreachable |
-|---|---|---|
-| `WriteCommand(MessageType, ReadOnlySpan<byte>)` | `Internal/StateMachine/InvocationStateMachine.cs` | Zero call sites: every command is written via the `WriteCommand(MessageType, IMessage)` overload (the `ProtobufCodec.Create*` factories all return `Gen.*` messages). No internal test seam can reach the raw-span overload without re-introducing dead code. |
-| `WriteCommand(MessageType, ReadOnlyMemory<byte>)` | `Internal/StateMachine/InvocationStateMachine.cs` | Same — no caller; the raw-memory overload only forwards to the (also-unused) span overload. |
+**None.** The two raw-bytes `WriteCommand` overloads (`ReadOnlySpan<byte>` / `ReadOnlyMemory<byte>`
+on `Internal/StateMachine/InvocationStateMachine.cs`) were the only members carrying this
+attribute; both were provably callerless dead code — every command is written via the
+`WriteCommand(MessageType, IMessage)` overload (the `ProtobufCodec.Create*` factories all return
+`Gen.*` messages), and the raw-memory overload only forwarded to the also-unused span overload —
+so they were **deleted** rather than excluded. The core namespaces now contain **zero**
+`[ExcludeFromCodeCoverage]` members, strengthening the §1.3 invariant: every reachable line in the
+core is held at the 100% line target with no source-attribute carve-out to audit.
 
 ### (b) `eng/coverage-thresholds.json` `unreachableLines` — single in-method defensive lines
 

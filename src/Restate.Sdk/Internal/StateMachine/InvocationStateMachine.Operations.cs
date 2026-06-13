@@ -118,6 +118,14 @@ internal sealed partial class InvocationStateMachine
                     ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false)
                     : await action().ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (_cancelled)
+            {
+                // Inbound CANCEL fired while the Run closure observed the handler token. Translate the
+                // OCE into the SAME terminal cancel signal the parked-await path uses, so the handler
+                // deterministically unwinds through `catch (TerminalException)` → 409 Output, never the
+                // generic 500 Error arm (which would mis-classify cancel as a retryable failure).
+                throw new TerminalException("cancelled", CancelledStatusCode);
+            }
             catch (TerminalException ex)
             {
                 // Terminal failure (thrown directly or via retry exhaustion): propose FAILURE and
@@ -165,6 +173,12 @@ internal sealed partial class InvocationStateMachine
                     await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
                 else
                     await action().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_cancelled)
+            {
+                // Inbound CANCEL during a void Run closure: translate to the terminal cancel signal
+                // (see the generic ExecuteAndProposeRunAsync for the full rationale).
+                throw new TerminalException("cancelled", CancelledStatusCode);
             }
             catch (TerminalException ex)
             {
@@ -899,45 +913,62 @@ internal sealed partial class InvocationStateMachine
         return completion.Value.IsEmpty ? default : Deserialize<T>(completion.Value);
     }
 
-    public void ResolvePromise<T>(string name, T payload)
+    public async ValueTask ResolvePromise<T>(string name, T payload, CancellationToken ct)
     {
         EnsureActive();
-        lock (_commandLock)
-        {
-            ThrowIfClosedLocked();
-            var completionId = NextCompletionId();   // burns an id in BOTH branches (proto field 11)
-            if (State == InvocationState.Replaying)
-            {
-                var cmd = DequeueReplayCommand(JournalEntryType.CompletePromise, name);
-                ValidateReplayCompletionId(cmd.ResultCompletionId, completionId);
-                return;
-            }
-
-            var serialized = Serialize(payload);
-            WriteCommand(MessageType.CompletePromiseCommand,
-                ProtobufCodec.CreateCompletePromiseSuccess(name, serialized.Span, completionId));
-            _journal.RecordCommand(JournalEntryType.CompletePromise, name);
-        }
+        var (completionId, needsFlush) = CompletePromisePrefix(name,
+            id => ProtobufCodec.CreateCompletePromiseSuccess(name, Serialize(payload).Span, id));
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // command on the wire before parking
+        // CompletePromiseCommand is COMPLETABLE (proto field 11): await the
+        // CompletePromiseCompletionNotification. The Failure arm (resolving an already-completed
+        // promise, async_results parity) surfaces as a TerminalException via ThrowIfFailure.
+        var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
+        completion.ThrowIfFailure();
     }
 
-    public void RejectPromise(string name, string reason)
+    public async ValueTask RejectPromise(string name, string reason, CancellationToken ct)
     {
         EnsureActive();
+        var (completionId, needsFlush) = CompletePromisePrefix(name,
+            id => ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, id));
+        if (needsFlush) await FlushGatedAsync(ct).ConfigureAwait(false);   // command on the wire before parking
+        var completion = await AwaitNotificationAsync(completionId, NotificationKind.Completion).ConfigureAwait(false);
+        completion.ThrowIfFailure();
+    }
+
+    /// <summary>
+    ///     Locked prefix for the two CompletePromise variants. Allocates the completion id (proto
+    ///     field 11) in BOTH branches; replay dequeues+validates the journaled command, processing
+    ///     writes+records. Unlike the Template A helper, the command bytes depend on a per-variant
+    ///     payload, so the factory takes only the id and the caller closes over the value/reason.
+    ///     Both branches fall through to a single await of the buffered/live completion — on replay
+    ///     the known-entries batch parked the CompletePromiseCompletion as an early-completion slot,
+    ///     and a journaled-but-uncompleted promise raises the UncompletedDoProgressDuringReplay guard
+    ///     exactly like every other completable.
+    /// </summary>
+    private (uint CompletionId, bool NeedsFlush) CompletePromisePrefix(string name,
+        Func<uint, Google.Protobuf.IMessage> create)
+    {
+        uint completionId;
+        bool replaying;
         lock (_commandLock)
         {
             ThrowIfClosedLocked();
-            var completionId = NextCompletionId();
-            if (State == InvocationState.Replaying)
+            completionId = NextCompletionId();
+            replaying = State == InvocationState.Replaying;
+            if (replaying)
             {
                 var cmd = DequeueReplayCommand(JournalEntryType.CompletePromise, name);
                 ValidateReplayCompletionId(cmd.ResultCompletionId, completionId);
-                return;
             }
-
-            WriteCommand(MessageType.CompletePromiseCommand,
-                ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, completionId));
-            _journal.RecordCommand(JournalEntryType.CompletePromise, name);
+            else
+            {
+                WriteCommand(MessageType.CompletePromiseCommand, create(completionId));
+                _journal.RecordCommand(JournalEntryType.CompletePromise, name);
+            }
         }
+
+        return (completionId, !replaying);
     }
 
     // ------- Cancel invocation -------

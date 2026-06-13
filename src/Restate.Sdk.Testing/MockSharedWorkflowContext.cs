@@ -82,10 +82,10 @@ public sealed class MockSharedWorkflowContext : SharedWorkflowContext
     public override ValueTask<T?> PeekPromise<T>(string name) where T : default => _promiseStore.PeekPromise<T>(name);
 
     /// <inheritdoc />
-    public override void ResolvePromise<T>(string name, T payload) => _promiseStore.ResolvePromise(name, payload);
+    public override ValueTask ResolvePromise<T>(string name, T payload) => _promiseStore.ResolvePromise(name, payload);
 
     /// <inheritdoc />
-    public override void RejectPromise(string name, string reason) => _promiseStore.RejectPromise(name, reason);
+    public override ValueTask RejectPromise(string name, string reason) => _promiseStore.RejectPromise(name, reason);
 
     /// <inheritdoc />
     public override ValueTask<T?> Get<T>(StateKey<T> key) where T : default => _stateStore.Get<T>(key);
