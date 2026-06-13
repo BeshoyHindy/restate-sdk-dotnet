@@ -90,7 +90,8 @@ internal sealed partial class InvocationStateMachine
                 throw new ProtocolException(
                     $"Uncompleted Run '{name}' during replay with later journaled commands — " +
                     "journal mutation (UncompletedDoProgressDuringReplay parity); refusing to " +
-                    "re-execute a side effect mid-replay");   // 1.7 case 3
+                    "re-execute a side effect mid-replay",   // 1.7 case 3
+                    ProtocolException.JournalMismatchCode);   // UncompletedDoProgress → 570 (errors.rs:391)
 
             // 1.7 case 2 (frontier resume): execute iff the atomic claim wins; otherwise case 1 —
             // a buffered/raced completion is consumed below without executing.
@@ -133,8 +134,10 @@ internal sealed partial class InvocationStateMachine
                 lock (_commandLock)
                 {
                     ThrowIfClosedLocked();
+                    // G11: ride V6 Failure.metadata on the run's terminal proposal (gated to sub-V6 drop).
                     WriteCommand(MessageType.ProposeRunCompletion,
-                        ProtobufCodec.CreateRunProposalFailure(completionId, ex.Code, ex.Message));
+                        ProtobufCodec.CreateRunProposalFailure(
+                            completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex)));
                 }
 
                 await FlushGatedAsync(ct).ConfigureAwait(false);
@@ -185,8 +188,10 @@ internal sealed partial class InvocationStateMachine
                 lock (_commandLock)
                 {
                     ThrowIfClosedLocked();
+                    // G11: ride V6 Failure.metadata on the run's terminal proposal (gated to sub-V6 drop).
                     WriteCommand(MessageType.ProposeRunCompletion,
-                        ProtobufCodec.CreateRunProposalFailure(completionId, ex.Code, ex.Message));
+                        ProtobufCodec.CreateRunProposalFailure(
+                            completionId, ex.Code, ex.Message, OutgoingFailureMetadata(ex)));
                 }
 
                 await FlushGatedAsync(ct).ConfigureAwait(false);
@@ -1159,8 +1164,11 @@ internal sealed partial class InvocationStateMachine
                 // code produced (terminal.rs:56-73).
                 DequeueReplayCommand(JournalEntryType.Output);
                 if (_journal.IsReplaying)
+                    // Journaled-more-than-the-code-produced is a recorded-vs-current divergence →
+                    // JOURNAL_MISMATCH (570), the terminal.rs:56-73 analogue.
                     throw new ProtocolException(
-                        "Journal contains commands after Output — non-deterministic replay");
+                        "Journal contains commands after Output — non-deterministic replay",
+                        ProtocolException.JournalMismatchCode);
             }
             else
             {
@@ -1178,8 +1186,12 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Sends a terminal failure as an OutputCommand with the failure oneof (non-retryable).
     /// </summary>
-    public async ValueTask FailTerminalAsync(ushort code, string message, CancellationToken ct)
+    public async ValueTask FailTerminalAsync(ushort code, string message, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
+        // G11: emit V6 Failure.metadata on the terminal OutputCommand only when the negotiated
+        // protocol version supports it AND there is any to emit (null/empty otherwise).
+        var emittedMetadata = SupportsErrorMetadata && metadata is { Count: > 0 } ? metadata : null;
         lock (_commandLock)
         {
             if (State == InvocationState.Closed)
@@ -1196,7 +1208,8 @@ internal sealed partial class InvocationStateMachine
             if (_cancelled)
                 EmitChildCancelsLocked();
 
-            WriteCommand(MessageType.OutputCommand, ProtobufCodec.CreateOutputFailure(code, message));
+            WriteCommand(MessageType.OutputCommand,
+                ProtobufCodec.CreateOutputFailure(code, message, emittedMetadata));
             _writer.WriteHeaderOnly(MessageType.End);
             State = InvocationState.Closed;
         }

@@ -21,7 +21,8 @@ internal readonly record struct CompletionNotification(
     ushort? FailureCode,
     string? FailureMessage,
     bool IsVoid,
-    string? InvocationId = null)
+    string? InvocationId = null,
+    IReadOnlyDictionary<string, string>? FailureMetadata = null)
 {
     public bool IsSuccess => Value is not null || IsVoid;
     public bool IsFailure => FailureCode is not null;
@@ -36,7 +37,8 @@ internal readonly record struct SignalNotification(
     ReadOnlyMemory<byte>? Value,
     ushort? FailureCode,
     string? FailureMessage,
-    bool IsVoid)
+    bool IsVoid,
+    IReadOnlyDictionary<string, string>? FailureMetadata = null)
 {
     public bool IsSuccess => Value is not null || IsVoid;
     public bool IsFailure => FailureCode is not null;

@@ -184,7 +184,8 @@ internal sealed partial class InvocationStateMachine
 
                 if (signal.IsFailure)
                 {
-                    _signalCompletions.TryFail(signalIndex, signal.FailureCode!.Value, signal.FailureMessage!);
+                    _signalCompletions.TryFail(signalIndex, signal.FailureCode!.Value, signal.FailureMessage!,
+                        signal.FailureMetadata);   // V6 Failure.metadata (round-trip in)
                 }
                 else
                 {
@@ -208,7 +209,8 @@ internal sealed partial class InvocationStateMachine
                 Log.NotificationReceived(Logger, InvocationId, MessageType.SignalNotification, 0, signal.IsFailure);
                 if (signal.IsFailure)
                 {
-                    _namedSignals.TryFail(signalName, signal.FailureCode!.Value, signal.FailureMessage!);
+                    _namedSignals.TryFail(signalName, signal.FailureCode!.Value, signal.FailureMessage!,
+                        signal.FailureMetadata);   // V6 Failure.metadata (round-trip in)
                 }
                 else
                 {
@@ -248,7 +250,8 @@ internal sealed partial class InvocationStateMachine
 
             if (notification.IsFailure)
             {
-                _completions.TryFail(completionId, notification.FailureCode!.Value, notification.FailureMessage!);
+                _completions.TryFail(completionId, notification.FailureCode!.Value, notification.FailureMessage!,
+                    notification.FailureMetadata);   // V6 Failure.metadata (round-trip in)
             }
             else
             {
@@ -320,13 +323,17 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     private void ValidateReplayCompletionId(uint replayed, uint allocated)
     {
+        // Both arms are command-header mismatches (header_eq compares the completion id field) →
+        // JOURNAL_MISMATCH (570), matching CommandMismatchError's code in shared-core (errors.rs:396).
         if (replayed == 0)
             throw new ProtocolException(
                 $"Corrupt journal at command index {_journal.CommandIndex}: " +
-                "completable command missing its completion id");
+                "completable command missing its completion id",
+                ProtocolException.JournalMismatchCode);
         if (replayed != allocated)
             throw new ProtocolException(
                 $"Non-deterministic replay at command index {_journal.CommandIndex}: " +
-                $"journaled completion id {replayed}, locally allocated {allocated}");
+                $"journaled completion id {replayed}, locally allocated {allocated}",
+                ProtocolException.JournalMismatchCode);
     }
 }

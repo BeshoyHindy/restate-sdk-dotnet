@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Hosting;
 
@@ -70,30 +71,30 @@ public static class RestateEndpointRouteBuilderExtensions
         return null; // No mutually supported version → 415
     }
 
-    // The invocation content type our manifest's maxProtocolVersion corresponds to. Used as the
-    // fallback when the request carries no recognizable invocation content type.
-    private const string DefaultInvocationContentType = "application/vnd.restate.invocation.v6";
-
     /// <summary>
-    ///     Picks the response content type for an /invoke exchange. restate-server negotiates the
-    ///     service-protocol version per request and signals it via the request Content-Type
-    ///     (<c>application/vnd.restate.invocation.v{N}</c>); the response MUST use the SAME version
-    ///     or the server rejects the stream with RT0012. We therefore echo the request's content
-    ///     type when it is a well-formed invocation type, and only fall back to our manifest max
-    ///     when none was supplied (e.g. a hand-crafted request).
+    ///     Validates the inbound /invoke request Content-Type and negotiates the service-protocol
+    ///     version, mirroring shared-core <c>VM::new</c> (vm/mod.rs:214-261). restate-server signals the
+    ///     negotiated version via the request Content-Type (<c>application/vnd.restate.invocation.v{N}</c>).
+    ///     Returns:
+    ///       * a positive version number when the content type names a version WITHIN [V5,V6];
+    ///       * <c>0</c> when a recognizable invocation content type names a version OUTSIDE [V5,V6]
+    ///         (RT0015 — the caller rejects 415);
+    ///       * <see cref="Internal.Protocol.ProtocolVersion.MaximumSupported" /> when no recognizable
+    ///         invocation content type was supplied (e.g. a hand-crafted request) — we fall back to our
+    ///         manifest max, exactly as the prior echo behavior did, rather than reject.
     /// </summary>
-    internal static string NegotiateInvocationContentType(string? requestContentType)
+    internal static int NegotiateInvocationVersion(string? requestContentType)
     {
         if (string.IsNullOrEmpty(requestContentType))
-            return DefaultInvocationContentType;
+            return ProtocolVersion.MaximumSupported;
 
-        // Strip any parameters (e.g. "; charset=..."); the bare media type is what must match.
-        var separator = requestContentType.IndexOf(';');
-        var mediaType = (separator >= 0 ? requestContentType[..separator] : requestContentType).Trim();
+        var version = ProtocolVersion.TryParse(requestContentType);
+        if (version is null)
+            // Not a restate invocation content type at all → fall back to our max (legacy behavior).
+            return ProtocolVersion.MaximumSupported;
 
-        return mediaType.StartsWith("application/vnd.restate.invocation.v", StringComparison.OrdinalIgnoreCase)
-            ? mediaType
-            : DefaultInvocationContentType;
+        // A well-formed invocation content type whose version is outside [V5,V6] is RT0015 → reject.
+        return ProtocolVersion.IsSupported(version.Value) ? version.Value : 0;
     }
 
     /// <summary>
@@ -163,13 +164,27 @@ public static class RestateEndpointRouteBuilderExtensions
                 return;
             }
 
+            // G12: negotiate + validate the inbound service-protocol version BEFORE starting the 200
+            // stream or invoking the handler. A recognizable invocation content type naming a version
+            // outside [V5,V6] is rejected with 415 (RT0015), matching shared-core VM::new
+            // (vm/mod.rs:214-261); an absent/unrecognized type falls back to our manifest max.
+            var negotiatedVersion = NegotiateInvocationVersion(context.Request.ContentType);
+            if (negotiatedVersion == 0)
+            {
+                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                await context.Response.WriteAsync(
+                    $"Unsupported protocol version '{context.Request.ContentType}', not within " +
+                    $"[v{ProtocolVersion.MinimumSupported} to v{ProtocolVersion.MaximumSupported}]. " +
+                    "See https://docs.restate.dev/references/errors/#RT0015");
+                return;
+            }
+
             context.Response.StatusCode = StatusCodes.Status200OK;
             // The response protocol version MUST match the version the server negotiated on the
             // request. restate-server sends Content-Type: application/vnd.restate.invocation.v{N}
             // on /invoke and rejects (RT0012) any response whose version differs — so we echo the
-            // request's content-type verbatim, falling back to our manifest max (v6) only when the
-            // request carried no recognizable invocation content type.
-            context.Response.ContentType = NegotiateInvocationContentType(context.Request.ContentType);
+            // negotiated version's content-type back.
+            context.Response.ContentType = ProtocolVersion.ContentTypeFor(negotiatedVersion);
             context.Response.Headers.Append("x-restate-server", ServerVersion);
 
             // Disable response buffering so protocol frames are written directly to the HTTP/2 stream.
@@ -187,7 +202,8 @@ public static class RestateEndpointRouteBuilderExtensions
                     service,
                     handlerDef,
                     context.RequestServices,
-                    context.RequestAborted);
+                    context.RequestAborted,
+                    negotiatedVersion);
             }
             catch
             {

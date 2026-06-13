@@ -8,9 +8,9 @@
 //       minProtocolVersion=5 / maxProtocolVersion=6, and the server negotiates the per-invocation
 //       protocol via the request Content-Type `application/vnd.restate.invocation.v5`. NOTE: the
 //       SDK previously hardcoded the RESPONSE content type to `...invocation.v6`, which 1.4.4
-//       rejected with RT0012 ("unexpected content type"); the endpoint now echoes the request's
-//       negotiated version (RestateEndpointRouteBuilderExtensions.NegotiateInvocationContentType),
-//       which is what unblocks every scenario below.
+//       rejected with RT0012 ("unexpected content type"); the endpoint now validates + echoes the
+//       request's negotiated version (RestateEndpointRouteBuilderExtensions.NegotiateInvocationVersion),
+//       which is what unblocks every scenario below. A version outside [v5,v6] is now rejected 415 (G12).
 //
 //   (b) Env knobs accepted (the suspension forcers): the container starts cleanly with
 //       RESTATE_WORKER__INVOKER__INACTIVITY_TIMEOUT=5s and RESTATE_WORKER__INVOKER__ABORT_TIMEOUT=30s

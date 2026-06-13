@@ -499,15 +499,30 @@ public class EndpointManifestTests
     [Theory]
     // restate-server negotiates the per-invocation protocol version and sends it as the request
     // Content-Type; the /invoke response MUST echo the SAME version or the server rejects the
-    // stream with RT0012. Each negotiated version round-trips unchanged.
-    [InlineData("application/vnd.restate.invocation.v5", "application/vnd.restate.invocation.v5")]
-    [InlineData("application/vnd.restate.invocation.v6", "application/vnd.restate.invocation.v6")]
-    // Parameters (charset etc.) are stripped — only the bare media type must match.
-    [InlineData("application/vnd.restate.invocation.v5; charset=utf-8", "application/vnd.restate.invocation.v5")]
-    public void NegotiateInvocationContentType_EchoesRequestVersion(string request, string expected)
+    // stream with RT0012. A version WITHIN [V5,V6] round-trips to that version number.
+    [InlineData("application/vnd.restate.invocation.v5", 5)]
+    [InlineData("application/vnd.restate.invocation.v6", 6)]
+    // Parameters (charset etc.) are stripped — only the bare media type carries the version token.
+    [InlineData("application/vnd.restate.invocation.v5; charset=utf-8", 5)]
+    public void NegotiateInvocationVersion_SupportedVersion_ReturnsVersionNumber(string request, int expected)
     {
-        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationContentType(request);
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationVersion(request);
         Assert.Equal(expected, result);
+        // The negotiated number renders back to the echoed response content type.
+        Assert.Equal(request.Split(';')[0].Trim(),
+            Restate.Sdk.Internal.Protocol.ProtocolVersion.ContentTypeFor(result));
+    }
+
+    [Theory]
+    // G12 — a recognizable invocation content type whose version is OUTSIDE [V5,V6] is RT0015:
+    // NegotiateInvocationVersion returns 0, the /invoke endpoint rejects with 415.
+    [InlineData("application/vnd.restate.invocation.v4")]
+    [InlineData("application/vnd.restate.invocation.v7")]
+    [InlineData("application/vnd.restate.invocation.v1")]
+    [InlineData("application/vnd.restate.invocation.v99")]
+    public void NegotiateInvocationVersion_UnsupportedVersion_ReturnsZero(string request)
+    {
+        Assert.Equal(0, RestateEndpointRouteBuilderExtensions.NegotiateInvocationVersion(request));
     }
 
     [Theory]
@@ -517,9 +532,12 @@ public class EndpointManifestTests
     // unit tests that post a bare ByteArrayContent) falls back to the manifest max (v6).
     [InlineData("application/json")]
     [InlineData("text/plain")]
-    public void NegotiateInvocationContentType_UnknownRequest_FallsBackToV6(string? request)
+    // A malformed invocation content type whose version token is not an integer is treated as
+    // unrecognized and falls back to the max rather than rejecting.
+    [InlineData("application/vnd.restate.invocation.vX")]
+    public void NegotiateInvocationVersion_UnknownRequest_FallsBackToMax(string? request)
     {
-        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationContentType(request);
-        Assert.Equal("application/vnd.restate.invocation.v6", result);
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateInvocationVersion(request);
+        Assert.Equal(Restate.Sdk.Internal.Protocol.ProtocolVersion.MaximumSupported, result);
     }
 }

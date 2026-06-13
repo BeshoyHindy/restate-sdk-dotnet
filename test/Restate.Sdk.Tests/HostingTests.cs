@@ -222,6 +222,67 @@ public class HostingTests
         Assert.Contains("HostingGreeter", text);
     }
 
+    // ---- G12: inbound protocol-version negotiation (via TestServer) ---------------------------
+
+    /// <summary>Posts a framed invoke body with an explicit invocation Content-Type.</summary>
+    private static async Task<HttpResponseMessage> InvokeWithContentTypeAsync(
+        HttpClient client, string contentType)
+    {
+        var content = new ByteArrayContent(FramedInvokeBody("World"));
+        content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+        return await client.PostAsync("/invoke/HostingGreeter/Greet", content);
+    }
+
+    [Theory]
+    // G12 — a request whose invocation Content-Type names a protocol version WITHIN [v5,v6] is
+    // accepted; the response echoes that exact negotiated version (RT0012 parity).
+    [InlineData("application/vnd.restate.invocation.v5")]
+    [InlineData("application/vnd.restate.invocation.v6")]
+    public async Task Invoke_SupportedContentType_Returns200AndEchoesVersion(string contentType)
+    {
+        using var host = await StartInvokeHostAsync();
+        using var client = host.GetTestClient();
+
+        var response = await InvokeWithContentTypeAsync(client, contentType);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(contentType, response.Content.Headers.ContentType?.ToString());
+    }
+
+    [Theory]
+    // G12 — a request whose invocation Content-Type names a version OUTSIDE [v5,v6] is rejected with
+    // 415 BEFORE the handler runs (RT0015 parity, shared-core VM::new vm/mod.rs:214-261).
+    [InlineData("application/vnd.restate.invocation.v4")]
+    [InlineData("application/vnd.restate.invocation.v7")]
+    [InlineData("application/vnd.restate.invocation.v1")]
+    public async Task Invoke_UnsupportedContentType_Returns415(string contentType)
+    {
+        using var host = await StartInvokeHostAsync();
+        using var client = host.GetTestClient();
+
+        var response = await InvokeWithContentTypeAsync(client, contentType);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        // The rejection body references RT0015 so operators can find the docs.
+        Assert.Contains("RT0015", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Invoke_NoContentType_FallsBackToMaxVersion()
+    {
+        // A hand-crafted request with no invocation Content-Type falls back to the manifest max (v6)
+        // rather than rejecting — preserving the prior echo-default behavior.
+        using var host = await StartInvokeHostAsync();
+        using var client = host.GetTestClient();
+
+        var response = await client.PostAsync("/invoke/HostingGreeter/Greet",
+            new ByteArrayContent(FramedInvokeBody("World")));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/vnd.restate.invocation.v6",
+            response.Content.Headers.ContentType?.ToString());
+    }
+
     // ---- MapRestate /discover negotiation (via TestServer) -----------------------------------
 
     [Fact]

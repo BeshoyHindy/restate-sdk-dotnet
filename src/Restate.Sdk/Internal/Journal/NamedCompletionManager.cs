@@ -70,15 +70,17 @@ internal sealed class NamedCompletionManager
         }
     }
 
-    public bool TryFail(string name, ushort code, string message)
+    public bool TryFail(string name, ushort code, string message,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         lock (_gate)
         {
             if (_terminal is not null) return false;
+            // V6 Failure.metadata rides along on the re-raised TerminalException (round-trip in).
             if (_slots.TryGetValue(name, out var slot))
                 return slot.Kind == CompletionSlot.SlotKind.Tcs
-                       && slot.Tcs.TrySetException(new TerminalException(message, code));
-            _slots[name] = new CompletionSlot(new TerminalException(message, code));
+                       && slot.Tcs.TrySetException(new TerminalException(message, code, metadata));
+            _slots[name] = new CompletionSlot(new TerminalException(message, code, metadata));
             return true;
         }
     }

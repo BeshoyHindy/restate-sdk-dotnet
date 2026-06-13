@@ -60,12 +60,16 @@ internal sealed class InvocationJournal
                 $"Unavailable entry during replay at command index {Count}: expected {expectedType}");
 
         var command = _replayCommands.Dequeue();
+        // CommandTypeMismatchError / CommandMismatchError → JOURNAL_MISMATCH (570) in shared-core
+        // (vm/errors.rs:390,396): a recorded-vs-current code-path divergence, not a generic violation.
         if (command.EntryType != expectedType)
             throw new ProtocolException(
-                $"Command type mismatch at command index {Count}: replayed {command.EntryType}, expected {expectedType}");
+                $"Command type mismatch at command index {Count}: replayed {command.EntryType}, expected {expectedType}",
+                ProtocolException.JournalMismatchCode);
         if (!string.Equals(command.Name ?? "", expectedName ?? "", StringComparison.Ordinal))
             throw new ProtocolException(
-                $"Command mismatch at command index {Count}: replayed '{command.Name}', expected '{expectedName}'");
+                $"Command mismatch at command index {Count}: replayed '{command.Name}', expected '{expectedName}'",
+                ProtocolException.JournalMismatchCode);
 
         Count++;
         LastCommandType = command.EntryType;
@@ -88,7 +92,8 @@ internal sealed class InvocationJournal
             throw new ProtocolException(
                 $"Command mismatch at command index {Count - 1}: replayed target " +
                 $"'{command.TargetService}/{command.TargetHandler}' key '{command.TargetKey}', " +
-                $"expected '{expectedService}/{expectedHandler}' key '{expectedKey}'");
+                $"expected '{expectedService}/{expectedHandler}' key '{expectedKey}'",
+                ProtocolException.JournalMismatchCode);
         return command;
     }
 
@@ -112,7 +117,8 @@ internal sealed class InvocationJournal
             throw new ProtocolException(
                 $"Command mismatch at command index {Count - 1}: replayed signal target " +
                 $"'{command.SignalTargetInvocationId}' id '{FormatSignalId(command.SignalIdx, command.SignalName)}', " +
-                $"expected '{expectedTarget}' id '{FormatSignalId(expectedSignalIdx, expectedSignalName)}'");
+                $"expected '{expectedTarget}' id '{FormatSignalId(expectedSignalIdx, expectedSignalName)}'",
+                ProtocolException.JournalMismatchCode);
         return command;
     }
 

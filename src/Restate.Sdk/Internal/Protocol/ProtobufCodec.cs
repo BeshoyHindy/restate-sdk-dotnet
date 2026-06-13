@@ -300,6 +300,7 @@ internal static class ProtobufCodec
         ReadOnlyMemory<byte>? value = null;
         ushort? failureCode = null;
         string? failureMessage = null;
+        IReadOnlyDictionary<string, string>? failureMetadata = null;
         var isVoid = false;
         string? invocationId = null;
 
@@ -314,6 +315,7 @@ internal static class ProtobufCodec
             case Gen.NotificationTemplate.ResultOneofCase.Failure:
                 failureCode = (ushort)n.Failure.Code;
                 failureMessage = n.Failure.Message;
+                failureMetadata = ParseFailureMetadata(n.Failure);   // V6 Failure.metadata (round-trip in)
                 break;
             case Gen.NotificationTemplate.ResultOneofCase.InvocationId:
                 invocationId = n.InvocationId;
@@ -328,7 +330,8 @@ internal static class ProtobufCodec
                 break;
         }
 
-        return new CompletionNotification(n.CompletionId, value, failureCode, failureMessage, isVoid, invocationId);
+        return new CompletionNotification(
+            n.CompletionId, value, failureCode, failureMessage, isVoid, invocationId, failureMetadata);
     }
 
     public static SignalNotification ParseSignalNotification(ReadOnlySpan<byte> payload)
@@ -340,6 +343,7 @@ internal static class ProtobufCodec
         ReadOnlyMemory<byte>? value = null;
         ushort? failureCode = null;
         string? failureMessage = null;
+        IReadOnlyDictionary<string, string>? failureMetadata = null;
         var isVoid = false;
 
         if (msg.SignalIdCase == Gen.SignalNotificationMessage.SignalIdOneofCase.Idx)
@@ -358,10 +362,48 @@ internal static class ProtobufCodec
             case Gen.SignalNotificationMessage.ResultOneofCase.Failure:
                 failureCode = (ushort)msg.Failure.Code;
                 failureMessage = msg.Failure.Message;
+                failureMetadata = ParseFailureMetadata(msg.Failure);   // V6 Failure.metadata (round-trip in)
                 break;
         }
 
-        return new SignalNotification(idx, name, value, failureCode, failureMessage, isVoid);
+        return new SignalNotification(idx, name, value, failureCode, failureMessage, isVoid, failureMetadata);
+    }
+
+    // ── Failure (V6 metadata round-trip) ──────────────────────────────
+
+    /// <summary>
+    ///     Builds a protocol <see cref="Gen.Failure" /> with the given code/message and, when
+    ///     <paramref name="metadata" /> is non-null and non-empty, the repeated
+    ///     <c>FailureMetadata</c> (field 3, proto:633-646). The caller is responsible for the V6 gate:
+    ///     a sub-V6 negotiation passes <see langword="null" /> so no metadata is emitted
+    ///     (verify_error_metadata_feature_support, vm/mod.rs:118-124). Metadata pairs are added in the
+    ///     enumeration order of the supplied dictionary so the journal bytes stay deterministic for a
+    ///     given ordered source.
+    /// </summary>
+    public static Gen.Failure BuildFailure(
+        uint code, string message, IReadOnlyDictionary<string, string>? metadata = null)
+    {
+        var failure = new Gen.Failure { Code = code, Message = message };
+        if (metadata is { Count: > 0 })
+            foreach (var pair in metadata)
+                failure.Metadata.Add(new Gen.FailureMetadata { Key = pair.Key, Value = pair.Value });
+        return failure;
+    }
+
+    /// <summary>
+    ///     Reads the repeated <c>FailureMetadata</c> off an incoming <see cref="Gen.Failure" /> into a
+    ///     plain dictionary, or <see langword="null" /> when none is present. Parsing is always safe —
+    ///     a sub-V6 runtime simply never sends any, so the field is empty and this returns null.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? ParseFailureMetadata(Gen.Failure failure)
+    {
+        if (failure.Metadata.Count == 0)
+            return null;
+
+        var metadata = new Dictionary<string, string>(failure.Metadata.Count);
+        foreach (var entry in failure.Metadata)
+            metadata[entry.Key] = entry.Value;
+        return metadata;
     }
 
     // ── Factory methods for outgoing commands ─────────────────────────
@@ -382,12 +424,13 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.ProposeRunCompletionMessage CreateRunProposalFailure(uint completionId, uint code, string message)
+    public static Gen.ProposeRunCompletionMessage CreateRunProposalFailure(uint completionId, uint code,
+        string message, IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new Gen.ProposeRunCompletionMessage
         {
             ResultCompletionId = completionId,
-            Failure = new Gen.Failure { Code = code, Message = message }
+            Failure = BuildFailure(code, message, metadata)
         };
     }
 
@@ -456,11 +499,12 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.OutputCommandMessage CreateOutputFailure(uint code, string message)
+    public static Gen.OutputCommandMessage CreateOutputFailure(uint code, string message,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new Gen.OutputCommandMessage
         {
-            Failure = new Gen.Failure { Code = code, Message = message }
+            Failure = BuildFailure(code, message, metadata)
         };
     }
 
@@ -559,12 +603,13 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.CompleteAwakeableCommandMessage CreateCompleteAwakeableFailure(string id, uint code, string reason)
+    public static Gen.CompleteAwakeableCommandMessage CreateCompleteAwakeableFailure(string id, uint code,
+        string reason, IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new Gen.CompleteAwakeableCommandMessage
         {
             AwakeableId = id,
-            Failure = new Gen.Failure { Code = code, Message = reason }
+            Failure = BuildFailure(code, reason, metadata)
         };
     }
 
@@ -598,12 +643,13 @@ internal static class ProtobufCodec
     }
 
     public static Gen.CompletePromiseCommandMessage CreateCompletePromiseFailure(
-        string name, uint code, string reason, uint completionId)
+        string name, uint code, string reason, uint completionId,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new Gen.CompletePromiseCommandMessage
         {
             Key = name,
-            CompletionFailure = new Gen.Failure { Code = code, Message = reason },
+            CompletionFailure = BuildFailure(code, reason, metadata),
             ResultCompletionId = completionId
         };
     }
@@ -702,13 +748,14 @@ internal static class ProtobufCodec
     ///     (the failure variant of <see cref="CreateSendNamedSignalSuccess" />).
     /// </summary>
     public static Gen.SendSignalCommandMessage CreateSendNamedSignalFailure(
-        string targetInvocationId, string name, uint code, string message)
+        string targetInvocationId, string name, uint code, string message,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         return new Gen.SendSignalCommandMessage
         {
             TargetInvocationId = targetInvocationId,
             Name = name,
-            Failure = new Gen.Failure { Code = code, Message = message }
+            Failure = BuildFailure(code, message, metadata)
         };
     }
 

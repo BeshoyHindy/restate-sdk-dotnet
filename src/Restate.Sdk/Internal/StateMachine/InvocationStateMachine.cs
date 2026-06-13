@@ -181,6 +181,26 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     public ILogger Logger { get; }
 
+    // G12: the service-protocol version the runtime negotiated for this invocation, parsed from the
+    // /invoke request Content-Type and validated to be within [V5,V6] BEFORE the SM runs. Defaults to
+    // the max we speak so direct SM tests (no HTTP layer) behave as the highest negotiated version; the
+    // host overwrites it per request. Mirrors Context.negotiated_protocol_version (vm/mod.rs).
+    public int NegotiatedProtocolVersion { get; set; } = ProtocolVersion.MaximumSupported;
+
+    // G11: terminal-error Failure.metadata is a V6 feature. The verify_error_metadata_feature_support
+    // analogue (vm/mod.rs:118-124) — emission of metadata is gated on the negotiated version; on a
+    // sub-V6 negotiation metadata is silently dropped from the outgoing Failure.
+    private bool SupportsErrorMetadata => ProtocolVersion.SupportsErrorMetadata(NegotiatedProtocolVersion);
+
+    /// <summary>
+    ///     Returns a terminal exception's metadata to serialize onto an outgoing Failure, or
+    ///     <see langword="null" /> when the negotiated version cannot carry it (sub-V6) or there is
+    ///     none. Centralizes the V6 gate so every Failure emit path (output / run / awakeable /
+    ///     promise / named-signal) drops metadata identically on older protocols.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string>? OutgoingFailureMetadata(TerminalException? ex) =>
+        ex is { Metadata.Count: > 0 } && SupportsErrorMetadata ? ex.Metadata : null;
+
     public void Dispose()
     {
         _completions.CancelAll();

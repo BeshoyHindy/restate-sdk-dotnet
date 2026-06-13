@@ -20,7 +20,7 @@ namespace Restate.Sdk.Tests.Integration;
 ///     HAND-BUILT <see cref="ServiceDefinition" />/<see cref="HandlerDefinition" /> whose invokers
 ///     throw each distinct exception type, asserting the correct terminal frame (or absence of one)
 ///     on the wire:
-///       * <see cref="ProtocolException" /> → Error frame (code 500);
+///       * <see cref="ProtocolException" /> → Error frame (PROTOCOL_VIOLATION 571; G9);
 ///       * <see cref="RestateRetryableException" /> → Error frame carrying the next-retry-delay;
 ///       * a generic exception → Error frame (code 500);
 ///       * <see cref="SuspendedException" /> raised by the handler → NO Error/Output frame;
@@ -110,7 +110,10 @@ public class InvocationHandlerEdgeTests
 
         var error = frames.Single(f => f.Header.Type == MessageType.Error);
         var parsed = Gen.ErrorMessage.Parser.ParseFrom(error.Payload);
-        Assert.Equal(500u, parsed.Code);
+        // G9: a generic protocol violation surfaces as PROTOCOL_VIOLATION (571), not a generic 500
+        // (vm/errors.rs:70). A journal/command mismatch would instead be 570.
+        Assert.Equal((uint)ProtocolException.ProtocolViolationCode, parsed.Code);
+        Assert.Equal(571u, parsed.Code);
         Assert.Contains("bad protocol", parsed.Message);
     }
 
@@ -215,7 +218,8 @@ public class InvocationHandlerEdgeTests
             (_, _, _, _) => throw new ProtocolException("bad protocol")));
 
         var error = frames.Single(f => f.Header.Type == MessageType.Error);
-        Assert.Equal(500u, Gen.ErrorMessage.Parser.ParseFrom(error.Payload).Code);
+        // G9: PROTOCOL_VIOLATION (571), not a generic 500.
+        Assert.Equal(571u, Gen.ErrorMessage.Parser.ParseFrom(error.Payload).Code);
     }
 
     [Fact(Timeout = WatchdogMs)]

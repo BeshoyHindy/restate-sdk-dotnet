@@ -27,14 +27,20 @@ internal sealed class InvocationHandler
         ServiceDefinition service,
         HandlerDefinition handler,
         IServiceProvider serviceProvider,
-        CancellationToken ct)
+        CancellationToken ct,
+        int negotiatedProtocolVersion = Protocol.ProtocolVersion.MaximumSupported)
     {
         var logger = _loggerFactory.CreateLogger("Restate.Invocation");
         var jsonOptions = JsonSerde.SerializerOptions;
         using var reader = new ProtocolReader(requestBodyReader);
         using var writer = new ProtocolWriter(responseBodyWriter);
 
-        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger);
+        // G12: the host validated the request Content-Type's protocol version is within [V5,V6] and
+        // passes the negotiated number here so V6-gated features (Failure.metadata) can check it.
+        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger)
+        {
+            NegotiatedProtocolVersion = negotiatedProtocolVersion
+        };
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;
         Activity? activity = null;
@@ -102,7 +108,9 @@ internal sealed class InvocationHandler
             // wrote a normal Output — cooperative-cancellation parity with Rust.
             Log.TerminalException(logger, sm.InvocationId, ex.Code);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
+            // G11: thread the terminal error's V6 metadata onto the OutputCommand failure (the SM
+            // gates emission on the negotiated protocol version).
+            try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None, ex.Metadata).ConfigureAwait(false); }
             catch { /* Stream already broken — nothing more we can do */ }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -111,9 +119,12 @@ internal sealed class InvocationHandler
         }
         catch (ProtocolException ex)
         {
+            // G9: surface the protocol-violation code — 570 (JOURNAL_MISMATCH) for a journal/command
+            // mismatch, 571 (PROTOCOL_VIOLATION) for any other violation — instead of collapsing to
+            // 500. Matches shared-core's per-error code mapping (vm/errors.rs impl_error_code!).
             Log.ProtocolError(logger, ex, sm.InvocationId);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            try { await sm.FailAsync(500, ex.Message, CancellationToken.None).ConfigureAwait(false); }
+            try { await sm.FailAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
             catch { /* Stream already broken */ }
         }
         catch (RestateRetryableException ex)
