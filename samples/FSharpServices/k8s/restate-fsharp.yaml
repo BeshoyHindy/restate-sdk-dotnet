@@ -1,0 +1,57 @@
+# F# Restate sample deployed via the restate-operator RestateDeployment CRD — KNATIVE MODE.
+#
+#   kubectl apply -f samples/FSharpServices/k8s/restate-fsharp.yaml
+#
+# This mirrors the C# sample deployments (samples/k8s/restate-samples.yaml): deploymentMode knative,
+# a single warm replica, the operator registers the cluster-local Route URL with the RestateCluster
+# "restate". The serving container port MUST be named "h2c" because the Restate .NET SDK serves
+# HTTP/2 cleartext only.
+#
+# The image is built and pushed with `dotnet publish -t:PublishContainer` (see samples/Container.props
+# and the README) to ghcr.io/<owner>/restate-sample-fsharpservices. The package is private, so the pod
+# pulls it with the existing `ghcr-pull` secret (same as the other samples). For a purely local k0s run
+# with no image push, use samples/FSharpServices/e2e/k0s-e2e.ts, which runs the SDK on the host and
+# registers it with the in-cluster restate-server instead.
+---
+apiVersion: restate.dev/v1beta1
+kind: RestateDeployment
+metadata:
+  name: fsharpservices
+  namespace: restate
+spec:
+  deploymentMode: knative
+  revisionHistoryLimit: 1
+  knative:
+    tag: v1
+    minScale: 1            # keep one warm replica (scale-to-zero races operator registration)
+    maxScale: 5
+    target: 50
+  restate:
+    register:
+      cluster: restate
+  template:
+    metadata:
+      labels:
+        app: fsharpservices
+      annotations:
+        autoscaling.knative.dev/initial-scale: "1"
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: app
+          image: ghcr.io/stevefan1999-personal/restate-sample-fsharpservices:1.0.0
+          ports:
+            - name: h2c               # REQUIRED: h2c for the HTTP/2-only Restate .NET SDK
+              containerPort: 9080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
