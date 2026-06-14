@@ -37,17 +37,17 @@ So `Services.fs` is just attributed handler classes calling `ctx.RunStep(...)` �
 **`Restate.Sdk.FSharp.Myriad`** is a [Myriad](https://github.com/MoiraeSoftware/myriad) generator (the
 idiomatic F# analog of a Roslyn source generator: AST in → F# source out). It scans the
 `[<Service>]`/`[<VirtualObject>]`/`[<Workflow>]` types and their `[<Handler>]`/`[<SharedHandler>]`
-members and emits `Services.Generated.fs` (the `FsService.*` registration). The generated file is
-checked in; regenerate it with:
+members and emits `Services.Generated.fs` (the `FsService.*` registration).
 
-```sh
-deno run --allow-run --allow-env --allow-read samples/FSharpServices/regenerate.ts
-```
+`Services.Generated.fs` is **regenerated on every build** by Myriad.Sdk's MSBuild integration — the
+`<Compile Include="Services.Generated.fs"><MyriadFile>Services.fs</MyriadFile></Compile>` item in the
+`.fsproj` runs the generator before compile. A `PackageDownload` pulls the `myriad` CLI into the NuGet
+cache during `dotnet restore`, so a plain `dotnet build` works with no extra steps. The file is also
+committed, so a build that skips the generator still compiles. Edit `Services.fs`, build, done.
 
-> The Myriad 0.85.0 CLI is a net9.0 tool, so `regenerate.ts` launches it with
-> `DOTNET_ROLL_FORWARD=LatestMajor` on this net10-only machine. 0.85.0 loads plugins with
-> `PreferSharedTypes` (it shares its own `FSharp.Core`/`Fantomas` with the plugin), so no version
-> pinning is needed.
+> Myriad 0.85.0 is the latest published release (the mis-tagged 0.8.5); its `PreferSharedTypes` plugin
+> loader shares the runner's `FSharp.Core`/`Fantomas` with the plugin, so no version pinning is needed,
+> and its CLI rolls forward (net9 → net10) automatically.
 
 Two project settings still differ from the C# samples (`FSharpServices.fsproj`): `FSharp.Core` is
 referenced explicitly (the SDK's in-box copy is a compiler asset, not deployed), and

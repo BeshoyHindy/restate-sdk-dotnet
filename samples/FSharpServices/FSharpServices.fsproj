@@ -6,6 +6,8 @@
         <!-- F# nullness checking (inherited <Nullable>enable</Nullable>) is opt-in and noisy against the
              C#-nullable-annotated SDK surface; the boxing invoker pattern trips it on every cast. Off here. -->
         <Nullable>disable</Nullable>
+        <!-- Keep Myriad's config/context scratch files in obj/ instead of the source directory. -->
+        <MyriadConfigFile>$(BaseIntermediateOutputPath)myriad.toml</MyriadConfigFile>
     </PropertyGroup>
 
     <!-- Native MSBuild container support (multi-arch amd64/arm64). See samples/Container.props. -->
@@ -13,13 +15,17 @@
 
     <!--
         Handlers in Services.fs carry the SDK's [<Service>]/[<Handler>] attributes and call the C# Context
-        extension methods from Restate.Sdk.FSharp. Roslyn source generators do not run for F# projects, so
-        registration is produced by the Restate.Sdk.FSharp.Myriad generator into Services.Generated.fs.
+        extension methods from Restate.Sdk.FSharp. Roslyn source generators do not run for F#, so the
+        Restate.Sdk.FSharp.Myriad generator regenerates Services.Generated.fs from Services.fs on every
+        build (Myriad.Sdk's MyriadFile metadata). The generated file is committed so a plain build that
+        skips the generator still compiles.
     -->
     <ItemGroup>
         <Compile Include="Domain.fs"/>
         <Compile Include="Services.fs"/>
-        <Compile Include="Services.Generated.fs"/>
+        <Compile Include="Services.Generated.fs">
+            <MyriadFile>Services.fs</MyriadFile>
+        </Compile>
         <Compile Include="Program.fs"/>
     </ItemGroup>
 
@@ -27,8 +33,19 @@
         <!-- Pin FSharp.Core to a deployable runtime package; the SDK's in-box FSharp.Core (10.0.0.0) is a
              compiler asset and is not copied to the output. Version is centrally managed (CPM). -->
         <PackageReference Include="FSharp.Core"/>
+        <!-- Myriad's MSBuild integration (build-only). PackageDownload pulls the matching myriad CLI tool
+             into the NuGet cache during `dotnet restore`, so a plain `dotnet build` regenerates without a
+             separate `dotnet tool restore` step. (Myriad 0.8.6 does this in its own props; 0.85.0 predates it.) -->
+        <PackageReference Include="Myriad.Sdk" PrivateAssets="all"/>
+        <PackageDownload Include="Myriad" Version="[0.85.0]"/>
         <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
         <ProjectReference Include="../../src/Restate.Sdk.FSharp/Restate.Sdk.FSharp.csproj"/>
+        <!-- The Myriad generator plugin: built first (ProjectReference), registered with Myriad as a
+             generator, but not linked into the sample (ReferenceOutputAssembly=false). -->
+        <ProjectReference Include="../../src/Restate.Sdk.FSharp.Myriad/Restate.Sdk.FSharp.Myriad.fsproj"
+                          OutputItemType="MyriadSdkGenerator"
+                          ReferenceOutputAssembly="false"
+                          PrivateAssets="all"/>
     </ItemGroup>
 
 </Project>
