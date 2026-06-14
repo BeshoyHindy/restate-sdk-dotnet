@@ -17,6 +17,7 @@
         <Project Path="samples/SurrealDbInventory/SurrealDbInventory.csproj"/>
         <Project Path="samples/EmailPipeline/EmailPipeline.csproj"/>
         <Project Path="samples/ReplayLab/ReplayLab.csproj"/>
+        <Project Path="samples/FSharpServices/FSharpServices.fsproj"/>
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>

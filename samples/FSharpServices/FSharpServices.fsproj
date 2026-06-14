@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <!-- F# nullness checking (inherited <Nullable>enable</Nullable>) is opt-in and noisy against the
+             C#-nullable-annotated SDK surface; the boxing invoker pattern trips it on every cast. Off here. -->
+        <Nullable>disable</Nullable>
+    </PropertyGroup>
+
+    <!-- Native MSBuild container support (multi-arch amd64/arm64). See samples/Container.props. -->
+    <Import Project="../Container.props"/>
+
+    <!--
+        F# authors Restate services against the SDK's public ServiceDefinition surface directly.
+        Roslyn source generators do not run for F# projects, so (unlike the C# samples) there is no
+        Restate.Sdk.Generators analyzer reference here — Services.fs builds the definitions by hand.
+    -->
+    <ItemGroup>
+        <Compile Include="Restate.fs"/>
+        <Compile Include="Domain.fs"/>
+        <Compile Include="Services.fs"/>
+        <Compile Include="Program.fs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Pin FSharp.Core to a deployable runtime package; the SDK's in-box FSharp.Core (10.0.0.0) is a
+             compiler asset and is not copied to the output. Version is centrally managed (CPM). -->
+        <PackageReference Include="FSharp.Core"/>
+        <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
+    </ItemGroup>
+
+</Project>

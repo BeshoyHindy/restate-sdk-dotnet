@@ -35,5 +35,7 @@
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <!-- E2E (used by test/Restate.Sdk.E2E, added here so the props file is edited once) -->
     <PackageVersion Include="Testcontainers" Version="4.4.0" />
+    <!-- F# samples (samples/FSharpServices) — deployable FSharp.Core runtime package -->
+    <PackageVersion Include="FSharp.Core" Version="8.0.400" />
   </ItemGroup>
 </Project>
