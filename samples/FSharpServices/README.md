@@ -44,9 +44,10 @@ checked in; regenerate it with:
 deno run --allow-run --allow-env --allow-read samples/FSharpServices/regenerate.ts
 ```
 
-> The Myriad 0.8.3 CLI is a net6.0 tool, so `regenerate.ts` launches it with
-> `DOTNET_ROLL_FORWARD=LatestMajor`, and the plugin pins `FSharp.Core` 6.0.x so its Fantomas 6.1.1 calls
-> line up with the tool's own copies (0.8.5+ makes this automatic via `PreferSharedTypes`).
+> The Myriad 0.85.0 CLI is a net9.0 tool, so `regenerate.ts` launches it with
+> `DOTNET_ROLL_FORWARD=LatestMajor` on this net10-only machine. 0.85.0 loads plugins with
+> `PreferSharedTypes` (it shares its own `FSharp.Core`/`Fantomas` with the plugin), so no version
+> pinning is needed.
 
 Two project settings still differ from the C# samples (`FSharpServices.fsproj`): `FSharp.Core` is
 referenced explicitly (the SDK's in-box copy is a compiler asset, not deployed), and

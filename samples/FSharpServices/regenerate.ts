@@ -5,11 +5,11 @@
 //
 //   deno run --allow-run --allow-env --allow-read samples/FSharpServices/regenerate.ts
 //
-// Notes on the (Myriad 0.8.3) toolchain:
-//   * the `myriad` CLI is a net6.0 tool, so it is launched with DOTNET_ROLL_FORWARD=LatestMajor on a
+// Notes on the Myriad 0.85.0 toolchain:
+//   * the `myriad` CLI is a net9.0 tool, so it is launched with DOTNET_ROLL_FORWARD=LatestMajor on a
 //     net10-only machine;
-//   * the plugin pins FSharp.Core 6.0.x so its Fantomas.Core/FCS 6.1.1 calls line up with the tool's
-//     own copies at load time (0.8.5+ would make this automatic via PreferSharedTypes);
+//   * 0.85.0 loads plugins with PreferSharedTypes, so the plugin needs no FSharp.Core/Fantomas version
+//     pinning — the runner shares its own copies with the plugin;
 //   * the plugin must be passed as an ABSOLUTE path.
 
 const repoRoot = new URL("../../", import.meta.url).pathname;

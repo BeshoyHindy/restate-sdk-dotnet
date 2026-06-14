@@ -186,15 +186,7 @@ type RestateGenerator() =
         member _.ValidInputExtensions = seq { ".fs" }
 
         member _.Generate(context: GeneratorContext) =
-            // Parse with this plugin's own Fantomas.Core rather than Myriad.Core's Ast.fromFilename: the
-            // Myriad runner shares its Myriad.Core assembly with the plugin, and the tool's build of that
-            // helper has a different signature than the NuGet package. The plugin boundary stays string-only
-            // (GeneratorContext.InputFilename in, Output.Source out), which avoids any cross-assembly type
-            // identity mismatch.
-            let content = System.IO.File.ReadAllText context.InputFilename
-            let ast =
-                Fantomas.Core.CodeFormatter.ParseAsync(false, content)
-                |> Async.RunSynchronously
-                |> Array.head
-                |> fst
+            // Myriad 0.85.0 loads plugins with PreferSharedTypes, so the runner shares its FSharp.Core,
+            // Fantomas.FCS and Myriad.Core with this plugin — the parsed AST crosses the boundary safely.
+            let ast = Ast.fromFilename context.InputFilename |> Async.RunSynchronously |> Array.head |> fst
             Output.Source(Emit.source ast)

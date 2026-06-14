@@ -10,9 +10,6 @@
         <IsPackable>false</IsPackable>
         <!-- F# nullness checking is noisy against the Fantomas.FCS syntax tree; off for the generator. -->
         <Nullable>disable</Nullable>
-        <!-- Myriad's plugin loader resolves the plugin's dependencies (FSharp.Core, Fantomas.FCS,
-             Myriad.Core) from the plugin's own output directory, so they must be copied next to it. -->
-        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
 
     <ItemGroup>
@@ -21,9 +18,7 @@
 
     <ItemGroup>
         <PackageReference Include="Myriad.Core"/>
-        <!-- Match the Myriad 0.8.3 tool's FSharp.Core (6.0.x → assembly version 6.0.0.0) so the
-             Fantomas.Core/FCS 6.1.1 signatures the plugin calls line up at load time. -->
-        <PackageReference Include="FSharp.Core" VersionOverride="6.0.7"/>
+        <PackageReference Include="FSharp.Core"/>
     </ItemGroup>
 
 </Project>

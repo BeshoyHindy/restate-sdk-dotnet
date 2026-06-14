@@ -37,8 +37,9 @@
     <PackageVersion Include="Testcontainers" Version="4.4.0" />
     <!-- F# samples (samples/FSharpServices) — deployable FSharp.Core runtime package -->
     <PackageVersion Include="FSharp.Core" Version="8.0.400" />
-    <!-- F# code generation (Restate.Sdk.FSharp.Myriad) — Roslyn-source-generator analog for F# -->
-    <PackageVersion Include="Myriad.Core" Version="0.8.3" />
-    <PackageVersion Include="Myriad.Sdk" Version="0.8.3" />
+    <!-- F# code generation (Restate.Sdk.FSharp.Myriad) — Roslyn-source-generator analog for F#.
+         0.85.0 is the latest published (the mis-tagged 0.8.5); it adds PreferSharedTypes plugin loading. -->
+    <PackageVersion Include="Myriad.Core" Version="0.85.0" />
+    <PackageVersion Include="Myriad.Sdk" Version="0.85.0" />
   </ItemGroup>
 </Project>
