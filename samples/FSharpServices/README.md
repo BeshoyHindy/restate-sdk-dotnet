@@ -74,24 +74,26 @@ restate invocations invoke TripBookingService Book --body '{
 A car-rental `city` of `"FAILVILLE"` makes the saga fail terminally and roll back the flight + hotel
 (a deterministic trigger so the compensation path is testable).
 
-## End-to-end test on local k0s
+## End-to-end test
 
-`e2e/k0s-e2e.ts` runs the sample against a **real local k0s** cluster that already runs the
-restate-operator + a `RestateCluster` named `restate` (the same cluster the other samples deploy to):
+The F# sample is a first-class member of the repo's E2E suite, alongside the C# samples
+(`test/Restate.Sdk.E2E/FSharpServicesE2eTests`). It hosts the sample in-process (via `Program.buildHost`)
+behind a **real `restate-server` Testcontainer** and drives it through the ingress, so every invocation
+travels the full real path (`ingress → restate-server → F# endpoint → back`):
 
 ```sh
-deno run --allow-run --allow-net --allow-env samples/FSharpServices/e2e/k0s-e2e.ts
+dotnet test test/Restate.Sdk.E2E -c Release --filter "FullyQualifiedName~FSharpServicesE2eTests"
 ```
 
-Because importing a locally-built image into k0s's root-owned containerd needs privileges the test does
-not assume, it runs the SDK as a host process and registers it with the in-cluster restate-server using
-the node's reachable IP — so the **server dials back into the host** and drives the handlers. Every
-invocation travels the full real path (`ingress → restate-server → F# SDK → back`). It asserts:
+It asserts:
 
 1. Virtual Object durable per-key state (`Add` accumulates, `Reset` clears),
 2. Saga happy path (all three bookings confirmed),
 3. Saga compensation (terminal failure → `409` + bookings rolled back in reverse),
 4. Workflow **suspend → external awakeable resolve → resume → completed**.
+
+These are `[DockerFact]` tests (skipped when Docker is absent), self-contained and CI-runnable — no
+cluster required.
 
 ## Deploy as a pod (parity with the C# samples)
 

@@ -10,8 +10,13 @@ open Restate.Sdk.FSharp.Samples
 // (Virtual Object), and a signup Workflow — hosted on one HTTP/2 endpoint. Handler discovery and
 // registration are generated into Services.Generated.fs by the Restate.Sdk.FSharp.Myriad generator;
 // the runtime glue lives in the Restate.Sdk.FSharp C# helper library.
-[<EntryPoint>]
-let main argv =
+
+/// <summary>
+///   Builds the hosted endpoint on <paramref name="port" /> (0 = an OS-assigned ephemeral port). Shared
+///   by the executable entry point and the E2E suite, which hosts the same services in-process behind a
+///   real restate-server container (see test/Restate.Sdk.E2E/FSharpServicesFixture).
+/// </summary>
+let buildHost (port: int) =
   // User-payload JSON: camelCase + case-insensitive, matching the Restate ingress convention. An
   // explicit resolver is required because the input deserializers call GetTypeInfo on these options.
   let json = JsonSerializerOptions(JsonSerializerDefaults.Web)
@@ -20,13 +25,15 @@ let main argv =
 
   // Register the generated service definitions, then bind them onto the host.
   Registrations.registerAll ()
+  let builder = Registrations.bind (RestateHost.CreateBuilder())
+  builder.WithPort(port).Build()
 
+[<EntryPoint>]
+let main argv =
   let port =
     match argv with
     | [| value |] -> int value
     | _ -> 9080
 
-  let builder = Registrations.bind (RestateHost.CreateBuilder())
-  builder.WithPort(port).Build().RunAsync().GetAwaiter().GetResult()
-
+  (buildHost port).RunAsync().GetAwaiter().GetResult()
   0

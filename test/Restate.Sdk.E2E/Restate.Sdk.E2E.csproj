@@ -24,6 +24,9 @@
     <ItemGroup>
         <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
         <ProjectReference Include="../../samples/ReplayLab/ReplayLab.csproj"/>
+        <!-- The F# sample, hosted in-process by FSharpServicesFixture. It builds its own registration
+             via the Myriad generator and the Restate.Sdk.FSharp runtime helpers. -->
+        <ProjectReference Include="../../samples/FSharpServices/FSharpServices.fsproj"/>
         <!-- The generator must run against THIS assembly so the ReplayLab service invokers/registry
              are emitted into the test host's own AddRestateGenerated; it travels with the ReplayLab
              reference but is re-attached here as an Analyzer so the in-process host wiring resolves. -->
