@@ -1,33 +1,32 @@
-module Restate.Sdk.FSharp.Samples.Services
+namespace Restate.Sdk.FSharp.Samples
 
 open System
 open System.Runtime.ExceptionServices
 open System.Threading.Tasks
 open Restate.Sdk
-open Restate.Sdk.Endpoint
 open Restate.Sdk.FSharp
 
 // Durable state keys. Shared by the handlers below; one StateKey<'T> per logical column.
-let private count = StateKey<int>("count")
-let private wfStatus = StateKey<string>("status")
-let private wfAccountId = StateKey<string>("accountId")
-let private wfPendingId = StateKey<string>("pendingVerificationId")
+[<AutoOpen>]
+module private State =
+  let count = StateKey<int>("count")
+  let wfStatus = StateKey<string>("status")
+  let wfAccountId = StateKey<string>("accountId")
+  let wfPendingId = StateKey<string>("pendingVerificationId")
 
 // ---------------------------------------------------------------------------------------------------
 // Saga (stateless Service): book a trip, compensating completed steps in reverse order on failure.
+// Handler bodies call the C# Context extension methods (ctx.RunStep/...), so there is no F# binding
+// boilerplate; the [<Service>]/[<Handler>] attributes are what the Myriad generator scans.
 // ---------------------------------------------------------------------------------------------------
 
-/// <summary>
-///   The Saga pattern (compensating transactions). Books a flight, hotel, and car rental, each as a
-///   durable <c>ctx.Run</c> step. If a later step fails terminally, the already-completed bookings are
-///   undone in reverse order. Restate guarantees the compensations run even across crashes/replays.
-/// </summary>
+/// <summary>The Saga pattern (compensating transactions) — undo completed bookings in reverse on failure.</summary>
+[<Service>]
 type TripBookingService() =
 
+  [<Handler>]
   member _.Book (ctx: Context) (request: TripBookingRequest) : Task<TripBookingResult> =
     task {
-      // A malformed request is a deterministic client error: fail terminally rather than letting a
-      // null dereference be retried forever.
       if isNull (box request)
          || isNull (box request.Flight)
          || isNull (box request.Hotel)
@@ -39,17 +38,16 @@ type TripBookingService() =
 
       try
         ctx.Console.Log($"Booking flight for trip {request.TripId}...")
-        let! flight = Durable.run ctx "book-flight" (fun () -> BookingApi.bookFlight request.Flight)
-        compensations.Add(fun () -> Durable.runUnit ctx "cancel-flight" (fun () -> BookingApi.cancelFlight flight))
+        let! flight = ctx.RunStep("book-flight", fun () -> BookingApi.bookFlight request.Flight)
+        compensations.Add(fun () -> ctx.RunStepUnit("cancel-flight", fun () -> BookingApi.cancelFlight flight))
 
         ctx.Console.Log($"Booking hotel for trip {request.TripId}...")
-        let! hotel = Durable.run ctx "book-hotel" (fun () -> BookingApi.bookHotel request.Hotel)
-        compensations.Add(fun () -> Durable.runUnit ctx "cancel-hotel" (fun () -> BookingApi.cancelHotel hotel))
+        let! hotel = ctx.RunStep("book-hotel", fun () -> BookingApi.bookHotel request.Hotel)
+        compensations.Add(fun () -> ctx.RunStepUnit("cancel-hotel", fun () -> BookingApi.cancelHotel hotel))
 
         ctx.Console.Log($"Booking car rental for trip {request.TripId}...")
         let! car =
-          Durable.runRetry ctx "book-car-rental" (RetryPolicy.FixedAttempts(3))
-            (fun () -> BookingApi.bookCarRental request.CarRental)
+          ctx.RunStep("book-car-rental", RetryPolicy.FixedAttempts(3), fun () -> BookingApi.bookCarRental request.CarRental)
 
         ctx.Console.Log($"Trip {request.TripId} booked successfully!")
         return
@@ -72,108 +70,74 @@ type TripBookingService() =
 // Virtual Object: a durable per-key counter with exclusive writes and shared reads.
 // ---------------------------------------------------------------------------------------------------
 
-/// <summary>
-///   A Virtual Object that keeps a durable counter per key. Exclusive handlers (Add/Reset) run one at a
-///   time per key; shared handlers (Get/GetKeys) run concurrently without blocking writers.
-/// </summary>
+/// <summary>A Virtual Object keeping a durable counter per key (exclusive Add/Reset, shared Get/GetKeys).</summary>
+[<VirtualObject>]
 type CounterObject() =
 
+  [<Handler>]
   member _.Add (ctx: ObjectContext) (delta: int) : Task<int> =
     task {
-      let! current = Durable.get ctx count
+      let! current = ctx.GetAsync(count)
       let next = current + delta
-      Durable.set ctx count next
+      ctx.SetState(count, next)
       return next
     }
 
+  [<Handler>]
   member _.AddThenFail (ctx: ObjectContext) : Task<unit> =
-    // A non-retryable error: TerminalException stops Restate from retrying the invocation.
     ignore ctx
     raise (TerminalException("This operation intentionally fails and will not be retried", 400us))
 
-  member _.Reset (ctx: ObjectContext) : Task<unit> = task { Durable.clearAll ctx }
+  [<Handler>]
+  member _.Reset (ctx: ObjectContext) : Task<unit> = task { ctx.ClearAllState() }
 
-  member _.Get (ctx: SharedObjectContext) : Task<int> = task { return! Durable.get ctx count }
+  [<SharedHandler>]
+  member _.Get (ctx: SharedObjectContext) : Task<int> = task { return! ctx.GetAsync(count) }
 
-  member _.GetKeys (ctx: SharedObjectContext) : Task<string[]> = task { return! Durable.stateKeys ctx }
+  [<SharedHandler>]
+  member _.GetKeys (ctx: SharedObjectContext) : Task<string[]> = task { return! ctx.StateKeysAsync() }
 
 // ---------------------------------------------------------------------------------------------------
 // Workflow: user signup with email verification gated on a durable awakeable.
 // ---------------------------------------------------------------------------------------------------
 
-/// <summary>
-///   A Workflow whose <c>Run</c> handler executes exactly once per workflow id. It creates an account,
-///   sends a verification email carrying an awakeable id, then suspends (zero compute) until an external
-///   caller resolves that awakeable — at which point it activates the account. Shared handlers expose
-///   the live status and the pending awakeable id so an operator (or an E2E test) can complete it.
-/// </summary>
+/// <summary>A Workflow that suspends on an awakeable until an external caller resolves the verification.</summary>
+[<Workflow>]
 type SignupWorkflow() =
 
+  [<Handler>]
   member _.Run (ctx: WorkflowContext) (request: SignupRequest) : Task<SignupResult> =
     task {
-      Durable.set ctx wfStatus "creating-account"
-      let! accountId =
-        Durable.run ctx "create-account" (fun () -> AccountService.create request.Email request.Name)
-      Durable.set ctx wfAccountId accountId
+      ctx.SetState(wfStatus, "creating-account")
+      let! accountId = ctx.RunStep("create-account", fun () -> AccountService.create request.Email request.Name)
+      ctx.SetState(wfAccountId, accountId)
 
-      Durable.set ctx wfStatus "awaiting-verification"
-      let awk = Durable.awakeable<WorkflowContext, string> ctx
-      Durable.set ctx wfPendingId awk.Id
+      ctx.SetState(wfStatus, "awaiting-verification")
+      let awk = ctx.NewAwakeable<string>()
+      ctx.SetState(wfPendingId, awk.Id)
 
-      do!
-        Durable.runUnit ctx "send-verification-email"
-          (fun () -> EmailService.sendVerification request.Email awk.Id)
+      do! ctx.RunStepUnit("send-verification-email", fun () -> EmailService.sendVerification request.Email awk.Id)
 
       // Suspends here until the awakeable is resolved by an external event.
       let! _verified = awk.Value.AsTask()
 
-      Durable.set ctx wfStatus "activating"
-      do! Durable.runUnit ctx "activate-account" (fun () -> AccountService.activate accountId)
+      ctx.SetState(wfStatus, "activating")
+      do! ctx.RunStepUnit("activate-account", fun () -> AccountService.activate accountId)
 
-      Durable.set ctx wfStatus "completed"
+      ctx.SetState(wfStatus, "completed")
       return { AccountId = accountId; Verified = true }
     }
 
+  [<SharedHandler>]
   member _.GetStatus (ctx: SharedWorkflowContext) : Task<string> =
     task {
-      let! status = Durable.get ctx wfStatus
+      let! status = ctx.GetAsync(wfStatus)
       return (if isNull status then "unknown" else status)
     }
 
+  [<SharedHandler>]
   member _.GetPendingVerificationId (ctx: SharedWorkflowContext) : Task<string> =
     task {
-      let! pending = Durable.get ctx wfPendingId
+      let! pending = ctx.GetAsync(wfPendingId)
       return (if isNull pending then "" else pending)
     }
-
-// ---------------------------------------------------------------------------------------------------
-// Service definitions — the hand-built equivalent of what the C# source generator emits.
-// ---------------------------------------------------------------------------------------------------
-
-let tripBookingDefinition : ServiceDefinition =
-  Durable.service<TripBookingService> "TripBookingService" [
-    Durable.handler "Book" (fun (s: TripBookingService) (ctx: Context) (req: TripBookingRequest) -> s.Book ctx req)
-  ]
-
-let counterDefinition : ServiceDefinition =
-  Durable.virtualObject<CounterObject> "CounterObject" [
-    Durable.handler "Add" (fun (s: CounterObject) (ctx: ObjectContext) (delta: int) -> s.Add ctx delta)
-    Durable.action "AddThenFail" (fun (s: CounterObject) (ctx: ObjectContext) -> s.AddThenFail ctx)
-    Durable.action "Reset" (fun (s: CounterObject) (ctx: ObjectContext) -> s.Reset ctx)
-    Durable.sharedFunc "Get" (fun (s: CounterObject) (ctx: SharedObjectContext) -> s.Get ctx)
-    Durable.sharedFunc "GetKeys" (fun (s: CounterObject) (ctx: SharedObjectContext) -> s.GetKeys ctx)
-  ]
-
-let signupDefinition : ServiceDefinition =
-  Durable.workflow<SignupWorkflow> "SignupWorkflow" [
-    Durable.handler "Run" (fun (s: SignupWorkflow) (ctx: WorkflowContext) (req: SignupRequest) -> s.Run ctx req)
-    Durable.sharedFunc "GetStatus" (fun (s: SignupWorkflow) (ctx: SharedWorkflowContext) -> s.GetStatus ctx)
-    Durable.sharedFunc "GetPendingVerificationId"
-      (fun (s: SignupWorkflow) (ctx: SharedWorkflowContext) -> s.GetPendingVerificationId ctx)
-  ]
-
-/// Registers all three definitions under their marker types (mirrors the generated module initializer).
-let registerAll () : unit =
-  Durable.register<TripBookingService> tripBookingDefinition
-  Durable.register<CounterObject> counterDefinition
-  Durable.register<SignupWorkflow> signupDefinition

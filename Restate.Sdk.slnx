@@ -25,6 +25,8 @@
         <Project Path="src/Restate.Sdk.Testing/Restate.Sdk.Testing.csproj"/>
         <Project Path="src/Restate.Sdk.Lambda/Restate.Sdk.Lambda.csproj"/>
         <Project Path="src/Restate.Sdk.Identity/Restate.Sdk.Identity.csproj"/>
+        <Project Path="src/Restate.Sdk.FSharp/Restate.Sdk.FSharp.csproj"/>
+        <Project Path="src/Restate.Sdk.FSharp.Myriad/Restate.Sdk.FSharp.Myriad.fsproj"/>
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/Restate.Sdk.Generators.Tests/Restate.Sdk.Generators.Tests.csproj"/>

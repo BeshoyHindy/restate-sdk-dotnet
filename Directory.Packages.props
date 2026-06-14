@@ -37,5 +37,8 @@
     <PackageVersion Include="Testcontainers" Version="4.4.0" />
     <!-- F# samples (samples/FSharpServices) — deployable FSharp.Core runtime package -->
     <PackageVersion Include="FSharp.Core" Version="8.0.400" />
+    <!-- F# code generation (Restate.Sdk.FSharp.Myriad) — Roslyn-source-generator analog for F# -->
+    <PackageVersion Include="Myriad.Core" Version="0.8.3" />
+    <PackageVersion Include="Myriad.Sdk" Version="0.8.3" />
   </ItemGroup>
 </Project>

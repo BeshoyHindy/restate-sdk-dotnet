@@ -5,6 +5,10 @@
     "dotnet-reportgenerator-globaltool": {
       "version": "5.4.7",
       "commands": ["reportgenerator"]
+    },
+    "myriad": {
+      "version": "0.8.3",
+      "commands": ["myriad"]
     }
   }
 }

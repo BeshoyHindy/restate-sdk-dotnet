@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+        Restate.Sdk.FSharp — the C# runtime companion for authoring Restate services in F#.
+
+        F# cannot run the Roslyn source generator, so this library moves the awkward runtime glue
+        (ValueTask<->Task adaptation, the boxing HandlerInvoker, JSON deserialization, ServiceDefinition
+        assembly) into C#, where generics and System.Text.Json are ergonomic. F# handler bodies then call
+        the Context extension methods (ctx.RunAsync/GetAsync/SetState/...) and registration is a handful of
+        FsService.* calls — which the Restate.Sdk.FSharp.Myriad generator can emit automatically.
+    -->
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Restate.Sdk/Restate.Sdk.csproj"/>
+    </ItemGroup>
+
+</Project>

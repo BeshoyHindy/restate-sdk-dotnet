@@ -12,14 +12,14 @@
     <Import Project="../Container.props"/>
 
     <!--
-        F# authors Restate services against the SDK's public ServiceDefinition surface directly.
-        Roslyn source generators do not run for F# projects, so (unlike the C# samples) there is no
-        Restate.Sdk.Generators analyzer reference here — Services.fs builds the definitions by hand.
+        Handlers in Services.fs carry the SDK's [<Service>]/[<Handler>] attributes and call the C# Context
+        extension methods from Restate.Sdk.FSharp. Roslyn source generators do not run for F# projects, so
+        registration is produced by the Restate.Sdk.FSharp.Myriad generator into Services.Generated.fs.
     -->
     <ItemGroup>
-        <Compile Include="Restate.fs"/>
         <Compile Include="Domain.fs"/>
         <Compile Include="Services.fs"/>
+        <Compile Include="Services.Generated.fs"/>
         <Compile Include="Program.fs"/>
     </ItemGroup>
 
@@ -28,6 +28,7 @@
              compiler asset and is not copied to the output. Version is centrally managed (CPM). -->
         <PackageReference Include="FSharp.Core"/>
         <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
+        <ProjectReference Include="../../src/Restate.Sdk.FSharp/Restate.Sdk.FSharp.csproj"/>
     </ItemGroup>
 
 </Project>

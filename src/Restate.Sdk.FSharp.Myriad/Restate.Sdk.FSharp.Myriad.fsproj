@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+        Restate.Sdk.FSharp.Myriad — a Myriad code generator that emits Restate registration for F#.
+        It is the F# counterpart to Restate.Sdk.Generators (the C# Roslyn source generator): consumers
+        reference it as a Myriad plugin and a <Compile> item with a <MyriadFile> metadata pointing at the
+        handler source. See samples/FSharpServices for the wiring.
+    -->
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+        <!-- F# nullness checking is noisy against the Fantomas.FCS syntax tree; off for the generator. -->
+        <Nullable>disable</Nullable>
+        <!-- Myriad's plugin loader resolves the plugin's dependencies (FSharp.Core, Fantomas.FCS,
+             Myriad.Core) from the plugin's own output directory, so they must be copied next to it. -->
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="RestateGenerator.fs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Myriad.Core"/>
+        <!-- Match the Myriad 0.8.3 tool's FSharp.Core (6.0.x → assembly version 6.0.0.0) so the
+             Fantomas.Core/FCS 6.1.1 signatures the plugin calls line up at load time. -->
+        <PackageReference Include="FSharp.Core" VersionOverride="6.0.7"/>
+    </ItemGroup>
+
+</Project>

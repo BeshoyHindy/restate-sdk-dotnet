@@ -8,28 +8,50 @@ Three Restate services authored in **F#** on one HTTP/2 endpoint:
 | Virtual Object  | `CounterObject`      | durable per-key state, exclusive writes + shared reads          |
 | Workflow        | `SignupWorkflow`     | run-once lifecycle + an awakeable the workflow suspends on until an external event |
 
-## Why this sample is structured differently from the C# ones
+## How F# gets what the C# source generator gives C#
 
-The C# samples rely on the **Restate source generator** (`[Service]` / `[Handler]` attributes →
-generated `ServiceDefinition` registered at module-init). Roslyn source generators **do not run for F#
-projects**, so this sample reproduces what the generator emits, by hand, in `Restate.fs`:
+The C# samples rely on the **Restate Roslyn source generator** (`[Service]`/`[Handler]` attributes →
+a `ServiceDefinition` registered at module-init). Roslyn source generators **do not run for F#
+projects**, so F# is served by two companion projects that mirror that split:
 
-- a per-handler `HandlerInvoker` that casts the base `Context` to the handler's concrete context type,
-- a JSON `InputDeserializer` keyed off `JsonSerde`,
-- a DI-resolving `Factory`,
-- and `ServiceDefinitionRegistry.Register<'S>` calls (the generator's module initializer).
+| Concern | C# | F# |
+| --- | --- | --- |
+| runtime glue | (inline) | **`src/Restate.Sdk.FSharp`** — a C# helper library |
+| compile-time codegen | `src/Restate.Sdk.Generators` (Roslyn) | **`src/Restate.Sdk.FSharp.Myriad`** (Myriad) |
 
-`Restate.fs` wraps all of that in a small, type-safe DSL (`Durable.handler`, `Durable.run`,
-`Durable.get`, ...). The context helpers are generic with a `:> Context` constraint on purpose — F#
-does not implicitly upcast arguments to let-bound functions, so a helper typed on the base `Context`
-would reject a `WorkflowContext`.
+**`Restate.Sdk.FSharp`** moves the awkward runtime glue into C#, where generics and System.Text.Json
+are painless:
 
-Two project settings differ from the C# samples, both in `FSharpServices.fsproj`:
+- `DurableContextExtensions` — `ctx.RunStep`/`RunStepUnit`/`GetAsync`/`SetState`/`NewAwakeable`/… return
+  `Task` (not `ValueTask`, which F#'s `task { }` binds awkwardly) and have distinct names so F# never has
+  to disambiguate `Func<Task<T>>` from `Func<T>`. The receiver is the *base* context type, so a
+  `WorkflowContext` flows in by ordinary inheritance — side-stepping F#'s lack of implicit argument
+  upcasting. (`RunStep`, not `RunAsync`, because the SDK already has a `Context.RunAsync` returning a
+  detached future.)
+- `FsHandler.InOut/InUnit/Out/Unit` + `FsService.Service/VirtualObject/Workflow` — strongly-typed,
+  reflection-free builders that produce the exact `HandlerDefinition`/`ServiceDefinition` the C#
+  generator emits.
 
-- **no** `Restate.Sdk.Generators` analyzer reference (it would be a no-op for F#),
-- `FSharp.Core` is referenced explicitly (the SDK's in-box `FSharp.Core` is a compiler asset and is
-  not copied to the build output), and `<Nullable>disable</Nullable>` opts out of F#'s (noisy) nullness
-  checking against the C#-nullable-annotated SDK surface.
+So `Services.fs` is just attributed handler classes calling `ctx.RunStep(...)` — no binding boilerplate.
+
+**`Restate.Sdk.FSharp.Myriad`** is a [Myriad](https://github.com/MoiraeSoftware/myriad) generator (the
+idiomatic F# analog of a Roslyn source generator: AST in → F# source out). It scans the
+`[<Service>]`/`[<VirtualObject>]`/`[<Workflow>]` types and their `[<Handler>]`/`[<SharedHandler>]`
+members and emits `Services.Generated.fs` (the `FsService.*` registration). The generated file is
+checked in; regenerate it with:
+
+```sh
+deno run --allow-run --allow-env --allow-read samples/FSharpServices/regenerate.ts
+```
+
+> The Myriad 0.8.3 CLI is a net6.0 tool, so `regenerate.ts` launches it with
+> `DOTNET_ROLL_FORWARD=LatestMajor`, and the plugin pins `FSharp.Core` 6.0.x so its Fantomas 6.1.1 calls
+> line up with the tool's own copies (0.8.5+ makes this automatic via `PreferSharedTypes`).
+
+Two project settings still differ from the C# samples (`FSharpServices.fsproj`): `FSharp.Core` is
+referenced explicitly (the SDK's in-box copy is a compiler asset, not deployed), and
+`<Nullable>disable</Nullable>` opts out of F#'s noisy nullness checking against the C#-nullable SDK
+surface.
 
 ## Run it locally
 
