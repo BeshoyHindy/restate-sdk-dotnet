@@ -19,6 +19,7 @@
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>
         <Project Path="src/Restate.Sdk.Generators/Restate.Sdk.Generators.csproj"/>
         <Project Path="src/Restate.Sdk.Testing/Restate.Sdk.Testing.csproj"/>
+        <Project Path="src/Restate.Sdk.Testing.Containers/Restate.Sdk.Testing.Containers.csproj"/>
         <Project Path="src/Restate.Sdk.Lambda/Restate.Sdk.Lambda.csproj"/>
     </Folder>
     <Folder Name="/test/">
