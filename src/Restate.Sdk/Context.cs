@@ -219,7 +219,8 @@ public abstract class Context : IContext
     /// </summary>
     /// <exception cref="AggregateException">
     ///     Every future failed (or none were provided); contains each failure as an inner exception,
-    ///     in input order.
+    ///     in input order. Futures canceled by an invocation abort count as failures and surface as
+    ///     <see cref="TaskCanceledException" />.
     /// </exception>
     public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -251,6 +252,8 @@ public abstract class Context : IContext
     ///     Unlike <see cref="All{T}" />, individual failures do not throw — inspect
     ///     <see cref="SettledResult{T}.IsSuccess" /> per item
     ///     (matching the TypeScript SDK's <c>RestatePromise.allSettled</c> semantics).
+    ///     Futures canceled by an invocation abort settle as failures carrying a
+    ///     <see cref="TaskCanceledException" />.
     /// </summary>
     public virtual ValueTask<SettledResult<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
