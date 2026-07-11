@@ -485,3 +485,11 @@ $RECYCLE.BIN/
 
 # Temporary test projects
 _temp-*
+
+# docfx generated output
+docs/api/
+docs/_site/
+
+# Local tooling state
+.claude/
+.serena/
