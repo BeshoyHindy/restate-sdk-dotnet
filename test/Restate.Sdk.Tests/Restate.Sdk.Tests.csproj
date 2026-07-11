@@ -11,6 +11,10 @@
         <PackageReference Include="BouncyCastle.Cryptography"/>
         <!-- Test-only: in-memory ASP.NET Core server for endpoint-level identity tests -->
         <PackageReference Include="Microsoft.AspNetCore.TestHost"/>
+        <PackageReference Include="coverlet.collector">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
         <PackageReference Include="xunit"/>
         <PackageReference Include="xunit.runner.visualstudio">

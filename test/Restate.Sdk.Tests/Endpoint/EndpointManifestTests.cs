@@ -22,7 +22,7 @@ public class EndpointManifestTests
         Assert.Equal(2, manifest.Services.Count);
         Assert.Equal("BIDI_STREAM", manifest.ProtocolMode);
         Assert.Equal(5, manifest.MinProtocolVersion);
-        Assert.Equal(6, manifest.MaxProtocolVersion);
+        Assert.Equal(7, manifest.MaxProtocolVersion);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class EndpointManifestTests
         var manifest = EndpointManifest.FromRegistry(registry);
 
         Assert.Equal(5, manifest.MinProtocolVersion);
-        Assert.Equal(6, manifest.MaxProtocolVersion);
+        Assert.Equal(7, manifest.MaxProtocolVersion);
         Assert.True(manifest.MinProtocolVersion <= manifest.MaxProtocolVersion);
     }
 
@@ -437,9 +437,17 @@ public class EndpointManifestTests
     }
 
     [Fact]
-    public void NegotiateVersion_V4OnlyRequested_ReturnsNull()
+    public void NegotiateVersion_V4OnlyRequested_ReturnsV4()
     {
         var accept = "application/vnd.restate.endpointmanifest.v4+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v4+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_UnsupportedVersionOnlyRequested_ReturnsNull()
+    {
+        var accept = "application/vnd.restate.endpointmanifest.v5+json";
         var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
         Assert.Null(result);
     }
@@ -447,9 +455,38 @@ public class EndpointManifestTests
     [Fact]
     public void NegotiateVersion_PicksHighestMutual()
     {
-        // Runtime sends v2, v3, v4 — we support v1, v2, v3 — should pick v3
+        // Runtime sends v2, v3, v4 — we support v1..v4 — should pick v4
         var accept = "application/vnd.restate.endpointmanifest.v2+json, application/vnd.restate.endpointmanifest.v3+json, application/vnd.restate.endpointmanifest.v4+json";
         var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v4+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_V3Highest_ReturnsV3()
+    {
+        // Runtime caps at v3 — should still negotiate v3, not v4
+        var accept = "application/vnd.restate.endpointmanifest.v2+json, application/vnd.restate.endpointmanifest.v3+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
         Assert.Equal("application/vnd.restate.endpointmanifest.v3+json", result);
+    }
+
+    [Fact]
+    public void Manifest_Json_OmitsLambdaCompression_WhenNull()
+    {
+        var registry = new ServiceRegistry();
+        registry.Register(ServiceDefinitionRegistry.TryGet(typeof(GreeterService))!);
+        registry.Freeze();
+
+        var manifest = EndpointManifest.FromRegistry(registry);
+        Assert.Null(manifest.LambdaCompression);
+
+        var json = JsonSerializer.Serialize(manifest, DiscoveryJsonContext.Default.EndpointManifest);
+
+        using var doc = JsonDocument.Parse(json);
+        // Absence of lambdaCompression means "no compression" in manifest v4 —
+        // required for advertising v4 without a zstd dependency.
+        Assert.False(doc.RootElement.TryGetProperty("lambdaCompression", out _));
+        Assert.Equal(7, doc.RootElement.GetProperty("maxProtocolVersion").GetInt32());
+        Assert.Equal(5, doc.RootElement.GetProperty("minProtocolVersion").GetInt32());
     }
 }

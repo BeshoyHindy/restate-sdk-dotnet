@@ -56,13 +56,27 @@ test/
 samples/                       Working sample applications
 ```
 
+## Branching and Releases
+
+The repository uses trunk-based development (GitHub Flow):
+
+- `main` is protected; every change lands through a pull request that passes the
+  required checks (`Build & Test`, `Format Check`, CodeQL).
+- PRs are squash-merged, so the PR title becomes the commit subject. Titles must
+  follow [Conventional Commits](https://www.conventionalcommits.org/):
+  `feat:`, `fix:`, `docs:`, `perf:`, `refactor:`, `test:`, `build:`, `ci:`, `chore:`.
+  A lint check on the PR title enforces this.
+- Releases are cut by release-please: it collects merged commits into a release PR
+  that updates `CHANGELOG.md` and the version in `Directory.Build.props`; merging that
+  PR tags the release and CI publishes the packages to NuGet. See `RELEASING.md`.
+
 ## Pull Request Process
 
-1. Fork the repository and create a feature branch
+1. Fork the repository and create a feature branch from `main`
 2. Make your changes with tests
 3. Run `dotnet build && dotnet test` to verify
 4. Run `dotnet format` to fix formatting
-5. Submit a PR with a clear description of the change
+5. Submit a PR with a conventional-commit title and a clear description of the change
 
 ## Coding Standards
 

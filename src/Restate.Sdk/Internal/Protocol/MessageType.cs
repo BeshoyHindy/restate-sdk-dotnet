@@ -9,6 +9,8 @@ internal enum MessageType : ushort
     End = 0x0003,
     EntryAck = 0x0004,
     ProposeRunCompletion = 0x0005,
+    AwaitingOn = 0x0006,
+    ProposeRunCompletionAck = 0x0007,
 
     // Commands
     InputCommand = 0x0400,
