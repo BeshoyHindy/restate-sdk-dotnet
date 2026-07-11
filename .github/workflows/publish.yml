@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  # Fallback for tags created by release-please with the default GITHUB_TOKEN,
+  # which do not trigger this workflow. Dispatch on the tag ref:
+  #   gh workflow run publish.yml --ref vX.Y.Z
+  workflow_dispatch:
 
 permissions:
   contents: write

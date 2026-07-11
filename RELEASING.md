@@ -25,12 +25,10 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
 > **Note:** tags created with the default `GITHUB_TOKEN` do not trigger other
 > workflows. Configure a `RELEASE_PLEASE_TOKEN` PAT secret (contents: write,
 > pull-requests: write) so the tag triggers `publish.yml`. Without it,
-> re-push the tag from your machine after release-please creates it:
+> dispatch the publish workflow on the tag after release-please creates it:
 >
 > ```bash
-> git fetch --tags
-> git push origin :refs/tags/vX.Y.Z
-> git push origin vX.Y.Z
+> gh workflow run publish.yml --ref vX.Y.Z
 > ```
 
 ### Manual fallback
@@ -67,7 +65,8 @@ On a `v*` tag push, the `publish.yml` workflow will automatically:
    - Validate the tag version matches `Directory.Build.props`
    - Build, test, and pack
    - Verify the source generator is bundled in the package
-   - Push packages to NuGet.org (Restate.Sdk, Restate.Sdk.Testing, Restate.Sdk.Lambda)
+   - Push packages to NuGet.org (Restate.Sdk, Restate.Sdk.Testing,
+     Restate.Sdk.Lambda, Restate.Sdk.Testing.Containers)
    - Create a GitHub Release with artifacts
 
 ## Published Packages
@@ -77,6 +76,7 @@ On a `v*` tag push, the `publish.yml` workflow will automatically:
 | `Restate.Sdk` | Core SDK with bundled source generator |
 | `Restate.Sdk.Testing` | Mock contexts for unit testing |
 | `Restate.Sdk.Lambda` | AWS Lambda adapter |
+| `Restate.Sdk.Testing.Containers` | Testcontainers harness for integration tests |
 
 ## Package ID Reservation
 
