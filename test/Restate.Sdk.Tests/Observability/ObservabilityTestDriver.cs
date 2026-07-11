@@ -125,6 +125,7 @@ internal static class ObservabilityTestDriver
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new TService()),
+            ServiceProtocolVersion.V6,
             ct);
     }
 
