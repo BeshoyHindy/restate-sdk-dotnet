@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in the SDK doesn't behave as documented or expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >
+        The smallest handler/service that shows the problem, plus how you invoked it.
+        A repository link works too.
+      render: csharp
+    validations:
+      required: true
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK version
+      placeholder: e.g. 0.2.0
+    validations:
+      required: true
+  - type: input
+    id: server-version
+    attributes:
+      label: Restate server version
+      placeholder: e.g. 1.7.2
+    validations:
+      required: true
+  - type: input
+    id: dotnet-version
+    attributes:
+      label: .NET SDK version and OS
+      placeholder: e.g. 10.0.301 on macOS 15 / linux-x64 container
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: SDK/server output around the failure. Trim to the interesting part.
+      render: text

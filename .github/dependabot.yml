@@ -6,6 +6,16 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    groups:
+      nuget-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # The Roslyn reference pins the minimum compiler version consumers need;
+      # it is bumped deliberately, not chased to latest.
+      - dependency-name: "Microsoft.CodeAnalysis.CSharp"
+      - dependency-name: "Microsoft.CodeAnalysis.Analyzers"
 
   - package-ecosystem: github-actions
     directory: /
