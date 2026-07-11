@@ -9,21 +9,21 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
     <!-- Logging abstractions (Restate.Sdk core) -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
     <!-- AWS Lambda -->
     <PackageVersion Include="Amazon.Lambda.Core" Version="3.1.1" />
     <PackageVersion Include="Amazon.Lambda.APIGatewayEvents" Version="3.0.0" />
     <PackageVersion Include="Amazon.Lambda.Serialization.SystemTextJson" Version="3.0.0" />
     <!-- Protocol Buffers -->
-    <PackageVersion Include="Google.Protobuf" Version="3.35.0" />
-    <PackageVersion Include="Grpc.Tools" Version="2.81.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.35.1" />
+    <PackageVersion Include="Grpc.Tools" Version="2.82.0" />
     <!-- Benchmarks -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- Testcontainers (Restate.Sdk.Testing.Containers) -->
     <PackageVersion Include="Testcontainers" Version="4.13.0" />
     <!-- Test -->
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
