@@ -82,6 +82,20 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A service with a durable side effect — used to verify Run replay semantics: a stored
+///     completion resolves without re-executing, a missing one re-executes and re-proposes.
+/// </summary>
+[Service(Name = "RunGreeter")]
+public class RunGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Run("effect", () => Task.FromResult($"fresh-{name}"));
+    }
+}
+
+/// <summary>
 ///     A service that fans out two calls and settles them with <c>ctx.AllSettled</c> — used to
 ///     verify that input EOF suspends the invocation instead of settling the journaled calls
 ///     as fabricated failures.
@@ -593,6 +607,96 @@ public class ProtocolIntegrationTests
         var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
         Assert.Equal("\"downstream-result-done\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    private async Task<byte[]> RunReplayedRunJournalAsync(bool includeStoredCompletion)
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var knownEntries = includeStoredCompletion ? 3u : 2u;
+        var startPayload = BuildStartMessagePayload("resume-run-1", knownEntries, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.RunCommand, runCommandPayload);
+        if (includeStoredCompletion)
+        {
+            var runCompletionPayload = new Gen.RunCompletionNotificationMessage
+            {
+                CompletionId = 1,
+                Value = new Gen.Value
+                {
+                    Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("journaled-World"))
+                }
+            }.ToByteArray();
+            WriteFramedMessage(requestStream, MessageType.RunCompletion, runCompletionPayload);
+        }
+
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(RunGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new RunGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        return responseStream.ToArray();
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRunWithStoredCompletion_ResolvesWithoutReExecuting()
+    {
+        var responseData = await RunReplayedRunJournalAsync(includeStoredCompletion: true);
+        var offset = 0;
+
+        // The stored completion wins: the closure is NOT re-executed ("fresh-World" would
+        // betray re-execution) and no new proposal is written.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"journaled-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRunWithoutCompletion_ReExecutesAndProposes()
+    {
+        // The previous attempt crashed after the runtime persisted the RunCommand but before
+        // it persisted the ProposeRunCompletion. Awaiting a notification would suspend forever
+        // (only the SDK can produce it) — the closure must re-execute and propose again.
+        var responseData = await RunReplayedRunJournalAsync(includeStoredCompletion: false);
+        var offset = 0;
+
+        var (proposalHeader, proposalPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.ProposeRunCompletion, proposalHeader.Type);
+        var proposal = Gen.ProposeRunCompletionMessage.Parser.ParseFrom(proposalPayload);
+        Assert.Equal(1u, proposal.ResultCompletionId);
+        Assert.Equal("\"fresh-World\"", proposal.Value.ToStringUtf8());
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"fresh-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);

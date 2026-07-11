@@ -111,4 +111,8 @@ internal static partial class Log
     [LoggerMessage(EventId = 113, Level = LogLevel.Debug,
         Message = "[{InvocationId}] Suspending: pendingCompletions={PendingCompletions}, pendingSignals={PendingSignals}")]
     public static partial void InvocationSuspended(ILogger logger, string invocationId, int pendingCompletions, int pendingSignals);
+
+    [LoggerMessage(EventId = 114, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Side effect '{Name}' replayed without a stored completion — re-executing")]
+    public static partial void SideEffectReExecuting(ILogger logger, string name, string invocationId);
 }
