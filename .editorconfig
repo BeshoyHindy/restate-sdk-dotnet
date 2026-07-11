@@ -36,3 +36,11 @@ dotnet_diagnostic.CA1852.severity = suggestion
 
 # CA1869: Cache JsonSerializerOptions — suggestion level, fine in tests
 dotnet_diagnostic.CA1869.severity = suggestion
+
+# ── Public API surface tracking (Microsoft.CodeAnalysis.PublicApiAnalyzers) ──
+
+# RS0026/RS0027: forbid overload patterns with optional parameters. The SDK deliberately
+# pairs reflection-based overloads (optional request/delay/idempotencyKey) with AOT-safe
+# JsonTypeInfo overloads; surface changes are tracked via RS0016/RS0017 instead.
+dotnet_diagnostic.RS0026.severity = none
+dotnet_diagnostic.RS0027.severity = none

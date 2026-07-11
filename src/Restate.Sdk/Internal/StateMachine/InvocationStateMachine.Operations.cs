@@ -33,6 +33,108 @@ internal sealed partial class InvocationStateMachine
         return new InvocationHandle(invocationId);
     }
 
+    // ------- Run replay -------
+    //
+    // A replayed RunCommand does not guarantee a stored completion: the previous attempt may
+    // have crashed after the runtime persisted the command but before it persisted the
+    // ProposeRunCompletion. The runtime can never complete that id — only the SDK can, by
+    // re-executing the closure and proposing its result again. Awaiting would suspend forever.
+
+    /// <summary>
+    ///     Takes the next replayed entry as a Run command. Returns <see langword="true" /> when
+    ///     the replayed prefix stored a genuine completion for it; <see langword="false" /> when
+    ///     the closure must be re-executed and its result proposed for <paramref name="completionId" />.
+    /// </summary>
+    private bool TryTakeReplayedRunResult(out TaskCompletionSource<CompletionResult> tcs, out uint completionId)
+    {
+        var replay = TakeReplayEntry();
+        completionId = ProtobufCodec.ParseCommandCompletionId(replay.CommandType, replay.Result.Span);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
+        tcs = _completions.GetOrRegister((int)completionId);
+        return HasStoredCompletion(tcs.Task);
+    }
+
+    /// <summary>
+    ///     True when the task settled with a genuine journaled outcome — a completion result or a
+    ///     terminal failure. Pending and suspension-poisoned tasks mean no notification for this
+    ///     id was (or ever will be) delivered by the runtime.
+    /// </summary>
+    private static bool HasStoredCompletion(Task<CompletionResult> task)
+    {
+        if (task.IsCompletedSuccessfully)
+            return true;
+        if (!task.IsFaulted)
+            return false;
+
+        foreach (var inner in task.Exception!.InnerExceptions)
+        {
+            if (inner is TerminalException)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Awaits and deserializes a stored Run completion.</summary>
+    private async ValueTask<T> AwaitRunResultAsync<T>(TaskCompletionSource<CompletionResult> tcs)
+    {
+        var completion = await tcs.Task.ConfigureAwait(false);
+        completion.ThrowIfFailure();
+        return Deserialize<T>(completion.Value);
+    }
+
+    /// <summary>
+    ///     Re-executes a replayed Run closure whose proposal was lost and proposes the result for
+    ///     the replayed completion id. Mirrors the live path, except the RunCommand itself is not
+    ///     re-sent — it is already part of the journal.
+    /// </summary>
+    private async ValueTask<T> ReExecuteRunAsync<T>(string name, Func<Task<T>> action, uint completionId,
+        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct)
+    {
+        Log.SideEffectReExecuting(Logger, name, InvocationId);
+
+        var result = await action().ConfigureAwait(false);
+        var serialized = Serialize(result);
+        WriteRunProposal(completionId, serialized.Span);
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        // Resolve the registered wait locally (a no-op if EOF poisoned it meanwhile) so
+        // combinators observing this run's future see the result immediately, like the live path.
+        tcs.TrySetResult(CompletionResult.Success(CopyToPooled(serialized)));
+        Log.SideEffectExecuted(Logger, name, InvocationId);
+        return result;
+    }
+
+    /// <summary>Re-executes a replayed void Run closure (see <see cref="ReExecuteRunAsync{T}" />).</summary>
+    private async ValueTask ReExecuteRunAsync(string name, Func<Task> action, uint completionId,
+        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct)
+    {
+        Log.SideEffectReExecuting(Logger, name, InvocationId);
+
+        await action().ConfigureAwait(false);
+        WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        tcs.TrySetResult(CompletionResult.Success(ReadOnlyMemory<byte>.Empty));
+        Log.SideEffectExecuted(Logger, name, InvocationId);
+    }
+
+    /// <summary>Re-executes a replayed synchronous Run closure (see <see cref="ReExecuteRunAsync{T}" />).</summary>
+    private async ValueTask<T> ReExecuteRunSyncAsync<T>(string name, Func<T> action, uint completionId,
+        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct)
+    {
+        Log.SideEffectReExecuting(Logger, name, InvocationId);
+
+        var result = action();
+        var serialized = Serialize(result);
+        WriteRunProposal(completionId, serialized.Span);
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        tcs.TrySetResult(CompletionResult.Success(CopyToPooled(serialized)));
+        Log.SideEffectExecuted(Logger, name, InvocationId);
+        return result;
+    }
+
     // ------- Side effects -------
 
     /// <summary>Runs a synchronous side effect without closure/Task overhead.</summary>
@@ -41,7 +143,11 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return ReplayResultAsync<T>();
+        {
+            return TryTakeReplayedRunResult(out var replayTcs, out var replayId)
+                ? AwaitRunResultAsync<T>(replayTcs)
+                : ReExecuteRunSyncAsync(name, action, replayId, replayTcs, ct);
+        }
 
         var activity = StartOperationActivity("restate.run");
         activity?.SetTag("restate.run.name", name);
@@ -103,7 +209,11 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<T>().ConfigureAwait(false);
+        {
+            return TryTakeReplayedRunResult(out var replayTcs, out var replayId)
+                ? await AwaitRunResultAsync<T>(replayTcs).ConfigureAwait(false)
+                : await ReExecuteRunAsync(name, action, replayId, replayTcs, ct).ConfigureAwait(false);
+        }
 
         using var activity = StartOperationActivity("restate.run");
         activity?.SetTag("restate.run.name", name);
@@ -134,8 +244,10 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
-            _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+            if (TryTakeReplayedRunResult(out var replayTcs, out var replayId))
+                _ = await replayTcs.Task.ConfigureAwait(false);
+            else
+                await ReExecuteRunAsync(name, action, replayId, replayTcs, ct).ConfigureAwait(false);
             return;
         }
 
@@ -268,11 +380,15 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
-            var replayTcs = RegisterReplayCompletion(in replay);
-            var replayCompletion = await replayTcs.Task.ConfigureAwait(false);
-            replayCompletion.ThrowIfFailure();
-            return (replayTcs, Deserialize<T>(replayCompletion.Value));
+            if (TryTakeReplayedRunResult(out var replayTcs, out var replayId))
+            {
+                var replayCompletion = await replayTcs.Task.ConfigureAwait(false);
+                replayCompletion.ThrowIfFailure();
+                return (replayTcs, Deserialize<T>(replayCompletion.Value));
+            }
+
+            var reExecuted = await ReExecuteRunAsync(name, action, replayId, replayTcs, ct).ConfigureAwait(false);
+            return (replayTcs, reExecuted);
         }
 
         var value = await action().ConfigureAwait(false);
@@ -331,9 +447,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -404,9 +522,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -878,9 +998,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = Serialize(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -969,9 +1091,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.

@@ -43,6 +43,20 @@ internal sealed class RequestIdentityVerifier
     /// <exception cref="ArgumentException">A key is malformed, or <paramref name="keys" /> is empty.</exception>
     public static RequestIdentityVerifier FromKeys(IReadOnlyList<string> keys, TimeProvider? timeProvider = null)
     {
+        return new RequestIdentityVerifier(ParseKeys(keys), timeProvider ?? TimeProvider.System);
+    }
+
+    /// <summary>
+    ///     Parses and validates serialized identity keys. Also used by the
+    ///     <c>WithIdentityKeys</c> configuration surfaces to validate keys eagerly, so malformed
+    ///     keys fail at the configuring call site instead of later inside <c>Build</c>/<c>AddRestate</c>.
+    /// </summary>
+    /// <param name="keys">The serialized identity keys; at least one is required.</param>
+    /// <returns>The parsed keys.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">A key is malformed, or <paramref name="keys" /> is empty.</exception>
+    internal static IdentityPublicKey[] ParseKeys(IReadOnlyList<string> keys)
+    {
         ArgumentNullException.ThrowIfNull(keys);
         if (keys.Count == 0)
         {
@@ -77,7 +91,7 @@ internal sealed class RequestIdentityVerifier
             parsed[i] = new IdentityPublicKey(Encoding.UTF8.GetBytes(key), publicKey);
         }
 
-        return new RequestIdentityVerifier(parsed, timeProvider ?? TimeProvider.System);
+        return parsed;
     }
 
     /// <summary>
@@ -101,8 +115,9 @@ internal sealed class RequestIdentityVerifier
             return false;
         }
 
-        int byteCount = Encoding.UTF8.GetByteCount(token);
-        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        // Rent by the worst-case size instead of pre-scanning the token: GetByteCount would
+        // walk the (up to 8 KB) string once just to size the rent, then GetBytes walks it again.
+        byte[] rented = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(token.Length));
         try
         {
             int written = Encoding.UTF8.GetBytes(token, rented);

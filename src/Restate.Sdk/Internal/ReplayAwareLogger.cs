@@ -1,5 +1,6 @@
 using System.Collections;
 using Microsoft.Extensions.Logging;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Internal;
 
@@ -7,17 +8,18 @@ namespace Restate.Sdk.Internal;
 ///     Wraps an <see cref="ILogger" /> and suppresses output while the invocation is replaying
 ///     journal entries — the same discipline as <see cref="DurableConsole" />. This prevents
 ///     duplicate log lines when a handler is re-executed to rebuild its state after a restart.
-///     Checks the live replay state on each call so output resumes once replay completes.
+///     Reads the state machine's live replay state on each call (a field read, no delegate
+///     indirection) so output resumes once replay completes.
 /// </summary>
 internal sealed class ReplayAwareLogger : ILogger
 {
     private readonly ILogger _inner;
-    private readonly Func<bool> _isReplaying;
+    private readonly InvocationStateMachine _stateMachine;
 
-    public ReplayAwareLogger(ILogger inner, Func<bool> isReplaying)
+    public ReplayAwareLogger(ILogger inner, InvocationStateMachine stateMachine)
     {
         _inner = inner;
-        _isReplaying = isReplaying;
+        _stateMachine = stateMachine;
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
@@ -27,7 +29,7 @@ internal sealed class ReplayAwareLogger : ILogger
 
     public bool IsEnabled(LogLevel logLevel)
     {
-        return !_isReplaying() && _inner.IsEnabled(logLevel);
+        return !_stateMachine.IsReplaying && _inner.IsEnabled(logLevel);
     }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,

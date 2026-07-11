@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Restate.Sdk;
 
@@ -15,8 +16,10 @@ public interface IContext
     /// <summary>
     ///     Logger scoped to the current invocation. Output is suppressed while the invocation
     ///     replays journal entries, so re-executed handler code does not log duplicate lines.
+    ///     Defaults to <see cref="NullLogger.Instance" /> so external <see cref="IContext" />
+    ///     implementations keep compiling — mirroring <see cref="Context.Logger" />.
     /// </summary>
-    ILogger Logger { get; }
+    ILogger Logger => NullLogger.Instance;
 
     /// <summary>Request headers from the original invocation.</summary>
     IReadOnlyDictionary<string, string> Headers { get; }

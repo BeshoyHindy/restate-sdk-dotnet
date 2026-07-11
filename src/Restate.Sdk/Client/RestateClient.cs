@@ -28,15 +28,21 @@ public sealed class RestateClient : IDisposable
     ///     Creates a new Restate ingress client pointing at the given base URL.
     /// </summary>
     /// <param name="baseUrl">The Restate ingress URL (e.g., "http://localhost:8080").</param>
-    public RestateClient(string baseUrl) : this(new Uri(baseUrl))
+    /// <exception cref="ArgumentNullException"><paramref name="baseUrl" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="baseUrl" /> is empty.</exception>
+    /// <exception cref="UriFormatException"><paramref name="baseUrl" /> is not a valid URI.</exception>
+    public RestateClient(string baseUrl) : this(CreateBaseUri(baseUrl))
     {
     }
 
     /// <summary>
     ///     Creates a new Restate ingress client pointing at the given base URL.
     /// </summary>
+    /// <param name="baseUrl">The Restate ingress URI (e.g., <c>http://localhost:8080</c>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="baseUrl" /> is <see langword="null" />.</exception>
     public RestateClient(Uri baseUrl)
     {
+        ArgumentNullException.ThrowIfNull(baseUrl);
         _http = new HttpClient { BaseAddress = baseUrl };
         _ownsClient = true;
     }
@@ -45,10 +51,19 @@ public sealed class RestateClient : IDisposable
     ///     Creates a new Restate ingress client using an existing <see cref="HttpClient" />.
     ///     The caller retains ownership of the HttpClient.
     /// </summary>
+    /// <param name="httpClient">The HTTP client to use; its <see cref="HttpClient.BaseAddress" /> must point at the ingress.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="httpClient" /> is <see langword="null" />.</exception>
     public RestateClient(HttpClient httpClient)
     {
+        ArgumentNullException.ThrowIfNull(httpClient);
         _http = httpClient;
         _ownsClient = false;
+    }
+
+    private static Uri CreateBaseUri(string baseUrl)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(baseUrl);
+        return new Uri(baseUrl);
     }
 
     /// <inheritdoc />
@@ -103,10 +118,13 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Attaches to a running invocation by ID and awaits its result.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="invocationId" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public async Task<TResponse> Attach<TResponse>(string invocationId, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
@@ -116,10 +134,14 @@ public sealed class RestateClient : IDisposable
     ///     Attaches to a running invocation by ID and awaits its result.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="invocationId" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     public async Task<TResponse> Attach<TResponse>(string invocationId, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -129,10 +151,13 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Gets the output of a completed invocation, or throws if not yet available.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="invocationId" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public async Task<TResponse> GetOutput<TResponse>(string invocationId, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
@@ -142,10 +167,14 @@ public sealed class RestateClient : IDisposable
     ///     Gets the output of a completed invocation, or throws if not yet available.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="invocationId" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     public async Task<TResponse> GetOutput<TResponse>(string invocationId, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -155,8 +184,11 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Cancels a running invocation by ID.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="invocationId" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     public async Task Cancel(string invocationId, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
         var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }

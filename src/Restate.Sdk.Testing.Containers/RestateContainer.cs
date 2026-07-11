@@ -73,6 +73,9 @@ public sealed class RestateContainer : DockerContainer
     /// </remarks>
     /// <param name="hostPort">The test-host port the SDK endpoint is listening on.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    ///     <paramref name="hostPort" /> is not a valid TCP port (1-65535).
+    /// </exception>
     /// <exception cref="TimeoutException">The deployment was not registered within two minutes.</exception>
     public async Task RegisterDeploymentAsync(int hostPort, CancellationToken ct = default)
     {

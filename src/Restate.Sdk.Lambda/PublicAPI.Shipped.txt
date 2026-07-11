@@ -1,0 +1,9 @@
+#nullable enable
+Restate.Sdk.RestateLambdaHandler
+Restate.Sdk.RestateLambdaHandler.Bind<TService>() -> void
+Restate.Sdk.RestateLambdaHandler.ConfigureTelemetry(System.Action<Restate.Sdk.RestateTelemetryOptions!>! configure) -> void
+Restate.Sdk.RestateLambdaHandler.FunctionHandler(Amazon.Lambda.APIGatewayEvents.APIGatewayProxyRequest! request, Amazon.Lambda.Core.ILambdaContext! context) -> System.Threading.Tasks.Task<Amazon.Lambda.APIGatewayEvents.APIGatewayProxyResponse!>!
+Restate.Sdk.RestateLambdaHandler.RestateLambdaHandler() -> void
+Restate.Sdk.RestateLambdaHandler.UseLoggerFactory(Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory) -> void
+Restate.Sdk.RestateLambdaHandler.WithIdentityKeys(params string![]! keys) -> void
+abstract Restate.Sdk.RestateLambdaHandler.Register() -> void
