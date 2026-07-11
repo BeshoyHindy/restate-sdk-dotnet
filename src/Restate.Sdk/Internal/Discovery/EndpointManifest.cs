@@ -21,7 +21,13 @@ internal sealed class EndpointManifest
     public int MinProtocolVersion { get; init; } = 5;
 
     [JsonPropertyName("maxProtocolVersion")]
-    public int MaxProtocolVersion { get; init; } = 6;
+    public int MaxProtocolVersion { get; init; } = 7;
+
+    // Optional in manifest v4. Null → omitted from JSON, meaning the endpoint does not
+    // support compressed Lambda payloads (zstd support is deferred — no new dependency).
+    [JsonPropertyName("lambdaCompression")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LambdaCompression { get; init; }
 
     [JsonPropertyName("services")] public required IReadOnlyList<ServiceManifest> Services { get; init; }
 

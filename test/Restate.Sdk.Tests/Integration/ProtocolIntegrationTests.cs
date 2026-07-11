@@ -131,6 +131,7 @@ public class ProtocolIntegrationTests
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
             CancellationToken.None);
 
         var responseData = responseStream.ToArray();
@@ -178,6 +179,7 @@ public class ProtocolIntegrationTests
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
             CancellationToken.None);
 
         var responseData = responseStream.ToArray();
@@ -215,6 +217,7 @@ public class ProtocolIntegrationTests
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
             CancellationToken.None);
 
         var responseData = responseStream.ToArray();
@@ -256,6 +259,7 @@ public class ProtocolIntegrationTests
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new FailingService()),
+            ServiceProtocolVersion.V6,
             CancellationToken.None);
 
         var responseData = responseStream.ToArray();

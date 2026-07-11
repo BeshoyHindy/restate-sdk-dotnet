@@ -45,15 +45,23 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private List<byte[]>? _rentedBuffers;
 
     public InvocationStateMachine(ProtocolReader reader, ProtocolWriter writer,
-        JsonSerializerOptions? jsonOptions = null, ILogger? logger = null)
+        JsonSerializerOptions? jsonOptions = null, ILogger? logger = null,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
     {
         _reader = reader;
         _writer = writer;
         JsonOptions = jsonOptions ?? JsonSerde.SerializerOptions;
         Logger = logger ?? NullLogger.Instance;
+        NegotiatedVersion = negotiatedVersion;
     }
 
     public InvocationState State { get; private set; } = InvocationState.WaitingStart;
+
+    /// <summary>
+    ///     The service protocol version negotiated from the request content type.
+    ///     Determines version-dependent wire encodings (e.g. the SuspensionMessage shape).
+    /// </summary>
+    public ServiceProtocolVersion NegotiatedVersion { get; }
 
     public string InvocationId { get; private set; } = "";
 

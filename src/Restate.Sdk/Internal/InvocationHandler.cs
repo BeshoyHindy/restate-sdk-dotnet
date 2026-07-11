@@ -27,6 +27,7 @@ internal sealed class InvocationHandler
         ServiceDefinition service,
         HandlerDefinition handler,
         IServiceProvider serviceProvider,
+        ServiceProtocolVersion protocolVersion,
         CancellationToken ct)
     {
         var logger = _loggerFactory.CreateLogger("Restate.Invocation");
@@ -34,7 +35,7 @@ internal sealed class InvocationHandler
         using var reader = new ProtocolReader(requestBodyReader);
         using var writer = new ProtocolWriter(responseBodyWriter);
 
-        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger);
+        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger, protocolVersion);
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;
         Activity? activity = null;
