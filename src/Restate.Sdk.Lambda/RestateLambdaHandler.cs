@@ -119,18 +119,21 @@ public abstract class RestateLambdaHandler
     /// <summary>
     ///     Looks up a header case-insensitively (API Gateway header casing varies), checking both
     ///     the single-value and multi-value maps. Repeated values are ambiguous and yield <see langword="null" />.
+    ///     <see cref="APIGatewayProxyRequest.MultiValueHeaders" /> is consulted first: API Gateway
+    ///     REST APIs populate both maps, and <see cref="APIGatewayProxyRequest.Headers" /> keeps only
+    ///     the last value of a repeated header, which would mask the ambiguity.
     /// </summary>
     private static string? GetHeader(APIGatewayProxyRequest request, string name)
     {
-        if (request.Headers is not null)
-            foreach (var header in request.Headers)
-                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
-                    return header.Value;
-
         if (request.MultiValueHeaders is not null)
             foreach (var header in request.MultiValueHeaders)
                 if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
                     return header.Value is [var single] ? single : null;
+
+        if (request.Headers is not null)
+            foreach (var header in request.Headers)
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return header.Value;
 
         return null;
     }

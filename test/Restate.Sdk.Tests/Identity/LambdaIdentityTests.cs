@@ -130,6 +130,34 @@ public class LambdaIdentityTests
     }
 
     [Fact]
+    public async Task Discover_KeysConfigured_RepeatedHeaderAcrossBothMaps_Rejected()
+    {
+        // API Gateway REST APIs populate BOTH maps: Headers keeps only the last value of a
+        // repeated header while MultiValueHeaders keeps all of them. A repeated identity
+        // header must stay ambiguous (rejected) even when Headers offers a single value.
+        var handler = new SecuredHandler();
+        string token = CreateToken("/discover");
+        var request = new APIGatewayProxyRequest
+        {
+            Path = "/discover",
+            Headers = new Dictionary<string, string>
+            {
+                ["x-restate-signature-scheme"] = "v1",
+                ["x-restate-jwt-v1"] = token,
+            },
+            MultiValueHeaders = new Dictionary<string, IList<string>>
+            {
+                ["x-restate-signature-scheme"] = ["unsigned", "v1"],
+                ["x-restate-jwt-v1"] = [token],
+            },
+        };
+
+        var response = await handler.FunctionHandler(request, new FakeLambdaContext());
+
+        Assert.Equal(401, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Invoke_KeysConfigured_UnsignedRejectedBeforeRouting()
     {
         var handler = new SecuredHandler();
