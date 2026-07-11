@@ -19,6 +19,8 @@
     <PackageVersion Include="Grpc.Tools" Version="2.82.0" />
     <!-- Benchmarks -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- Testcontainers (Restate.Sdk.Testing.Containers) -->
+    <PackageVersion Include="Testcontainers" Version="4.13.0" />
     <!-- Test -->
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />

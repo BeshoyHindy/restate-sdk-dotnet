@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>Restate.Sdk.Testing.Containers</RootNamespace>
+        <AssemblyName>Restate.Sdk.Testing.Containers</AssemblyName>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <IsPackable>true</IsPackable>
+        <Description>Testcontainers integration for the Restate .NET SDK. Spins up a real Restate server in Docker, registers your SDK endpoint against it, and hands you an ingress client — for one-call integration testing via RestateTestHarness or the RestateBuilder container module.</Description>
+        <PackageTags>$(PackageTags);testing;testcontainers;integration-testing;docker</PackageTags>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="../../README.md" Pack="true" PackagePath="/"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Testcontainers"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Restate.Sdk/Restate.Sdk.csproj"/>
+    </ItemGroup>
+
+</Project>
