@@ -447,9 +447,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -520,9 +522,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -994,9 +998,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = Serialize(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -1085,9 +1091,11 @@ internal sealed partial class InvocationStateMachine
 
         var requestBytes = SerializeObject(request);
 
-        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
+        // registered: the live notification is stored as an early result by TryComplete, and a
+        // pending registration would otherwise be poisoned on EOF and advertised in the
+        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
         var invocationIdNotificationIdx = NextCompletionId();
-        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.

@@ -82,6 +82,20 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A service that makes a single request/response call — used to verify that the ignored
+///     invocation-id notification slot is not advertised in the SuspensionMessage.
+/// </summary>
+[Service(Name = "CallGreeter")]
+public class CallGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Call<string>("Downstream", "Get", name);
+    }
+}
+
+/// <summary>
 ///     A service with a durable side effect — used to verify Run replay semantics: a stored
 ///     completion resolves without re-executing, a missing one re-executes and re-proposes.
 /// </summary>
@@ -1026,6 +1040,33 @@ public class ProtocolIntegrationTests
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
         // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
         Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringCall_SuspendsOnResultIdOnly()
+    {
+        var responseData = await RunUntilInputClosedAsync<CallGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new CallGreeterService());
+
+        var offset = 0;
+
+        var (callHeader, callPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callHeader.Type);
+        var callMsg = Gen.CallCommandMessage.Parser.ParseFrom(callPayload);
+        Assert.Equal(1u, callMsg.InvocationIdNotificationIdx);
+        Assert.Equal(2u, callMsg.ResultCompletionId);
+
+        // Only the awaited result id may be advertised. Including the never-awaited
+        // invocation-id slot (1) would let the runtime complete it immediately, causing a
+        // spurious instant resume of every suspended call.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Equal(new uint[] { 2 }, suspension.AwaitingOn.WaitingCompletions);
+        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }
