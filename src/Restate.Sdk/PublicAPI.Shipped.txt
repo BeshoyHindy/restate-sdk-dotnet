@@ -1,0 +1,427 @@
+#nullable enable
+Restate.Sdk.Awakeable<T>
+Restate.Sdk.Awakeable<T>.Awakeable() -> void
+Restate.Sdk.Awakeable<T>.Equals(Restate.Sdk.Awakeable<T> other) -> bool
+Restate.Sdk.Awakeable<T>.Id.get -> string!
+Restate.Sdk.Awakeable<T>.Id.init -> void
+Restate.Sdk.Awakeable<T>.Value.get -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.Awakeable<T>.Value.init -> void
+Restate.Sdk.CallOptions
+Restate.Sdk.CallOptions.CallOptions() -> void
+Restate.Sdk.CallOptions.Equals(Restate.Sdk.CallOptions other) -> bool
+Restate.Sdk.CallOptions.IdempotencyKey.get -> string?
+Restate.Sdk.CallOptions.IdempotencyKey.init -> void
+Restate.Sdk.Client.RestateClient
+Restate.Sdk.Client.RestateClient.Attach<TResponse>(string! invocationId, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.RestateClient.Attach<TResponse>(string! invocationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.RestateClient.Cancel(string! invocationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Restate.Sdk.Client.RestateClient.Dispose() -> void
+Restate.Sdk.Client.RestateClient.GetOutput<TResponse>(string! invocationId, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.RestateClient.GetOutput<TResponse>(string! invocationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.RestateClient.RestateClient(System.Net.Http.HttpClient! httpClient) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(System.Uri! baseUrl) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(string! baseUrl) -> void
+Restate.Sdk.Client.RestateClient.Service(string! serviceName) -> Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.RestateClient.VirtualObject(string! serviceName, string! key) -> Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.RestateClient.Workflow(string! serviceName, string! key) -> Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.ServiceHandle.Call<TRequest, TResponse>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, object? request = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.ServiceHandle.Equals(Restate.Sdk.Client.ServiceHandle other) -> bool
+Restate.Sdk.Client.ServiceHandle.Send(string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+Restate.Sdk.Client.ServiceHandle.Send<TRequest>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, System.TimeSpan? delay = null, string? idempotencyKey = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+Restate.Sdk.Client.ServiceHandle.ServiceHandle() -> void
+Restate.Sdk.ClientFactory
+Restate.Sdk.Context
+Restate.Sdk.Context.Context() -> void
+Restate.Sdk.DurableConsole
+Restate.Sdk.DurableConsole.Log(ref Restate.Sdk.ReplayAwareInterpolatedStringHandler handler) -> void
+Restate.Sdk.DurableConsole.Log(string! message) -> void
+Restate.Sdk.DurableRandom
+Restate.Sdk.DurableRandom.Next() -> int
+Restate.Sdk.DurableRandom.Next(int maxExclusive) -> int
+Restate.Sdk.DurableRandom.Next(int minInclusive, int maxExclusive) -> int
+Restate.Sdk.DurableRandom.NextDouble() -> double
+Restate.Sdk.DurableRandom.NextGuid() -> System.Guid
+Restate.Sdk.Endpoint.HandlerDefinition
+Restate.Sdk.Endpoint.HandlerDefinition.AbortTimeoutMs.get -> long?
+Restate.Sdk.Endpoint.HandlerDefinition.AbortTimeoutMs.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.ContentType.get -> string!
+Restate.Sdk.Endpoint.HandlerDefinition.ContentType.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.Documentation.get -> string?
+Restate.Sdk.Endpoint.HandlerDefinition.Documentation.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.HandlerDefinition() -> void
+Restate.Sdk.Endpoint.HandlerDefinition.HasInput.get -> bool
+Restate.Sdk.Endpoint.HandlerDefinition.HasInput.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.HasOutput.get -> bool
+Restate.Sdk.Endpoint.HandlerDefinition.HasOutput.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.IdempotencyRetentionMs.get -> long?
+Restate.Sdk.Endpoint.HandlerDefinition.IdempotencyRetentionMs.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.InactivityTimeoutMs.get -> long?
+Restate.Sdk.Endpoint.HandlerDefinition.InactivityTimeoutMs.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.IngressPrivate.get -> bool
+Restate.Sdk.Endpoint.HandlerDefinition.IngressPrivate.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.InputDeserializer.get -> System.Func<System.Buffers.ReadOnlySequence<byte>, object?>?
+Restate.Sdk.Endpoint.HandlerDefinition.InputDeserializer.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.Invoker.get -> Restate.Sdk.Endpoint.HandlerInvoker!
+Restate.Sdk.Endpoint.HandlerDefinition.Invoker.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.IsShared.get -> bool
+Restate.Sdk.Endpoint.HandlerDefinition.IsShared.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.JournalRetentionMs.get -> long?
+Restate.Sdk.Endpoint.HandlerDefinition.JournalRetentionMs.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.Metadata.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
+Restate.Sdk.Endpoint.HandlerDefinition.Metadata.init -> void
+Restate.Sdk.Endpoint.HandlerDefinition.Name.get -> string!
+Restate.Sdk.Endpoint.HandlerDefinition.Name.init -> void
+Restate.Sdk.Endpoint.HandlerInvoker
+Restate.Sdk.Endpoint.ServiceDefinition
+Restate.Sdk.Endpoint.ServiceDefinition.Factory.get -> System.Func<System.IServiceProvider!, object!>!
+Restate.Sdk.Endpoint.ServiceDefinition.Factory.init -> void
+Restate.Sdk.Endpoint.ServiceDefinition.Handlers.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Endpoint.HandlerDefinition!>!
+Restate.Sdk.Endpoint.ServiceDefinition.Handlers.init -> void
+Restate.Sdk.Endpoint.ServiceDefinition.Name.get -> string!
+Restate.Sdk.Endpoint.ServiceDefinition.Name.init -> void
+Restate.Sdk.Endpoint.ServiceDefinition.ServiceDefinition() -> void
+Restate.Sdk.Endpoint.ServiceDefinition.Type.get -> Restate.Sdk.Endpoint.ServiceType
+Restate.Sdk.Endpoint.ServiceDefinition.Type.init -> void
+Restate.Sdk.Endpoint.ServiceDefinition.WorkflowRetentionMs.get -> long?
+Restate.Sdk.Endpoint.ServiceDefinition.WorkflowRetentionMs.init -> void
+Restate.Sdk.Endpoint.ServiceDefinitionRegistry
+Restate.Sdk.Endpoint.ServiceType
+Restate.Sdk.Endpoint.ServiceType.Service = 0 -> Restate.Sdk.Endpoint.ServiceType
+Restate.Sdk.Endpoint.ServiceType.VirtualObject = 1 -> Restate.Sdk.Endpoint.ServiceType
+Restate.Sdk.Endpoint.ServiceType.Workflow = 2 -> Restate.Sdk.Endpoint.ServiceType
+Restate.Sdk.HandlerAttribute
+Restate.Sdk.HandlerAttribute.HandlerAttribute() -> void
+Restate.Sdk.HandlerAttributeBase
+Restate.Sdk.HandlerAttributeBase.AbortTimeout.get -> string?
+Restate.Sdk.HandlerAttributeBase.AbortTimeout.set -> void
+Restate.Sdk.HandlerAttributeBase.HandlerAttributeBase() -> void
+Restate.Sdk.HandlerAttributeBase.IdempotencyRetention.get -> string?
+Restate.Sdk.HandlerAttributeBase.IdempotencyRetention.set -> void
+Restate.Sdk.HandlerAttributeBase.InactivityTimeout.get -> string?
+Restate.Sdk.HandlerAttributeBase.InactivityTimeout.set -> void
+Restate.Sdk.HandlerAttributeBase.IngressPrivate.get -> bool
+Restate.Sdk.HandlerAttributeBase.IngressPrivate.set -> void
+Restate.Sdk.HandlerAttributeBase.JournalRetention.get -> string?
+Restate.Sdk.HandlerAttributeBase.JournalRetention.set -> void
+Restate.Sdk.HandlerAttributeBase.Name.get -> string?
+Restate.Sdk.HandlerAttributeBase.Name.set -> void
+Restate.Sdk.Hosting.RestateEndpointRouteBuilderExtensions
+Restate.Sdk.Hosting.RestateHost
+Restate.Sdk.Hosting.RestateHostBuilder
+Restate.Sdk.Hosting.RestateHostBuilder.AddService<TService>() -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.AddVirtualObject<TService>() -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.AddWorkflow<TService>() -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.Bind<TService>() -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.Build() -> Microsoft.AspNetCore.Builder.WebApplication!
+Restate.Sdk.Hosting.RestateHostBuilder.BuildAot(System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection!>! configureServices) -> Microsoft.AspNetCore.Builder.WebApplication!
+Restate.Sdk.Hosting.RestateHostBuilder.ConfigureTelemetry(System.Action<Restate.Sdk.RestateTelemetryOptions!>! configure) -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.WithIdentityKeys(params string![]! keys) -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateHostBuilder.WithPort(int port) -> Restate.Sdk.Hosting.RestateHostBuilder!
+Restate.Sdk.Hosting.RestateOptions
+Restate.Sdk.Hosting.RestateOptions.AddService<TService>() -> Restate.Sdk.Hosting.RestateOptions!
+Restate.Sdk.Hosting.RestateOptions.AddVirtualObject<TService>() -> Restate.Sdk.Hosting.RestateOptions!
+Restate.Sdk.Hosting.RestateOptions.AddWorkflow<TService>() -> Restate.Sdk.Hosting.RestateOptions!
+Restate.Sdk.Hosting.RestateOptions.Bind<TService>() -> Restate.Sdk.Hosting.RestateOptions!
+Restate.Sdk.Hosting.RestateOptions.RestateOptions() -> void
+Restate.Sdk.Hosting.RestateOptions.Telemetry.get -> Restate.Sdk.RestateTelemetryOptions!
+Restate.Sdk.Hosting.RestateOptions.WithIdentityKeys(params string![]! keys) -> Restate.Sdk.Hosting.RestateOptions!
+Restate.Sdk.Hosting.RestateServiceCollectionExtensions
+Restate.Sdk.IContext
+Restate.Sdk.IContext.Aborted.get -> System.Threading.CancellationToken
+Restate.Sdk.IContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
+Restate.Sdk.IContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+Restate.Sdk.IContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
+Restate.Sdk.IContext.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+Restate.Sdk.IContext.InvocationId.get -> string!
+Restate.Sdk.IContext.Logger.get -> Microsoft.Extensions.Logging.ILogger!
+Restate.Sdk.IContext.Now() -> System.Threading.Tasks.ValueTask<System.DateTimeOffset>
+Restate.Sdk.IContext.RejectAwakeable(string! id, string! reason) -> void
+Restate.Sdk.IContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+Restate.Sdk.IContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.Run<T>(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.Run<T>(string! name, System.Func<T>! action) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
+Restate.Sdk.IContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
+Restate.Sdk.IDurableFuture
+Restate.Sdk.IDurableFuture.GetResult() -> System.Threading.Tasks.ValueTask<object?>
+Restate.Sdk.IDurableFuture<T>
+Restate.Sdk.IDurableFuture<T>.GetResult() -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.IDurableFuture<T>.InvocationId.get -> string?
+Restate.Sdk.IObjectContext
+Restate.Sdk.IObjectContext.Clear(string! key) -> void
+Restate.Sdk.IObjectContext.ClearAll() -> void
+Restate.Sdk.IObjectContext.Set<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+Restate.Sdk.IRunContext
+Restate.Sdk.IRunContext.CancellationToken.get -> System.Threading.CancellationToken
+Restate.Sdk.IRunContext.Logger.get -> Microsoft.Extensions.Logging.ILogger!
+Restate.Sdk.ISerde<T>
+Restate.Sdk.ISerde<T>.ContentType.get -> string!
+Restate.Sdk.ISerde<T>.Deserialize(System.Buffers.ReadOnlySequence<byte> data) -> T
+Restate.Sdk.ISerde<T>.Serialize(System.Buffers.IBufferWriter<byte>! writer, T value) -> void
+Restate.Sdk.ISharedObjectContext
+Restate.Sdk.ISharedObjectContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+Restate.Sdk.ISharedObjectContext.Key.get -> string!
+Restate.Sdk.ISharedObjectContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+Restate.Sdk.ISharedWorkflowContext
+Restate.Sdk.ISharedWorkflowContext.PeekPromise<T>(string! name) -> System.Threading.Tasks.ValueTask<T?>
+Restate.Sdk.ISharedWorkflowContext.RejectPromise(string! name, string! reason) -> void
+Restate.Sdk.ISharedWorkflowContext.ResolvePromise<T>(string! name, T payload) -> void
+Restate.Sdk.IWorkflowContext
+Restate.Sdk.IWorkflowContext.Promise<T>(string! name) -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.InvocationHandle
+Restate.Sdk.InvocationHandle.Deconstruct(out string! InvocationId) -> void
+Restate.Sdk.InvocationHandle.Equals(Restate.Sdk.InvocationHandle other) -> bool
+Restate.Sdk.InvocationHandle.InvocationHandle() -> void
+Restate.Sdk.InvocationHandle.InvocationHandle(string! InvocationId) -> void
+Restate.Sdk.InvocationHandle.InvocationId.get -> string!
+Restate.Sdk.InvocationHandle.InvocationId.init -> void
+Restate.Sdk.JsonSerde
+Restate.Sdk.ObjectContext
+Restate.Sdk.ObjectContext.ObjectContext() -> void
+Restate.Sdk.ReplayAwareInterpolatedStringHandler
+Restate.Sdk.ReplayAwareInterpolatedStringHandler.AppendFormatted<T>(T value) -> void
+Restate.Sdk.ReplayAwareInterpolatedStringHandler.AppendFormatted<T>(T value, string? format) -> void
+Restate.Sdk.ReplayAwareInterpolatedStringHandler.AppendLiteral(string! value) -> void
+Restate.Sdk.ReplayAwareInterpolatedStringHandler.ReplayAwareInterpolatedStringHandler() -> void
+Restate.Sdk.ReplayAwareInterpolatedStringHandler.ReplayAwareInterpolatedStringHandler(int literalLength, int formattedCount, Restate.Sdk.DurableConsole! console, out bool handlerIsValid) -> void
+Restate.Sdk.RestateTelemetryOptions
+Restate.Sdk.RestateTelemetryOptions.EnableOperationActivities.get -> bool
+Restate.Sdk.RestateTelemetryOptions.EnableOperationActivities.set -> void
+Restate.Sdk.RestateTelemetryOptions.RestateTelemetryOptions() -> void
+Restate.Sdk.RetryPolicy
+Restate.Sdk.RetryPolicy.<Clone>$() -> Restate.Sdk.RetryPolicy!
+Restate.Sdk.RetryPolicy.Equals(Restate.Sdk.RetryPolicy? other) -> bool
+Restate.Sdk.RetryPolicy.ExponentiationFactor.get -> double
+Restate.Sdk.RetryPolicy.ExponentiationFactor.init -> void
+Restate.Sdk.RetryPolicy.InitialDelay.get -> System.TimeSpan
+Restate.Sdk.RetryPolicy.InitialDelay.init -> void
+Restate.Sdk.RetryPolicy.MaxAttempts.get -> int?
+Restate.Sdk.RetryPolicy.MaxAttempts.init -> void
+Restate.Sdk.RetryPolicy.MaxDelay.get -> System.TimeSpan
+Restate.Sdk.RetryPolicy.MaxDelay.init -> void
+Restate.Sdk.RetryPolicy.MaxDuration.get -> System.TimeSpan?
+Restate.Sdk.RetryPolicy.MaxDuration.init -> void
+Restate.Sdk.RetryPolicy.RetryPolicy() -> void
+Restate.Sdk.SendOptions
+Restate.Sdk.SendOptions.Delay.get -> System.TimeSpan?
+Restate.Sdk.SendOptions.Delay.init -> void
+Restate.Sdk.SendOptions.Equals(Restate.Sdk.SendOptions other) -> bool
+Restate.Sdk.SendOptions.IdempotencyKey.get -> string?
+Restate.Sdk.SendOptions.IdempotencyKey.init -> void
+Restate.Sdk.SendOptions.SendOptions() -> void
+Restate.Sdk.ServiceAttribute
+Restate.Sdk.ServiceAttribute.Name.get -> string?
+Restate.Sdk.ServiceAttribute.Name.set -> void
+Restate.Sdk.ServiceAttribute.ServiceAttribute() -> void
+Restate.Sdk.SettledResult<T>
+Restate.Sdk.SettledResult<T>.Equals(Restate.Sdk.SettledResult<T> other) -> bool
+Restate.Sdk.SettledResult<T>.Error.get -> System.Exception?
+Restate.Sdk.SettledResult<T>.IsSuccess.get -> bool
+Restate.Sdk.SettledResult<T>.SettledResult() -> void
+Restate.Sdk.SettledResult<T>.Value.get -> T?
+Restate.Sdk.SharedHandlerAttribute
+Restate.Sdk.SharedHandlerAttribute.SharedHandlerAttribute() -> void
+Restate.Sdk.SharedObjectContext
+Restate.Sdk.SharedObjectContext.SharedObjectContext() -> void
+Restate.Sdk.SharedWorkflowContext
+Restate.Sdk.SharedWorkflowContext.SharedWorkflowContext() -> void
+Restate.Sdk.StateKey<T>
+Restate.Sdk.StateKey<T>.Deconstruct(out string! Name) -> void
+Restate.Sdk.StateKey<T>.Equals(Restate.Sdk.StateKey<T> other) -> bool
+Restate.Sdk.StateKey<T>.Name.get -> string!
+Restate.Sdk.StateKey<T>.Name.init -> void
+Restate.Sdk.StateKey<T>.StateKey() -> void
+Restate.Sdk.StateKey<T>.StateKey(string! Name) -> void
+Restate.Sdk.TerminalException
+Restate.Sdk.TerminalException.Code.get -> ushort
+Restate.Sdk.TerminalException.TerminalException(string! message, System.Exception! innerException, ushort code = 500) -> void
+Restate.Sdk.TerminalException.TerminalException(string! message, ushort code = 500) -> void
+Restate.Sdk.VirtualObjectAttribute
+Restate.Sdk.VirtualObjectAttribute.Name.get -> string?
+Restate.Sdk.VirtualObjectAttribute.Name.set -> void
+Restate.Sdk.VirtualObjectAttribute.VirtualObjectAttribute() -> void
+Restate.Sdk.WorkflowAttribute
+Restate.Sdk.WorkflowAttribute.Name.get -> string?
+Restate.Sdk.WorkflowAttribute.Name.set -> void
+Restate.Sdk.WorkflowAttribute.WorkflowAttribute() -> void
+Restate.Sdk.WorkflowAttribute.WorkflowRetention.get -> string?
+Restate.Sdk.WorkflowAttribute.WorkflowRetention.set -> void
+Restate.Sdk.WorkflowContext
+Restate.Sdk.WorkflowContext.WorkflowContext() -> void
+abstract Restate.Sdk.Context.Aborted.get -> System.Threading.CancellationToken
+abstract Restate.Sdk.Context.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
+abstract Restate.Sdk.Context.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+abstract Restate.Sdk.Context.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.Console.get -> Restate.Sdk.DurableConsole!
+abstract Restate.Sdk.Context.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
+abstract Restate.Sdk.Context.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+abstract Restate.Sdk.Context.InvocationId.get -> string!
+abstract Restate.Sdk.Context.Now() -> System.Threading.Tasks.ValueTask<System.DateTimeOffset>
+abstract Restate.Sdk.Context.ObjectClient<TClient>(string! key) -> TClient!
+abstract Restate.Sdk.Context.ObjectSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+abstract Restate.Sdk.Context.Random.get -> Restate.Sdk.DurableRandom!
+abstract Restate.Sdk.Context.RejectAwakeable(string! id, string! reason) -> void
+abstract Restate.Sdk.Context.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+abstract Restate.Sdk.Context.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<T>! action) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.Context.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
+abstract Restate.Sdk.Context.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.ServiceClient<TClient>() -> TClient!
+abstract Restate.Sdk.Context.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+abstract Restate.Sdk.Context.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
+abstract Restate.Sdk.Context.WorkflowClient<TClient>(string! key) -> TClient!
+abstract Restate.Sdk.Context.WorkflowSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+abstract Restate.Sdk.ObjectContext.Clear(string! key) -> void
+abstract Restate.Sdk.ObjectContext.ClearAll() -> void
+abstract Restate.Sdk.ObjectContext.Set<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+abstract Restate.Sdk.SharedObjectContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+abstract Restate.Sdk.SharedObjectContext.Key.get -> string!
+abstract Restate.Sdk.SharedObjectContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+abstract Restate.Sdk.SharedWorkflowContext.PeekPromise<T>(string! name) -> System.Threading.Tasks.ValueTask<T?>
+abstract Restate.Sdk.SharedWorkflowContext.RejectPromise(string! name, string! reason) -> void
+abstract Restate.Sdk.SharedWorkflowContext.ResolvePromise<T>(string! name, T payload) -> void
+abstract Restate.Sdk.WorkflowContext.PeekPromise<T>(string! name) -> System.Threading.Tasks.ValueTask<T?>
+abstract Restate.Sdk.WorkflowContext.Promise<T>(string! name) -> System.Threading.Tasks.ValueTask<T>
+abstract Restate.Sdk.WorkflowContext.RejectPromise(string! name, string! reason) -> void
+abstract Restate.Sdk.WorkflowContext.ResolvePromise<T>(string! name, T payload) -> void
+override Restate.Sdk.Awakeable<T>.GetHashCode() -> int
+override Restate.Sdk.CallOptions.GetHashCode() -> int
+override Restate.Sdk.Client.ServiceHandle.GetHashCode() -> int
+override Restate.Sdk.InvocationHandle.GetHashCode() -> int
+override Restate.Sdk.RetryPolicy.Equals(object? obj) -> bool
+override Restate.Sdk.RetryPolicy.GetHashCode() -> int
+override Restate.Sdk.RetryPolicy.ToString() -> string!
+override Restate.Sdk.SendOptions.GetHashCode() -> int
+override Restate.Sdk.SettledResult<T>.GetHashCode() -> int
+override Restate.Sdk.SharedObjectContext.Aborted.get -> System.Threading.CancellationToken
+override Restate.Sdk.SharedObjectContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
+override Restate.Sdk.SharedObjectContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.SharedObjectContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.Console.get -> Restate.Sdk.DurableConsole!
+override Restate.Sdk.SharedObjectContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.SharedObjectContext.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+override Restate.Sdk.SharedObjectContext.InvocationId.get -> string!
+override Restate.Sdk.SharedObjectContext.Logger.get -> Microsoft.Extensions.Logging.ILogger!
+override Restate.Sdk.SharedObjectContext.Now() -> System.Threading.Tasks.ValueTask<System.DateTimeOffset>
+override Restate.Sdk.SharedObjectContext.ObjectClient<TClient>(string! key) -> TClient!
+override Restate.Sdk.SharedObjectContext.ObjectSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.SharedObjectContext.Random.get -> Restate.Sdk.DurableRandom!
+override Restate.Sdk.SharedObjectContext.RejectAwakeable(string! id, string! reason) -> void
+override Restate.Sdk.SharedObjectContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<T>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.SharedObjectContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.SharedObjectContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.ServiceClient<TClient>() -> TClient!
+override Restate.Sdk.SharedObjectContext.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.SharedObjectContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
+override Restate.Sdk.SharedObjectContext.WorkflowClient<TClient>(string! key) -> TClient!
+override Restate.Sdk.SharedObjectContext.WorkflowSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.StateKey<T>.GetHashCode() -> int
+static Restate.Sdk.Awakeable<T>.operator !=(Restate.Sdk.Awakeable<T> left, Restate.Sdk.Awakeable<T> right) -> bool
+static Restate.Sdk.Awakeable<T>.operator ==(Restate.Sdk.Awakeable<T> left, Restate.Sdk.Awakeable<T> right) -> bool
+static Restate.Sdk.CallOptions.WithIdempotencyKey(string! key) -> Restate.Sdk.CallOptions
+static Restate.Sdk.CallOptions.operator !=(Restate.Sdk.CallOptions left, Restate.Sdk.CallOptions right) -> bool
+static Restate.Sdk.CallOptions.operator ==(Restate.Sdk.CallOptions left, Restate.Sdk.CallOptions right) -> bool
+static Restate.Sdk.Client.ServiceHandle.operator !=(Restate.Sdk.Client.ServiceHandle left, Restate.Sdk.Client.ServiceHandle right) -> bool
+static Restate.Sdk.Client.ServiceHandle.operator ==(Restate.Sdk.Client.ServiceHandle left, Restate.Sdk.Client.ServiceHandle right) -> bool
+static Restate.Sdk.ClientFactory.Register(System.Func<Restate.Sdk.Context!, System.Type!, string?, Restate.Sdk.SendOptions?, object?>! factory) -> void
+static Restate.Sdk.Endpoint.ServiceDefinitionRegistry.Get<TService>() -> Restate.Sdk.Endpoint.ServiceDefinition!
+static Restate.Sdk.Endpoint.ServiceDefinitionRegistry.Register<TService>(Restate.Sdk.Endpoint.ServiceDefinition! definition) -> void
+static Restate.Sdk.Hosting.RestateEndpointRouteBuilderExtensions.MapRestate(this Microsoft.AspNetCore.Routing.IEndpointRouteBuilder! endpoints) -> Microsoft.AspNetCore.Routing.IEndpointRouteBuilder!
+static Restate.Sdk.Hosting.RestateHost.CreateBuilder() -> Restate.Sdk.Hosting.RestateHostBuilder!
+static Restate.Sdk.Hosting.RestateServiceCollectionExtensions.AddRestate(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Restate.Sdk.Hosting.RestateOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Restate.Sdk.Hosting.RestateServiceCollectionExtensions.AddRestateAot(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Restate.Sdk.Endpoint.ServiceDefinition![]! definitions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Restate.Sdk.InvocationHandle.operator !=(Restate.Sdk.InvocationHandle left, Restate.Sdk.InvocationHandle right) -> bool
+static Restate.Sdk.InvocationHandle.operator ==(Restate.Sdk.InvocationHandle left, Restate.Sdk.InvocationHandle right) -> bool
+static Restate.Sdk.JsonSerde.Configure(System.Text.Json.JsonSerializerOptions! options) -> void
+static Restate.Sdk.JsonSerde.SerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
+static Restate.Sdk.RetryPolicy.Default.get -> Restate.Sdk.RetryPolicy!
+static Restate.Sdk.RetryPolicy.FixedAttempts(int maxAttempts) -> Restate.Sdk.RetryPolicy!
+static Restate.Sdk.RetryPolicy.None.get -> Restate.Sdk.RetryPolicy!
+static Restate.Sdk.RetryPolicy.WithMaxDuration(System.TimeSpan maxDuration) -> Restate.Sdk.RetryPolicy!
+static Restate.Sdk.RetryPolicy.operator !=(Restate.Sdk.RetryPolicy? left, Restate.Sdk.RetryPolicy? right) -> bool
+static Restate.Sdk.RetryPolicy.operator ==(Restate.Sdk.RetryPolicy? left, Restate.Sdk.RetryPolicy? right) -> bool
+static Restate.Sdk.SendOptions.AfterDelay(System.TimeSpan delay) -> Restate.Sdk.SendOptions
+static Restate.Sdk.SendOptions.WithIdempotencyKey(string! key) -> Restate.Sdk.SendOptions
+static Restate.Sdk.SendOptions.operator !=(Restate.Sdk.SendOptions left, Restate.Sdk.SendOptions right) -> bool
+static Restate.Sdk.SendOptions.operator ==(Restate.Sdk.SendOptions left, Restate.Sdk.SendOptions right) -> bool
+static Restate.Sdk.SettledResult<T>.Failure(System.Exception! error) -> Restate.Sdk.SettledResult<T>
+static Restate.Sdk.SettledResult<T>.Success(T value) -> Restate.Sdk.SettledResult<T>
+static Restate.Sdk.SettledResult<T>.operator !=(Restate.Sdk.SettledResult<T> left, Restate.Sdk.SettledResult<T> right) -> bool
+static Restate.Sdk.SettledResult<T>.operator ==(Restate.Sdk.SettledResult<T> left, Restate.Sdk.SettledResult<T> right) -> bool
+static Restate.Sdk.StateKey<T>.operator !=(Restate.Sdk.StateKey<T> left, Restate.Sdk.StateKey<T> right) -> bool
+static Restate.Sdk.StateKey<T>.operator ==(Restate.Sdk.StateKey<T> left, Restate.Sdk.StateKey<T> right) -> bool
+virtual Restate.Sdk.Context.All<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T[]!>
+virtual Restate.Sdk.Context.AllSettled<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<Restate.Sdk.SettledResult<T>[]!>
+virtual Restate.Sdk.Context.Any<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T>
+virtual Restate.Sdk.Context.Logger.get -> Microsoft.Extensions.Logging.ILogger!
+virtual Restate.Sdk.Context.Race<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T>
+virtual Restate.Sdk.Context.WaitAll(params Restate.Sdk.IDurableFuture![]! futures) -> System.Collections.Generic.IAsyncEnumerable<(Restate.Sdk.IDurableFuture! future, System.Exception? error)>!
+virtual Restate.Sdk.Endpoint.HandlerInvoker.Invoke(object! instance, Restate.Sdk.Context! context, object? input, System.Threading.CancellationToken ct) -> System.Threading.Tasks.Task<object?>!
+~override Restate.Sdk.Awakeable<T>.Equals(object obj) -> bool
+~override Restate.Sdk.Awakeable<T>.ToString() -> string
+~override Restate.Sdk.CallOptions.Equals(object obj) -> bool
+~override Restate.Sdk.CallOptions.ToString() -> string
+~override Restate.Sdk.Client.ServiceHandle.Equals(object obj) -> bool
+~override Restate.Sdk.Client.ServiceHandle.ToString() -> string
+~override Restate.Sdk.InvocationHandle.Equals(object obj) -> bool
+~override Restate.Sdk.InvocationHandle.ToString() -> string
+~override Restate.Sdk.SendOptions.Equals(object obj) -> bool
+~override Restate.Sdk.SendOptions.ToString() -> string
+~override Restate.Sdk.SettledResult<T>.Equals(object obj) -> bool
+~override Restate.Sdk.SettledResult<T>.ToString() -> string
+~override Restate.Sdk.StateKey<T>.Equals(object obj) -> bool
+~override Restate.Sdk.StateKey<T>.ToString() -> string

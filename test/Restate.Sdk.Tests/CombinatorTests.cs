@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Journal;
+using Restate.Sdk.Internal.StateMachine;
 using Restate.Sdk.Testing;
 
 namespace Restate.Sdk.Tests;
@@ -360,12 +361,89 @@ public class CombinatorTests
         Assert.IsType<TaskCanceledException>(results[1].Error);
     }
 
+    // ── Suspension propagation ──
+    //
+    // When the input stream closes, pending completions are poisoned with SuspensionException.
+    // Combinators must propagate it (so the invocation suspends) instead of settling poisoned
+    // futures as failures: the journaled operations WILL complete on a later attempt.
+
+    [Fact]
+    public async Task Any_PoisonedFuture_PropagatesSuspension()
+    {
+        var ctx = new BareContext();
+        var (f1, tcs1) = PendingFuture<int>();
+        var (f2, tcs2) = PendingFuture<int>();
+
+        var task = ctx.Any(f1, f2).AsTask();
+
+        tcs1.SetResult(CompletionResult.Failure(500, "boom"));
+        tcs2.SetException(new SuspensionException());
+
+        await Assert.ThrowsAsync<SuspensionException>(() => task);
+    }
+
+    [Fact]
+    public async Task Any_PoisonedFuture_StillPrefersSuccess()
+    {
+        var ctx = new BareContext();
+        var (f1, tcs1) = PendingFuture<int>();
+        var (f2, tcs2) = PendingFuture<int>();
+
+        tcs1.SetException(new SuspensionException());
+        Complete(tcs2, 42);
+
+        var result = await ctx.Any(f1, f2);
+
+        Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public async Task AllSettled_PoisonedFuture_PropagatesSuspension()
+    {
+        var ctx = new BareContext();
+        var f1 = CompletedFuture(1);
+        var (f2, tcs2) = PendingFuture<int>();
+
+        tcs2.SetException(new SuspensionException());
+
+        await Assert.ThrowsAsync<SuspensionException>(() => ctx.AllSettled(f1, f2).AsTask());
+    }
+
+    [Fact]
+    public async Task WaitAll_PoisonedFuture_PropagatesSuspension()
+    {
+        var ctx = new BareContext();
+        var tcs = new TaskCompletionSource<CompletionResult>();
+        var future = new DurableFuture<int>(tcs, JsonSerializerOptions.Default);
+
+        tcs.SetException(new SuspensionException());
+
+        await Assert.ThrowsAsync<SuspensionException>(async () =>
+        {
+            await foreach (var _ in ctx.WaitAll(future))
+            {
+            }
+        });
+    }
+
     // ── SettledResult ──
 
     [Fact]
     public void SettledResult_Failure_NullError_Throws()
     {
         Assert.Throws<ArgumentNullException>(() => SettledResult<int>.Failure(null!));
+    }
+
+    [Fact]
+    public void SettledResult_FailureBranch_ErrorFlowsAsNonNull()
+    {
+        var result = SettledResult<int>.Failure(new InvalidOperationException("boom"));
+
+        // [MemberNotNullWhen(false, nameof(Error))]: no null-forgiving operator needed here.
+        if (!result.IsSuccess)
+            Assert.Equal("boom", result.Error.Message);
+        else
+            Assert.Fail("Expected a failed settlement");
     }
 
     // ── MockContext Any / AllSettled ──

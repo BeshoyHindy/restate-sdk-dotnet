@@ -1,5 +1,8 @@
+using System.IO.Pipelines;
 using Microsoft.Extensions.Logging;
 using Restate.Sdk.Internal;
+using Restate.Sdk.Internal.Protocol;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Tests.Observability;
 
@@ -10,12 +13,26 @@ namespace Restate.Sdk.Tests.Observability;
 /// </summary>
 public class ReplayAwareLoggerTests
 {
+    /// <summary>
+    ///     Creates a state machine primed with <paramref name="knownEntries" /> replay entries.
+    ///     Consuming a replayed no-result command (e.g. SetState) completes the replay.
+    /// </summary>
+    private static InvocationStateMachine CreateSm(int knownEntries)
+    {
+        var inbound = new Pipe();
+        var outbound = new Pipe();
+        var sm = new InvocationStateMachine(
+            new ProtocolReader(inbound.Reader), new ProtocolWriter(outbound.Writer));
+        sm.Initialize("inv-1", "", 0, knownEntries);
+        return sm;
+    }
+
     [Fact]
     public void IsEnabled_ReturnsFalse_WhileReplaying()
     {
         var inner = new CapturingLogger();
-        var replaying = true;
-        var logger = new ReplayAwareLogger(inner, () => replaying);
+        using var sm = CreateSm(knownEntries: 1);
+        var logger = new ReplayAwareLogger(inner, sm);
 
         Assert.False(logger.IsEnabled(LogLevel.Critical));
 
@@ -27,11 +44,11 @@ public class ReplayAwareLoggerTests
     public void Log_FlowsToInner_AfterReplayCompletes()
     {
         var inner = new CapturingLogger();
-        var replaying = true;
-        var logger = new ReplayAwareLogger(inner, () => replaying);
+        using var sm = CreateSm(knownEntries: 1);
+        var logger = new ReplayAwareLogger(inner, sm);
 
         LogInfo(logger, "suppressed");
-        replaying = false;
+        sm.SetState("key", 1); // Consumes the last replay entry — replay completes.
 
         Assert.True(logger.IsEnabled(LogLevel.Information));
         LogInfo(logger, "visible");
@@ -45,7 +62,8 @@ public class ReplayAwareLoggerTests
     public void IsEnabled_RespectsInnerLoggerLevel()
     {
         var inner = new CapturingLogger { MinimumLevel = LogLevel.Warning };
-        var logger = new ReplayAwareLogger(inner, () => false);
+        using var sm = CreateSm(knownEntries: 0);
+        var logger = new ReplayAwareLogger(inner, sm);
 
         Assert.False(logger.IsEnabled(LogLevel.Debug));
         Assert.True(logger.IsEnabled(LogLevel.Error));
@@ -55,7 +73,8 @@ public class ReplayAwareLoggerTests
     public void BeginScope_DelegatesToInner_EvenDuringReplay()
     {
         var inner = new CapturingLogger();
-        var logger = new ReplayAwareLogger(inner, () => true);
+        using var sm = CreateSm(knownEntries: 1);
+        var logger = new ReplayAwareLogger(inner, sm);
 
         using (logger.BeginScope("my-scope"))
         {

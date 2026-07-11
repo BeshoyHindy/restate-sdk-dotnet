@@ -226,6 +226,39 @@ public class RestateClientTests
         Assert.Equal("/restate/invocation/inv-5", handler.LastRequest.RequestUri!.AbsolutePath);
     }
 
+    // ── Argument validation ──
+
+    [Fact]
+    public void Constructor_NullArguments_ThrowWithDomainParamNames()
+    {
+        Assert.Equal("baseUrl",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient((string)null!)).ParamName);
+        Assert.Equal("baseUrl",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient((Uri)null!)).ParamName);
+        Assert.Equal("httpClient",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient((HttpClient)null!)).ParamName);
+        Assert.Throws<ArgumentException>(() => new RestateClient(""));
+    }
+
+    [Fact]
+    public async Task InvocationOperations_NullOrEmptyInvocationId_ThrowWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        // A null/empty id would silently build "/restate/invocation//..." and surface as an
+        // opaque 404 from the server — it must fail fast at the call site instead.
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.Attach<GreetResponse>(null!));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.Attach<GreetResponse>(""));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => client.Attach("", ClientTestJsonContext.Default.GreetResponse));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetOutput<GreetResponse>(""));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => client.GetOutput("", ClientTestJsonContext.Default.GreetResponse));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.Cancel(""));
+
+        Assert.Null(handler.LastRequest);
+    }
+
     internal sealed class StubHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

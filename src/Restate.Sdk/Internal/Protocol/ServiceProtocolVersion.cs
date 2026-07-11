@@ -24,11 +24,15 @@ internal static class ServiceProtocolVersionExtensions
 {
     private const string ContentTypePrefix = "application/vnd.restate.invocation.v";
 
+    // Single source for the per-version content-type strings: TryParse, ToContentType, and
+    // SupportedContentTypes all derive from these consts, so adding a version cannot leave
+    // one of the three out of sync (e.g. 415 responses advertising a stale list).
+    private const string ContentTypeV5 = $"{ContentTypePrefix}5";
+    private const string ContentTypeV6 = $"{ContentTypePrefix}6";
+    private const string ContentTypeV7 = $"{ContentTypePrefix}7";
+
     /// <summary>Human-readable list of supported invocation content types, for 415 responses.</summary>
-    public const string SupportedContentTypes =
-        "application/vnd.restate.invocation.v5, " +
-        "application/vnd.restate.invocation.v6, " +
-        "application/vnd.restate.invocation.v7";
+    public const string SupportedContentTypes = $"{ContentTypeV5}, {ContentTypeV6}, {ContentTypeV7}";
 
     /// <summary>
     ///     Parses a request content type of the form <c>application/vnd.restate.invocation.v{N}</c>.
@@ -50,27 +54,25 @@ internal static class ServiceProtocolVersionExtensions
         if (separator >= 0)
             value = value[..separator].TrimEnd();
 
-        if (!value.StartsWith(ContentTypePrefix, StringComparison.Ordinal))
-            return false;
-
-        var suffix = value[ContentTypePrefix.Length..];
-        if (suffix.Length != 1)
-            return false;
-
-        switch (suffix[0])
+        if (value.SequenceEqual(ContentTypeV5))
         {
-            case '5':
-                version = ServiceProtocolVersion.V5;
-                return true;
-            case '6':
-                version = ServiceProtocolVersion.V6;
-                return true;
-            case '7':
-                version = ServiceProtocolVersion.V7;
-                return true;
-            default:
-                return false;
+            version = ServiceProtocolVersion.V5;
+            return true;
         }
+
+        if (value.SequenceEqual(ContentTypeV6))
+        {
+            version = ServiceProtocolVersion.V6;
+            return true;
+        }
+
+        if (value.SequenceEqual(ContentTypeV7))
+        {
+            version = ServiceProtocolVersion.V7;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Returns the invocation content type for the given protocol version.</summary>
@@ -78,9 +80,9 @@ internal static class ServiceProtocolVersionExtensions
     {
         return version switch
         {
-            ServiceProtocolVersion.V5 => "application/vnd.restate.invocation.v5",
-            ServiceProtocolVersion.V6 => "application/vnd.restate.invocation.v6",
-            ServiceProtocolVersion.V7 => "application/vnd.restate.invocation.v7",
+            ServiceProtocolVersion.V5 => ContentTypeV5,
+            ServiceProtocolVersion.V6 => ContentTypeV6,
+            ServiceProtocolVersion.V7 => ContentTypeV7,
             _ => throw new ArgumentOutOfRangeException(nameof(version), version, "Unknown service protocol version")
         };
     }

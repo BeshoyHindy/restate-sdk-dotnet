@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text.Json;
+using Google.Protobuf;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
@@ -382,6 +383,62 @@ public class InvocationStateMachineTests : IDisposable
     }
 
     [Fact]
+    public async Task Awakeable_SignalIndices_StartAtFirstUserIndex()
+    {
+        using var sm = new InvocationStateMachine(_reader, _writer,
+            negotiatedVersion: ServiceProtocolVersion.V7);
+        sm.Initialize("inv-1", [0xAB, 0xCD], "", 0, 0);
+
+        // Signal indices 0-16 are reserved for protocol built-ins (CANCEL = 1); handing
+        // them to awakeables would let a runtime CANCEL resolve a user awakeable.
+        _ = sm.Awakeable();
+        _ = sm.Awakeable();
+        await sm.SuspendAsync(CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[^1].Payload);
+        Assert.Equal(new uint[] { 17, 18 }, suspension.AwaitingOn.WaitingSignals);
+    }
+
+    [Fact]
+    public async Task CancelSignal_FailsPendingWaitsTerminally_InsteadOfResolvingAwakeable()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        var (_, awakeableTcs) = sm.Awakeable();
+        var sleep = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        // Built-in CANCEL (signal idx 1): must fail pending waits with a terminal 409,
+        // never resolve an awakeable with an empty payload.
+        await WriteInboundAsync(MessageType.SignalNotification,
+            new Gen.SignalNotificationMessage { Idx = 1, Void = new Gen.Void() }.ToByteArray());
+
+        var awakeableEx = await Assert.ThrowsAsync<TerminalException>(() => awakeableTcs.Task);
+        Assert.Equal(409, awakeableEx.Code);
+        var sleepEx = await Assert.ThrowsAsync<TerminalException>(() => sleep.Task);
+        Assert.Equal(409, sleepEx.Code);
+
+        // Waits registered after the cancellation fail immediately.
+        var late = sm.Awakeable();
+        var lateEx = await Assert.ThrowsAsync<TerminalException>(() => late.Tcs.Task);
+        Assert.Equal(409, lateEx.Code);
+
+        _inbound.Writer.Complete();
+        await incoming;
+    }
+
+    /// <summary>Writes a framed protocol message into the inbound pipe.</summary>
+    private async Task WriteInboundAsync(MessageType type, byte[] payload)
+    {
+        var header = new byte[MessageHeader.Size];
+        MessageHeader.Create(type, MessageFlags.None, (uint)payload.Length).Write(header);
+        await _inbound.Writer.WriteAsync(header);
+        await _inbound.Writer.WriteAsync(payload);
+    }
+
+    [Fact]
     public void ResolveAwakeable_InProcessingMode_WritesCommand()
     {
         using var sm = CreateSm();
@@ -624,7 +681,8 @@ public class InvocationStateMachineTests : IDisposable
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
         Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingCompletions);
-        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
+        // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
+        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.WaitingCompletions);
         Assert.Empty(suspension.WaitingSignals);
     }
@@ -682,6 +740,40 @@ public class InvocationStateMachineTests : IDisposable
         // whole request is buffered and EOF precedes handler execution).
         var late = await sm.SleepFutureAsync(TimeSpan.FromMinutes(1), CancellationToken.None);
         await Assert.ThrowsAsync<SuspensionException>(() => late.Task);
+    }
+
+    [Fact]
+    public async Task ProcessIncomingMessages_ReaderFault_PoisonsPendingWaits()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var pending = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        // Transport failure: the read loop must not exit without failing pending waits,
+        // or a handler parked on `await tcs.Task` leaks forever.
+        _inbound.Writer.Complete(new IOException("transport reset"));
+
+        await Assert.ThrowsAsync<IOException>(() => incoming);
+        Assert.True(sm.InputClosed);
+        await Assert.ThrowsAsync<SuspensionException>(() => pending.Task);
+    }
+
+    [Fact]
+    public async Task ProcessIncomingMessages_Cancelled_CancelsPendingWaits()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var pending = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        var incoming = sm.ProcessIncomingMessagesAsync(cts.Token);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => incoming);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.Task);
     }
 
     // ------- Disposal -------

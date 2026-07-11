@@ -82,6 +82,69 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A service that makes a single request/response call — used to verify that the ignored
+///     invocation-id notification slot is not advertised in the SuspensionMessage.
+/// </summary>
+[Service(Name = "CallGreeter")]
+public class CallGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Call<string>("Downstream", "Get", name);
+    }
+}
+
+/// <summary>
+///     A service with a durable side effect — used to verify Run replay semantics: a stored
+///     completion resolves without re-executing, a missing one re-executes and re-proposes.
+/// </summary>
+[Service(Name = "RunGreeter")]
+public class RunGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Run("effect", () => Task.FromResult($"fresh-{name}"));
+    }
+}
+
+/// <summary>
+///     A service that fans out two calls and settles them with <c>ctx.AllSettled</c> — used to
+///     verify that input EOF suspends the invocation instead of settling the journaled calls
+///     as fabricated failures.
+/// </summary>
+[Service(Name = "FanOutGreeter")]
+public class FanOutGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        var first = ctx.CallFuture<string>("Downstream", "A", name);
+        var second = ctx.CallFuture<string>("Downstream", "B", name);
+
+        var settled = await ctx.AllSettled(first, second);
+        return string.Join(",", settled.Select(r => r.IsSuccess ? r.Value : "failed"));
+    }
+}
+
+/// <summary>
+///     A service that cancels another invocation and then sleeps — used to verify that a
+///     journaled SendSignalCommand (ctx.CancelInvocation) replays instead of failing the drain.
+/// </summary>
+[Service(Name = "CancelThenSleep")]
+public class CancelThenSleepService
+{
+    [Handler]
+    public async Task<string> Run(Context ctx, string input)
+    {
+        await ctx.CancelInvocation("inv-to-cancel");
+        await ctx.Sleep(TimeSpan.FromMinutes(5));
+        return $"cancelled-then-rested-{input}";
+    }
+}
+
+/// <summary>
 ///     A virtual object used by the eager-state tests: reads a counter, increments it,
 ///     and returns the new value.
 /// </summary>
@@ -240,6 +303,99 @@ public class ProtocolIntegrationTests
         var (endHeader, endPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);
         Assert.Equal(0u, endHeader.Length);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_CancelledAttempt_EndsBodyWithRetryableError()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+        var startPayload = BuildStartMessagePayload("cancelled-inv-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TestGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        // The attempt deadline already elapsed (e.g. Lambda RemainingTime margin fired).
+        // The body must still end with a terminal frame — a torso without one is a protocol
+        // violation when returned as HTTP 200.
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
+            new CancellationToken(canceled: true));
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (errorHeader, errorPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Error, errorHeader.Type);
+        Assert.Equal(500u, Gen.ErrorMessage.Parser.ParseFrom(errorPayload).Code);
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_TrailingMalformedFrame_KeepsCompletedResponse()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var startPayload = BuildStartMessagePayload("trailing-junk-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+
+        // Trailing garbage beyond known_entries: a header announcing a payload that never
+        // arrives. The concurrent reader faults on it, but the handler's outcome was already
+        // decided — the fault must be logged, not rethrown out of HandleAsync.
+        var junkHeader = new byte[MessageHeader.Size];
+        MessageHeader.Create(MessageType.SleepCompletion, MessageFlags.None, 64).Write(junkHeader);
+        requestStream.Write(junkHeader);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TestGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"Hello, World!\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
 
         Assert.Equal(responseData.Length, offset);
     }
@@ -516,6 +672,157 @@ public class ProtocolIntegrationTests
         Assert.Equal(responseData.Length, offset);
     }
 
+    private async Task<byte[]> RunReplayedRunJournalAsync(bool includeStoredCompletion)
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var knownEntries = includeStoredCompletion ? 3u : 2u;
+        var startPayload = BuildStartMessagePayload("resume-run-1", knownEntries, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.RunCommand, runCommandPayload);
+        if (includeStoredCompletion)
+        {
+            var runCompletionPayload = new Gen.RunCompletionNotificationMessage
+            {
+                CompletionId = 1,
+                Value = new Gen.Value
+                {
+                    Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("journaled-World"))
+                }
+            }.ToByteArray();
+            WriteFramedMessage(requestStream, MessageType.RunCompletion, runCompletionPayload);
+        }
+
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(RunGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new RunGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        return responseStream.ToArray();
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRunWithStoredCompletion_ResolvesWithoutReExecuting()
+    {
+        var responseData = await RunReplayedRunJournalAsync(includeStoredCompletion: true);
+        var offset = 0;
+
+        // The stored completion wins: the closure is NOT re-executed ("fresh-World" would
+        // betray re-execution) and no new proposal is written.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"journaled-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRunWithoutCompletion_ReExecutesAndProposes()
+    {
+        // The previous attempt crashed after the runtime persisted the RunCommand but before
+        // it persisted the ProposeRunCompletion. Awaiting a notification would suspend forever
+        // (only the SDK can produce it) — the closure must re-execute and propose again.
+        var responseData = await RunReplayedRunJournalAsync(includeStoredCompletion: false);
+        var offset = 0;
+
+        var (proposalHeader, proposalPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.ProposeRunCompletion, proposalHeader.Type);
+        var proposal = Gen.ProposeRunCompletionMessage.Parser.ParseFrom(proposalPayload);
+        Assert.Equal(1u, proposal.ResultCompletionId);
+        Assert.Equal("\"fresh-World\"", proposal.Value.ToStringUtf8());
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"fresh-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ResumedJournalWithSendSignal_ReplaysAndCompletes()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        // Resumed journal of CancelThenSleepService: Input + SendSignalCommand (from
+        // ctx.CancelInvocation) + SleepCommand + SleepCompletionNotification = 4 known entries.
+        // The drain must map the replayed SendSignalCommand to a journal entry instead of
+        // throwing ProtocolException (which would brick the invocation in a retry loop).
+        var startPayload = BuildStartMessagePayload("resume-cancel-1", 4, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var sendSignalPayload = ProtobufCodec.CreateCancelInvocationCommand("inv-to-cancel").ToByteArray();
+        var sleepCommandPayload = new Gen.SleepCommandMessage
+        {
+            WakeUpTime = 123_456_789UL,
+            ResultCompletionId = 1
+        }.ToByteArray();
+        var sleepCompletionPayload = new Gen.SleepCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Void = new Gen.Void()
+        }.ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.SendSignalCommand, sendSignalPayload);
+        WriteFramedMessage(requestStream, MessageType.SleepCommand, sleepCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.SleepCompletion, sleepCompletionPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(CancelThenSleepService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Run");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new CancelThenSleepService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        // No replayed command is re-sent — the invocation completes directly.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"cancelled-then-rested-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
     // ------- Eager state -------
 
     [Fact]
@@ -775,8 +1082,59 @@ public class ProtocolIntegrationTests
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
-        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
+        // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
+        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
 
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringCall_SuspendsOnResultIdOnly()
+    {
+        var responseData = await RunUntilInputClosedAsync<CallGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new CallGreeterService());
+
+        var offset = 0;
+
+        var (callHeader, callPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callHeader.Type);
+        var callMsg = Gen.CallCommandMessage.Parser.ParseFrom(callPayload);
+        Assert.Equal(1u, callMsg.InvocationIdNotificationIdx);
+        Assert.Equal(2u, callMsg.ResultCompletionId);
+
+        // Only the awaited result id may be advertised. Including the never-awaited
+        // invocation-id slot (1) would let the runtime complete it immediately, causing a
+        // spurious instant resume of every suspended call.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Equal(new uint[] { 2 }, suspension.AwaitingOn.WaitingCompletions);
+        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringAllSettled_SuspendsInsteadOfSettlingFailures()
+    {
+        var responseData = await RunUntilInputClosedAsync<FanOutGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new FanOutGreeterService());
+
+        var offset = 0;
+
+        // Both fanned-out call commands are flushed before the handler parks on AllSettled.
+        var (callAHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callAHeader.Type);
+        var (callBHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callBHeader.Type);
+
+        // EOF poisons the pending call results. AllSettled must NOT settle them as failures
+        // and complete the handler with fabricated output — the invocation must suspend.
+        var (suspensionHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+
+        // SuspensionMessage is terminal on its own: no Output, Error, or End may follow.
         Assert.Equal(responseData.Length, offset);
     }
 

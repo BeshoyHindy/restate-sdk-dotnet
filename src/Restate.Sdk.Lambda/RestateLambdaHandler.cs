@@ -50,6 +50,7 @@ public abstract class RestateLambdaHandler
     private readonly ServiceRegistry _registry;
 
     private ILoggerFactory? _loggerFactory;
+    private readonly RestateTelemetryOptions _telemetryOptions = new();
     private readonly RequestIdentityVerifier? _identityVerifier;
 
     /// <summary>
@@ -59,7 +60,7 @@ public abstract class RestateLambdaHandler
     {
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
-        _handler = new InvocationHandler(_loggerFactory);
+        _handler = new InvocationHandler(_loggerFactory, _telemetryOptions);
         _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
     }
 
@@ -94,6 +95,30 @@ public abstract class RestateLambdaHandler
     }
 
     /// <summary>
+    ///     Configures the SDK's tracing and metrics instrumentation (the <c>Restate.Sdk</c>
+    ///     ActivitySource and Meter). Call from <see cref="Register" />.
+    /// </summary>
+    /// <param name="configure">Callback mutating the telemetry options.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="configure" /> is <see langword="null" />.</exception>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the invocation pipeline has already
+    ///     been built and late changes would be silently ignored.
+    /// </exception>
+    protected void ConfigureTelemetry(Action<RestateTelemetryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(ConfigureTelemetry)} must be called from {nameof(Register)}(); " +
+                "the invocation pipeline has already been built.");
+        }
+
+        configure(_telemetryOptions);
+    }
+
+    /// <summary>
     ///     Configures Restate identity public keys (<c>publickeyv1_&lt;base58&gt;</c>) used to verify
     ///     that incoming requests originate from a trusted Restate instance. Call from
     ///     <see cref="Register" />. When at least one key is configured, every request must carry a
@@ -102,9 +127,26 @@ public abstract class RestateLambdaHandler
     /// </summary>
     /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
     /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="keys" /> is empty (which would silently leave verification disabled),
+    ///     or a key is malformed (wrong prefix, invalid base58, or wrong decoded length).
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the identity verifier has already
+    ///     been built and late keys would be silently ignored, leaving the endpoint unverified.
+    /// </exception>
     protected void WithIdentityKeys(params string[] keys)
     {
-        ArgumentNullException.ThrowIfNull(keys);
+        // Validate eagerly so malformed keys fail here, not from the base constructor.
+        _ = RequestIdentityVerifier.ParseKeys(keys);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(WithIdentityKeys)} must be called from {nameof(Register)}(); " +
+                "the identity verifier has already been built and late keys would be ignored.");
+        }
+
         _identityKeys.AddRange(keys);
     }
 
@@ -289,6 +331,14 @@ public abstract class RestateLambdaHandler
                 services,
                 protocolVersion,
                 cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Defensive: HandleAsync terminates the protocol body itself for every expected
+            // failure. Anything escaping is unexpected — surface a retryable function error
+            // instead of returning a half-written (non-terminal) protocol body as 200.
+            context.Logger.LogError($"Restate invocation processing failed unexpectedly: {ex}");
+            return new APIGatewayProxyResponse { StatusCode = 500 };
         }
         finally
         {

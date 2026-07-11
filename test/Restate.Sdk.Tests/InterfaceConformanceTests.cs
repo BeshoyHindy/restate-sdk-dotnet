@@ -28,6 +28,16 @@ public class InterfaceConformanceTests
             $"{classType.Name} should implement {interfaceType.Name}");
     }
 
+    [Fact]
+    public void IContext_Logger_HasDefaultImplementation()
+    {
+        // Logger was added after IContext shipped; a default interface implementation keeps
+        // external direct implementations of IContext compiling (mirroring Context.Logger's
+        // virtual NullLogger default) instead of breaking them with CS0535.
+        var getter = typeof(IContext).GetProperty(nameof(IContext.Logger))!.GetGetMethod()!;
+        Assert.False(getter.IsAbstract);
+    }
+
     // ──────────────────────────────────────────────
     // 2. Mock contexts implement expected interfaces (runtime instances)
     // ──────────────────────────────────────────────

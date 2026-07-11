@@ -5,8 +5,6 @@ namespace Restate.Sdk.Internal;
 
 /// <summary>
 ///     Terminal outcome of an invocation attempt, recorded as the <c>outcome</c> metric tag.
-///     <see cref="Suspended" /> is reserved for state machines that report a suspended
-///     terminal state; it is only emitted once suspension support lands.
 /// </summary>
 internal enum InvocationOutcome
 {
@@ -22,7 +20,10 @@ internal enum InvocationOutcome
     /// <summary>The invocation attempt was cancelled by the caller.</summary>
     Cancelled,
 
-    /// <summary>The invocation suspended waiting on pending completions.</summary>
+    /// <summary>
+    ///     The invocation suspended waiting on pending completions or signals
+    ///     (a SuspensionMessage terminated the attempt; the runtime resumes it later).
+    /// </summary>
     Suspended
 }
 

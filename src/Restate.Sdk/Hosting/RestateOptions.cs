@@ -1,3 +1,5 @@
+using Restate.Sdk.Internal.Identity;
+
 namespace Restate.Sdk.Hosting;
 
 /// <summary>
@@ -50,9 +52,14 @@ public sealed class RestateOptions
     /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
     /// <returns>This options instance for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="keys" /> is empty (which would silently leave verification disabled),
+    ///     or a key is malformed (wrong prefix, invalid base58, or wrong decoded length).
+    /// </exception>
     public RestateOptions WithIdentityKeys(params string[] keys)
     {
-        ArgumentNullException.ThrowIfNull(keys);
+        // Validate eagerly so malformed keys fail here, not later inside AddRestate/Build.
+        _ = RequestIdentityVerifier.ParseKeys(keys);
         IdentityKeys.AddRange(keys);
         return this;
     }

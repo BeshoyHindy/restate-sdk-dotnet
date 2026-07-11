@@ -29,7 +29,14 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private readonly CompletionManager _signalCompletions = new();
     private readonly InvocationJournal _journal = new();
     private readonly ProtocolReader _reader;
-    private int _nextSignalIndex;
+
+    // Signal indices 0-16 are reserved for protocol built-in signals (SIGNAL_UNKNOWN = 0,
+    // CANCEL = 1, the rest held back for future built-ins); user signals (awakeables) start
+    // at 17, matching the official SDKs. Allocating from 0 would collide with the reserved
+    // range: a runtime CANCEL signal would resolve a user awakeable with fabricated data.
+    internal const int CancelSignalIndex = 1;
+    internal const int FirstUserSignalIndex = 17;
+    private int _nextSignalIndex = FirstUserSignalIndex;
 
     // Next completion id for live commands. Completion ids are SDK-chosen opaque keys echoed
     // back by the runtime in notifications. On resume, StartAsync seeds this past every id

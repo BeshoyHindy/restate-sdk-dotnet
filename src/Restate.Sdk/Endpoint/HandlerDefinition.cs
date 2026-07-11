@@ -58,4 +58,14 @@ public sealed class HandlerDefinition
 
     /// <summary>When true, this handler cannot be invoked via the Restate ingress HTTP API.</summary>
     public bool IngressPrivate { get; init; }
+
+    // Cached "{service}/{handler}" span name; handler definitions are registry singletons, so
+    // this formats once instead of per invocation. Benign race: duplicates are identical.
+    private string? _activityDisplayName;
+
+    /// <summary>Gets the invocation span name (<c>{service}/{handler}</c>), formatted once and cached.</summary>
+    internal string GetActivityDisplayName(string serviceName)
+    {
+        return _activityDisplayName ??= $"{serviceName}/{Name}";
+    }
 }

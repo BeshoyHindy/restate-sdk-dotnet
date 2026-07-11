@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using Microsoft.Extensions.Logging;
@@ -13,14 +14,24 @@ namespace Restate.Sdk.Internal;
 
 internal sealed class InvocationHandler
 {
-    internal static readonly ActivitySource ActivitySource = new("Restate.Sdk");
+    internal static readonly ActivitySource ActivitySource = new(RestateMetrics.MeterName);
     private readonly ILoggerFactory _loggerFactory;
     private readonly RestateTelemetryOptions _telemetryOptions;
+
+    // Loggers resolved once and cached: the category set is fixed at startup, and MEL's
+    // LoggerFactory.CreateLogger takes a global lock per call — resolving per invocation
+    // would serialize every in-flight invocation on that lock twice per request.
+    private readonly ILogger _invocationLogger;
+    private readonly ConcurrentDictionary<string, ILogger>? _serviceLoggers;
 
     public InvocationHandler(ILoggerFactory? loggerFactory = null, RestateTelemetryOptions? telemetryOptions = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _telemetryOptions = telemetryOptions ?? new RestateTelemetryOptions();
+        _invocationLogger = _loggerFactory.CreateLogger("Restate.Invocation");
+        _serviceLoggers = ReferenceEquals(_loggerFactory, NullLoggerFactory.Instance)
+            ? null
+            : new ConcurrentDictionary<string, ILogger>(StringComparer.Ordinal);
     }
 
     public async Task HandleAsync(
@@ -34,7 +45,7 @@ internal sealed class InvocationHandler
     {
         var startTimestamp = Stopwatch.GetTimestamp();
         var outcome = InvocationOutcome.Error;
-        var logger = _loggerFactory.CreateLogger("Restate.Invocation");
+        var logger = _invocationLogger;
         var jsonOptions = JsonSerde.SerializerOptions;
         using var reader = new ProtocolReader(requestBodyReader);
         using var writer = new ProtocolWriter(responseBodyWriter);
@@ -58,10 +69,11 @@ internal sealed class InvocationHandler
             // invocation-id scope spanning the handler execution. Skipped entirely when
             // no logger factory is configured (e.g. Lambda without UseLoggerFactory).
             ILogger contextLogger = NullLogger.Instance;
-            if (!ReferenceEquals(_loggerFactory, NullLoggerFactory.Instance))
+            if (_serviceLoggers is not null)
             {
-                var handlerLogger = _loggerFactory.CreateLogger(service.Name);
-                contextLogger = new ReplayAwareLogger(handlerLogger, () => sm.IsReplaying);
+                var handlerLogger = _serviceLoggers.GetOrAdd(
+                    service.Name, static (name, factory) => factory.CreateLogger(name), _loggerFactory);
+                contextLogger = new ReplayAwareLogger(handlerLogger, sm);
                 invocationLogScope = handlerLogger.BeginScope(new InvocationLogScope(startInfo.InvocationId));
             }
 
@@ -127,6 +139,12 @@ internal sealed class InvocationHandler
         {
             outcome = InvocationOutcome.Cancelled;
             Log.InvocationCancelled(logger, sm.InvocationId);
+            // Best effort: end the body with a retryable ErrorMessage so the response stays
+            // protocol-well-formed. On Lambda the body is returned as HTTP 200 — without a
+            // terminal frame the runtime would classify it as a protocol error instead of a
+            // clean retry, defeating the graceful-abort margin.
+            try { await sm.FailAsync(500, "The invocation attempt was cancelled", CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Stream already broken — nothing more we can do */ }
         }
         catch (ProtocolException ex)
         {
@@ -175,6 +193,13 @@ internal sealed class InvocationHandler
                 {
                     Log.IncomingReaderStopped(logger, ex, sm.InvocationId);
                 }
+                catch (Exception ex)
+                {
+                    // The reader faulted (e.g. a trailing malformed frame) after the invocation
+                    // outcome was already decided and written. Log it — rethrowing here would
+                    // discard the completed response (on Lambda: turn success into a retry).
+                    Log.IncomingReaderFailed(logger, ex, sm.InvocationId);
+                }
 
             try { reader.Complete(); } catch { /* already completed or broken */ }
         }
@@ -184,6 +209,11 @@ internal sealed class InvocationHandler
         ServiceDefinition service, HandlerDefinition handler,
         IReadOnlyDictionary<string, string> headers, string invocationId)
     {
+        // No listeners (the production default without tracing) — skip the header lookup
+        // and name formatting entirely instead of allocating per invocation.
+        if (!ActivitySource.HasListeners())
+            return null;
+
         ActivityContext parentContext = default;
 
         if (headers.TryGetValue("traceparent", out var traceparent))
@@ -193,7 +223,7 @@ internal sealed class InvocationHandler
         }
 
         var activity = ActivitySource.StartActivity(
-            $"{service.Name}/{handler.Name}",
+            handler.GetActivityDisplayName(service.Name),
             ActivityKind.Server,
             parentContext);
 
