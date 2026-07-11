@@ -76,9 +76,14 @@ public sealed class RestateHostBuilder
     /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
     /// <returns>This builder for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="keys" /> is empty (which would silently leave verification disabled),
+    ///     or a key is malformed (wrong prefix, invalid base58, or wrong decoded length).
+    /// </exception>
     public RestateHostBuilder WithIdentityKeys(params string[] keys)
     {
-        ArgumentNullException.ThrowIfNull(keys);
+        // Validate eagerly so malformed keys fail here, not later inside Build().
+        _ = RequestIdentityVerifier.ParseKeys(keys);
         _identityKeys.AddRange(keys);
         return this;
     }

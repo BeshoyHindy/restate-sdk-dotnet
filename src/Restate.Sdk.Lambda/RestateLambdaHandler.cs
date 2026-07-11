@@ -102,9 +102,26 @@ public abstract class RestateLambdaHandler
     /// </summary>
     /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
     /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="keys" /> is empty (which would silently leave verification disabled),
+    ///     or a key is malformed (wrong prefix, invalid base58, or wrong decoded length).
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the identity verifier has already
+    ///     been built and late keys would be silently ignored, leaving the endpoint unverified.
+    /// </exception>
     protected void WithIdentityKeys(params string[] keys)
     {
-        ArgumentNullException.ThrowIfNull(keys);
+        // Validate eagerly so malformed keys fail here, not from the base constructor.
+        _ = RequestIdentityVerifier.ParseKeys(keys);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(WithIdentityKeys)} must be called from {nameof(Register)}(); " +
+                "the identity verifier has already been built and late keys would be ignored.");
+        }
+
         _identityKeys.AddRange(keys);
     }
 
