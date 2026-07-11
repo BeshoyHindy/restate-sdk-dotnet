@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Restate.Sdk.Endpoint;
 using Restate.Sdk.Internal;
+using Restate.Sdk.Internal.Identity;
 
 namespace Restate.Sdk.Hosting;
 
@@ -31,7 +32,11 @@ public static class RestateServiceCollectionExtensions
 
         var registry = ServiceRegistry.FromTypes(options.ServiceTypes);
         services.AddSingleton(registry);
+        services.TryAddSingleton(options.Telemetry);
         services.TryAddSingleton<InvocationHandler>();
+
+        if (options.IdentityKeys.Count > 0)
+            services.AddSingleton(RequestIdentityVerifier.FromKeys(options.IdentityKeys));
 
         foreach (var type in options.ServiceTypes)
             services.TryAddScoped(type);

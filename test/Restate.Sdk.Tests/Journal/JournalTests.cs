@@ -1,4 +1,5 @@
 using Restate.Sdk.Internal.Journal;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Tests.Journal;
 
@@ -99,5 +100,146 @@ public class InvocationJournalTests
         journal.Append(JournalEntry.Completed(JournalEntryType.Input, Array.Empty<byte>()));
         journal.Dispose();
         journal.Dispose();
+    }
+
+    // ------- Replay boundary -------
+
+    [Fact]
+    public void Initialize_SetsProvisionalReplayBoundary()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(5);
+
+        Assert.Equal(5, journal.ReplayBoundary);
+        Assert.True(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void SetReplayBoundary_SeparatesCommandsFromKnownEntries()
+    {
+        using var journal = new InvocationJournal();
+
+        // Wire journal: Input + Sleep commands plus 2 notifications = 4 known entries.
+        journal.Initialize(4);
+        journal.SetReplayBoundary(2);
+
+        Assert.Equal(4, journal.KnownEntries);
+        Assert.Equal(2, journal.ReplayBoundary);
+
+        journal.Append(JournalEntry.Completed(JournalEntryType.Input, ReadOnlyMemory<byte>.Empty));
+        Assert.True(journal.IsReplaying);
+
+        // Notifications must not keep the journal replaying once every command is re-traversed.
+        journal.Append(JournalEntry.Completed(JournalEntryType.Sleep, ReadOnlyMemory<byte>.Empty));
+        Assert.False(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void SetReplayBoundary_Zero_DisablesReplay()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(3);
+        journal.SetReplayBoundary(0);
+
+        Assert.False(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void SetReplayBoundary_Negative_Throws()
+    {
+        using var journal = new InvocationJournal();
+        Assert.Throws<ArgumentOutOfRangeException>(() => journal.SetReplayBoundary(-1));
+    }
+
+    [Fact]
+    public void StageReplay_TakeReplayEntry_ConsumesInOrder()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(3);
+
+        journal.Append(JournalEntry.Completed(JournalEntryType.Input, ReadOnlyMemory<byte>.Empty));
+        journal.StageReplay(JournalEntry.Replayed(
+            JournalEntryType.Sleep, MessageType.SleepCommand, new byte[] { 1 }));
+        journal.StageReplay(JournalEntry.Replayed(
+            JournalEntryType.Run, MessageType.RunCommand, new byte[] { 2 }));
+        journal.SetReplayBoundary(3);
+
+        var first = journal.TakeReplayEntry();
+        Assert.Equal(JournalEntryType.Sleep, first.Type);
+        Assert.Equal(MessageType.SleepCommand, first.CommandType);
+        Assert.Equal(1, first.Result.Span[0]);
+        Assert.Equal(2, journal.Count);
+        Assert.True(journal.IsReplaying);
+
+        var second = journal.TakeReplayEntry();
+        Assert.Equal(JournalEntryType.Run, second.Type);
+        Assert.Equal(MessageType.RunCommand, second.CommandType);
+        Assert.Equal(3, journal.Count);
+        Assert.False(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void TakeReplayEntry_WhenNotReplaying_Throws()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(0);
+
+        Assert.Throws<InvalidOperationException>(() => journal.TakeReplayEntry());
+    }
+
+    [Fact]
+    public void TakeReplayEntry_WithoutStagedEntry_ReturnsDefaultAndAdvances()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(1);
+
+        // Journal initialized without a start-up drain (no staged entries) — legacy/test path.
+        var entry = journal.TakeReplayEntry();
+
+        Assert.False(entry.IsCompleted);
+        Assert.True(entry.Result.IsEmpty);
+        Assert.Equal(1, journal.Count);
+        Assert.False(journal.IsReplaying);
+    }
+
+    [Fact]
+    public void StageReplay_GrowsBeyondInitialCapacity()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(2);
+
+        journal.Append(JournalEntry.Completed(JournalEntryType.Input, ReadOnlyMemory<byte>.Empty));
+        for (var i = 0; i < 64; i++)
+            journal.StageReplay(JournalEntry.Replayed(
+                JournalEntryType.Run, MessageType.RunCommand, new[] { (byte)i }));
+        journal.SetReplayBoundary(65);
+
+        for (var i = 0; i < 64; i++)
+        {
+            var entry = journal.TakeReplayEntry();
+            Assert.Equal((byte)i, entry.Result.Span[0]);
+        }
+
+        Assert.False(journal.IsReplaying);
+        Assert.Equal(65, journal.Count);
+    }
+
+    [Fact]
+    public void Append_AfterReplayConsumed_ContinuesFromBoundary()
+    {
+        using var journal = new InvocationJournal();
+        journal.Initialize(2);
+
+        journal.Append(JournalEntry.Completed(JournalEntryType.Input, ReadOnlyMemory<byte>.Empty));
+        journal.StageReplay(JournalEntry.Replayed(
+            JournalEntryType.Sleep, MessageType.SleepCommand, ReadOnlyMemory<byte>.Empty));
+        journal.SetReplayBoundary(2);
+
+        journal.TakeReplayEntry();
+        Assert.False(journal.IsReplaying);
+
+        var index = journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        Assert.Equal(2, index);
+        Assert.Equal(3, journal.Count);
     }
 }

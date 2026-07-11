@@ -25,6 +25,29 @@ public class ProtobufCodecTests
         Assert.Equal("my-key", fields.Key);
         Assert.Equal(5u, fields.KnownEntries);
         Assert.Equal(42ul, fields.RandomSeed);
+        Assert.False(fields.IsPartialState);
+        Assert.Null(fields.Scope);
+        Assert.Null(fields.LimitKey);
+        Assert.Null(fields.IdempotencyKey);
+    }
+
+    [Fact]
+    public void ParseStartMessage_ExtractsV7ScopeFields()
+    {
+        var msg = new Gen.StartMessage
+        {
+            DebugId = "inv-scoped",
+            KnownEntries = 1,
+            Scope = "my-scope",
+            LimitKey = "tenant-42",
+            IdempotencyKey = "idem-1"
+        };
+
+        var fields = ProtobufCodec.ParseStartMessage(msg.ToByteArray());
+
+        Assert.Equal("my-scope", fields.Scope);
+        Assert.Equal("tenant-42", fields.LimitKey);
+        Assert.Equal("idem-1", fields.IdempotencyKey);
     }
 
     [Fact]
@@ -60,7 +83,7 @@ public class ProtobufCodecTests
     }
 
     [Fact]
-    public void ParseStartMessage_PartialState_ReturnsNullEagerState()
+    public void ParseStartMessage_EmptyPartialState_ReturnsNullEagerState()
     {
         var msg = new Gen.StartMessage
         {
@@ -70,6 +93,77 @@ public class ProtobufCodecTests
 
         var fields = ProtobufCodec.ParseStartMessage(msg.ToByteArray());
         Assert.Null(fields.EagerState);
+        Assert.True(fields.IsPartialState);
+    }
+
+    [Fact]
+    public void ParseStartMessage_PartialStateWithEntries_KeepsEntries()
+    {
+        // A partial map still resolves the keys it contains — dropping them (the pre-V7
+        // behavior) forced every read onto the lazy path.
+        var msg = new Gen.StartMessage
+        {
+            DebugId = "inv-partial-entries",
+            PartialState = true
+        };
+        msg.StateMap.Add(new Gen.StartMessage.Types.StateEntry
+        {
+            Key = ByteString.CopyFromUtf8("known"),
+            Value = ByteString.CopyFrom(7)
+        });
+
+        var fields = ProtobufCodec.ParseStartMessage(msg.ToByteArray());
+
+        Assert.True(fields.IsPartialState);
+        Assert.NotNull(fields.EagerState);
+        Assert.Equal(new byte[] { 7 }, fields.EagerState!["known"].ToArray());
+    }
+
+    [Fact]
+    public void CreateGetEagerStateCommand_WithValue_EmbedsValue()
+    {
+        var payload = ProtobufCodec.CreateGetEagerStateCommand("count", new byte[] { 1, 2 }).ToByteArray();
+
+        var msg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(payload);
+        Assert.Equal("count", msg.Key.ToStringUtf8());
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Value, msg.ResultCase);
+        Assert.Equal(new byte[] { 1, 2 }, msg.Value.Content.ToByteArray());
+    }
+
+    [Fact]
+    public void CreateGetEagerStateCommand_WithNull_EmbedsVoid()
+    {
+        var payload = ProtobufCodec.CreateGetEagerStateCommand("missing", null).ToByteArray();
+
+        var msg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(payload);
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Void, msg.ResultCase);
+    }
+
+    [Fact]
+    public void CreateGetEagerStateKeysCommand_EmbedsKeys()
+    {
+        var payload = ProtobufCodec.CreateGetEagerStateKeysCommand(["a", "b"]).ToByteArray();
+
+        Assert.Equal(["a", "b"], ProtobufCodec.ParseEagerStateKeys(payload));
+    }
+
+    [Fact]
+    public void CreateErrorMessage_DefaultBehavior_IsRetryAndNotSerialized()
+    {
+        var msg = ProtobufCodec.CreateErrorMessage(500, "boom");
+
+        Assert.Equal(Gen.ErrorBehavior.Retry, msg.Behavior);
+        // RETRY is wire value 0: the field is omitted, byte-identical to a pre-V7 ErrorMessage.
+        var legacy = new Gen.ErrorMessage { Code = 500, Message = "boom" };
+        Assert.Equal(legacy.ToByteArray(), msg.ToByteArray());
+    }
+
+    [Fact]
+    public void CreateErrorMessage_ExplicitBehavior_RoundTrips()
+    {
+        var payload = ProtobufCodec.CreateErrorMessage(500, "stop", Gen.ErrorBehavior.Fail).ToByteArray();
+
+        Assert.Equal(Gen.ErrorBehavior.Fail, Gen.ErrorMessage.Parser.ParseFrom(payload).Behavior);
     }
 
     [Fact]

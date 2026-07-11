@@ -7,8 +7,12 @@ using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.Serialization.SystemTextJson;
+using Microsoft.Extensions.Logging;
+using Restate.Sdk.Hosting;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Identity;
+using Restate.Sdk.Internal.Protocol;
 
 [assembly: LambdaSerializer(typeof(DefaultLambdaJsonSerializer))]
 
@@ -41,7 +45,12 @@ public abstract class RestateLambdaHandler
 
     private readonly List<Type> _serviceTypes = [];
 
+    private readonly List<string> _identityKeys = [];
+
     private readonly ServiceRegistry _registry;
+
+    private ILoggerFactory? _loggerFactory;
+    private readonly RequestIdentityVerifier? _identityVerifier;
 
     /// <summary>
     ///     Initializes the Lambda handler, building the service registry from registered services.
@@ -50,7 +59,8 @@ public abstract class RestateLambdaHandler
     {
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
-        _handler = new InvocationHandler();
+        _handler = new InvocationHandler(_loggerFactory);
+        _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
     }
 
     /// <summary>
@@ -59,6 +69,43 @@ public abstract class RestateLambdaHandler
     protected void Bind<TService>() where TService : class
     {
         _serviceTypes.Add(typeof(TService));
+    }
+
+    /// <summary>
+    ///     Configures the logger factory used for SDK logging and <see cref="Context.Logger" />.
+    ///     Call from <see cref="Register" />. When not configured, logging is disabled.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the invocation pipeline has already
+    ///     been built and a late factory would be silently ignored.
+    /// </exception>
+    protected void UseLoggerFactory(ILoggerFactory loggerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(UseLoggerFactory)} must be called from {nameof(Register)}(); " +
+                "the invocation pipeline has already been built.");
+        }
+
+        _loggerFactory = loggerFactory;
+    }
+
+    /// <summary>
+    ///     Configures Restate identity public keys (<c>publickeyv1_&lt;base58&gt;</c>) used to verify
+    ///     that incoming requests originate from a trusted Restate instance. Call from
+    ///     <see cref="Register" />. When at least one key is configured, every request must carry a
+    ///     valid <c>x-restate-signature-scheme: v1</c> signature; requests that fail verification are
+    ///     rejected with <c>401 Unauthorized</c>. When no keys are configured, requests are not verified.
+    /// </summary>
+    /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    protected void WithIdentityKeys(params string[] keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        _identityKeys.AddRange(keys);
     }
 
     /// <summary>
@@ -74,29 +121,95 @@ public abstract class RestateLambdaHandler
     {
         var path = request.Path ?? "";
 
-        if (path.EndsWith("/discover", StringComparison.OrdinalIgnoreCase)) return HandleDiscovery();
+        // Identity verification runs before anything else touches the request.
+        if (_identityVerifier is not null && !VerifyRequestIdentity(_identityVerifier, request, path))
+            return new APIGatewayProxyResponse { StatusCode = 401 };
+
+        if (path.EndsWith("/discover", StringComparison.OrdinalIgnoreCase)) return HandleDiscovery(request);
 
         return await HandleInvocation(request, context).ConfigureAwait(false);
     }
 
-    private APIGatewayProxyResponse HandleDiscovery()
+    /// <summary>
+    ///     Verifies the request identity headers against the configured keys.
+    ///     The token audience must equal the request path (for example <c>/invoke/Greeter/Greet</c>).
+    /// </summary>
+    private static bool VerifyRequestIdentity(
+        RequestIdentityVerifier verifier, APIGatewayProxyRequest request, string path)
     {
+        var scheme = GetHeader(request, RequestIdentityVerifier.SignatureSchemeHeader);
+        var token = GetHeader(request, RequestIdentityVerifier.JwtHeader);
+        return verifier.Verify(scheme, token, path);
+    }
+
+    /// <summary>
+    ///     Looks up a header case-insensitively (API Gateway header casing varies), checking both
+    ///     the single-value and multi-value maps. Repeated values are ambiguous and yield <see langword="null" />.
+    ///     <see cref="APIGatewayProxyRequest.MultiValueHeaders" /> is consulted first: API Gateway
+    ///     REST APIs populate both maps, and <see cref="APIGatewayProxyRequest.Headers" /> keeps only
+    ///     the last value of a repeated header, which would mask the ambiguity.
+    /// </summary>
+    private static string? GetHeader(APIGatewayProxyRequest request, string name)
+    {
+        if (request.MultiValueHeaders is not null)
+            foreach (var header in request.MultiValueHeaders)
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return header.Value is [var single] ? single : null;
+
+        if (request.Headers is not null)
+            foreach (var header in request.Headers)
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return header.Value;
+
+        return null;
+    }
+
+    private APIGatewayProxyResponse HandleDiscovery(APIGatewayProxyRequest request)
+    {
+        // Mirror the ASP.NET endpoint's manifest version negotiation via the Accept header.
+        // API Gateway does not normalize header casing, so scan case-insensitively.
+        var acceptHeader = GetHeader(request.Headers, "accept");
+        var selectedContentType = RestateEndpointRouteBuilderExtensions.NegotiateVersion(acceptHeader);
+
+        if (selectedContentType is null)
+            return new APIGatewayProxyResponse
+            {
+                StatusCode = 415,
+                Body = $"Unsupported discovery manifest version. Accept header was '{acceptHeader}'"
+            };
+
         var manifest = EndpointManifest.FromRegistry(_registry, "REQUEST_RESPONSE");
         var json = JsonSerializer.Serialize(manifest, DiscoveryJsonContext.Default.EndpointManifest);
 
-        // Lambda deployments typically use v1 since the runtime discovers via API Gateway.
-        // Version negotiation is not needed here (no Accept header in Lambda proxy events).
         return new APIGatewayProxyResponse
         {
             StatusCode = 200,
             Headers = new Dictionary<string, string>
             {
-                ["content-type"] = "application/vnd.restate.endpointmanifest.v3+json",
+                ["content-type"] = selectedContentType,
                 ["x-restate-server"] = ServerVersion
             },
             Body = json,
             IsBase64Encoded = false
         };
+    }
+
+    /// <summary>
+    ///     Case-insensitive header lookup. API Gateway proxy events preserve the original
+    ///     header casing from the client, so a plain dictionary lookup is not reliable.
+    /// </summary>
+    private static string? GetHeader(IDictionary<string, string>? headers, string name)
+    {
+        if (headers is null)
+            return null;
+
+        foreach (var header in headers)
+        {
+            if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                return header.Value;
+        }
+
+        return null;
     }
 
     private async Task<APIGatewayProxyResponse> HandleInvocation(APIGatewayProxyRequest request, ILambdaContext context)
@@ -128,6 +241,16 @@ public abstract class RestateLambdaHandler
             {
                 StatusCode = 404,
                 Body = $"Handler '{handlerName}' not found on service '{serviceName}'"
+            };
+
+        // Negotiate the service protocol version from the request content type.
+        var contentType = GetHeader(request.Headers, "content-type");
+        if (!ServiceProtocolVersionExtensions.TryParse(contentType, out var protocolVersion))
+            return new APIGatewayProxyResponse
+            {
+                StatusCode = 415,
+                Body = $"Unsupported invocation content type '{contentType}'. " +
+                       $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}"
             };
 
         // Decode the binary protocol body
@@ -164,6 +287,7 @@ public abstract class RestateLambdaHandler
                 service,
                 handlerDef,
                 services,
+                protocolVersion,
                 cts.Token).ConfigureAwait(false);
         }
         finally
@@ -181,7 +305,8 @@ public abstract class RestateLambdaHandler
             StatusCode = 200,
             Headers = new Dictionary<string, string>
             {
-                ["content-type"] = "application/vnd.restate.invocation.v6",
+                // Echo the negotiated protocol version back to the runtime.
+                ["content-type"] = protocolVersion.ToContentType(),
                 ["x-restate-server"] = ServerVersion
             },
             Body = Convert.ToBase64String(responseBody),

@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Restate.Sdk;
 
 /// <summary>
@@ -12,6 +15,14 @@ public abstract class Context : IContext
 
     /// <summary>Console that is silent during replay to avoid duplicate output.</summary>
     public abstract DurableConsole Console { get; }
+
+    /// <summary>
+    ///     Logger scoped to the current invocation. Output is suppressed while the invocation
+    ///     replays journal entries, so re-executed handler code does not log duplicate lines.
+    ///     Defaults to <see cref="NullLogger.Instance" /> for custom test doubles;
+    ///     the SDK-provided contexts override it with a replay-aware logger.
+    /// </summary>
+    public virtual ILogger Logger => NullLogger.Instance;
 
     /// <summary>Request headers from the original invocation.</summary>
     public abstract IReadOnlyDictionary<string, string> Headers { get; }

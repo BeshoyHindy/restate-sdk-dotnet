@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Restate.Sdk;
 
 /// <summary>
@@ -25,6 +27,9 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
 
     /// <inheritdoc />
     public override DurableConsole Console => BaseContext.Console;
+
+    /// <inheritdoc />
+    public override ILogger Logger => BaseContext.Logger;
 
     /// <inheritdoc />
     public override IReadOnlyDictionary<string, string> Headers => BaseContext.Headers;

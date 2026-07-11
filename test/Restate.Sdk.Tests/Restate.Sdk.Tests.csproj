@@ -7,6 +7,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!-- Test-only: Ed25519 signing for identity tests (the SDK ships verify-only code) -->
+        <PackageReference Include="BouncyCastle.Cryptography"/>
+        <!-- Test-only: in-memory ASP.NET Core server for endpoint-level identity tests -->
+        <PackageReference Include="Microsoft.AspNetCore.TestHost"/>
         <PackageReference Include="coverlet.collector">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -21,6 +25,7 @@
 
     <ItemGroup>
         <ProjectReference Include="../../src/Restate.Sdk/Restate.Sdk.csproj"/>
+        <ProjectReference Include="../../src/Restate.Sdk.Lambda/Restate.Sdk.Lambda.csproj"/>
         <ProjectReference Include="../../src/Restate.Sdk.Testing/Restate.Sdk.Testing.csproj"/>
         <ProjectReference Include="../../src/Restate.Sdk.Generators/Restate.Sdk.Generators.csproj"
                           OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>

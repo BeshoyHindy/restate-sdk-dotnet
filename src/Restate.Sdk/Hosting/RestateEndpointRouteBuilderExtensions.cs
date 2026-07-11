@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Identity;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Hosting;
 
@@ -20,9 +22,11 @@ public static class RestateEndpointRouteBuilderExtensions
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
 
     // Supported manifest versions, highest priority first.
-    // v4 adds lambda compression fields we don't support yet, so we cap at v3.
+    // v4 only adds the optional lambdaCompression field; we omit it (absence = no
+    // compression), which is a valid v4 manifest, so we can advertise v4.
     private static readonly string[] SupportedContentTypes =
     [
+        "application/vnd.restate.endpointmanifest.v4+json",
         "application/vnd.restate.endpointmanifest.v3+json",
         "application/vnd.restate.endpointmanifest.v2+json",
         "application/vnd.restate.endpointmanifest.v1+json",
@@ -38,12 +42,14 @@ public static class RestateEndpointRouteBuilderExtensions
             return SupportedContentTypes[^1];
 
         // Check version-specific substrings directly (highest priority first)
-        if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v4", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[0];
-        if (acceptHeader.Contains("endpointmanifest.v2", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[1];
-        if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v2", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[2];
+        if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
+            return SupportedContentTypes[3];
 
         return null; // No mutually supported version → 415
     }
@@ -62,6 +68,9 @@ public static class RestateEndpointRouteBuilderExtensions
         var registry = endpoints.ServiceProvider.GetRequiredService<ServiceRegistry>();
         var handler = endpoints.ServiceProvider.GetRequiredService<InvocationHandler>();
 
+        // Registered by AddRestate when identity keys are configured; null → no verification.
+        var identityVerifier = endpoints.ServiceProvider.GetService<RequestIdentityVerifier>();
+
         // Cache the discovery manifest as a byte[] — it never changes after startup.
         // Uses source-generated DiscoveryJsonContext for AOT compatibility.
         var cachedManifestBytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -69,6 +78,13 @@ public static class RestateEndpointRouteBuilderExtensions
 
         endpoints.MapGet("/discover", async context =>
         {
+            // Identity verification runs before anything else touches the request.
+            if (identityVerifier is not null && !VerifyRequestIdentity(identityVerifier, context))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
             var selectedContentType = NegotiateVersion(context.Request.Headers.Accept.ToString());
 
             if (selectedContentType is null)
@@ -85,6 +101,13 @@ public static class RestateEndpointRouteBuilderExtensions
 
         endpoints.MapPost("/invoke/{service}/{handlerName}", async context =>
         {
+            // Identity verification runs before anything else touches the request.
+            if (identityVerifier is not null && !VerifyRequestIdentity(identityVerifier, context))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
             var serviceName = context.Request.RouteValues["service"]?.ToString();
             var handlerName = context.Request.RouteValues["handlerName"]?.ToString();
 
@@ -108,8 +131,18 @@ public static class RestateEndpointRouteBuilderExtensions
                 return;
             }
 
+            // Negotiate the service protocol version from the request content type.
+            if (!ServiceProtocolVersionExtensions.TryParse(context.Request.ContentType, out var protocolVersion))
+            {
+                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                await context.Response.WriteAsync(
+                    $"Unsupported invocation content type '{context.Request.ContentType}'. " +
+                    $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}");
+                return;
+            }
+
             context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "application/vnd.restate.invocation.v6";
+            context.Response.ContentType = protocolVersion.ToContentType();
             context.Response.Headers.Append("x-restate-server", ServerVersion);
 
             // Disable response buffering so protocol frames are written directly to the HTTP/2 stream.
@@ -127,6 +160,7 @@ public static class RestateEndpointRouteBuilderExtensions
                     service,
                     handlerDef,
                     context.RequestServices,
+                    protocolVersion,
                     context.RequestAborted);
             }
             catch
@@ -141,5 +175,24 @@ public static class RestateEndpointRouteBuilderExtensions
         });
 
         return endpoints;
+    }
+
+    /// <summary>
+    ///     Verifies the request identity headers against the configured keys.
+    ///     The token audience must equal the request path (for example <c>/invoke/Greeter/Greet</c>).
+    /// </summary>
+    private static bool VerifyRequestIdentity(RequestIdentityVerifier verifier, HttpContext context)
+    {
+        var scheme = context.Request.Headers[RequestIdentityVerifier.SignatureSchemeHeader];
+        var token = context.Request.Headers[RequestIdentityVerifier.JwtHeader];
+
+        // Repeated identity headers are ambiguous — reject rather than pick one.
+        if (scheme.Count > 1 || token.Count > 1)
+            return false;
+
+        return verifier.Verify(
+            scheme.Count == 1 ? scheme[0] : null,
+            token.Count == 1 ? token[0] : null,
+            context.Request.Path.Value ?? "");
     }
 }
