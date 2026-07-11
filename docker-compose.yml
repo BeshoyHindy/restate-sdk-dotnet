@@ -1,6 +1,6 @@
 services:
   restate:
-    image: docker.io/restatedev/restate:latest
+    image: docker.io/restatedev/restate:1.7
     container_name: restate-server
     ports:
       - "8080:8080"

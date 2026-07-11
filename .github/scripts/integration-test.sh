@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PIDS=()
 AOT_DIR=""
-RESTATE_IMAGE="docker.io/restatedev/restate:latest"
+RESTATE_IMAGE="docker.io/restatedev/restate:1.7"
 RESTATE_CONTAINER="restate-ci"
 
 cleanup() {
