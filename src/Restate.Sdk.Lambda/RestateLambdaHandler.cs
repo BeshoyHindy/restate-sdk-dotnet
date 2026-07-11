@@ -9,6 +9,7 @@ using Amazon.Lambda.Core;
 using Amazon.Lambda.Serialization.SystemTextJson;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Identity;
 
 [assembly: LambdaSerializer(typeof(DefaultLambdaJsonSerializer))]
 
@@ -41,7 +42,11 @@ public abstract class RestateLambdaHandler
 
     private readonly List<Type> _serviceTypes = [];
 
+    private readonly List<string> _identityKeys = [];
+
     private readonly ServiceRegistry _registry;
+
+    private readonly RequestIdentityVerifier? _identityVerifier;
 
     /// <summary>
     ///     Initializes the Lambda handler, building the service registry from registered services.
@@ -51,6 +56,7 @@ public abstract class RestateLambdaHandler
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
         _handler = new InvocationHandler();
+        _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
     }
 
     /// <summary>
@@ -59,6 +65,21 @@ public abstract class RestateLambdaHandler
     protected void Bind<TService>() where TService : class
     {
         _serviceTypes.Add(typeof(TService));
+    }
+
+    /// <summary>
+    ///     Configures Restate identity public keys (<c>publickeyv1_&lt;base58&gt;</c>) used to verify
+    ///     that incoming requests originate from a trusted Restate instance. Call from
+    ///     <see cref="Register" />. When at least one key is configured, every request must carry a
+    ///     valid <c>x-restate-signature-scheme: v1</c> signature; requests that fail verification are
+    ///     rejected with <c>401 Unauthorized</c>. When no keys are configured, requests are not verified.
+    /// </summary>
+    /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    protected void WithIdentityKeys(params string[] keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        _identityKeys.AddRange(keys);
     }
 
     /// <summary>
@@ -74,9 +95,44 @@ public abstract class RestateLambdaHandler
     {
         var path = request.Path ?? "";
 
+        // Identity verification runs before anything else touches the request.
+        if (_identityVerifier is not null && !VerifyRequestIdentity(_identityVerifier, request, path))
+            return new APIGatewayProxyResponse { StatusCode = 401 };
+
         if (path.EndsWith("/discover", StringComparison.OrdinalIgnoreCase)) return HandleDiscovery();
 
         return await HandleInvocation(request, context).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Verifies the request identity headers against the configured keys.
+    ///     The token audience must equal the request path (for example <c>/invoke/Greeter/Greet</c>).
+    /// </summary>
+    private static bool VerifyRequestIdentity(
+        RequestIdentityVerifier verifier, APIGatewayProxyRequest request, string path)
+    {
+        var scheme = GetHeader(request, RequestIdentityVerifier.SignatureSchemeHeader);
+        var token = GetHeader(request, RequestIdentityVerifier.JwtHeader);
+        return verifier.Verify(scheme, token, path);
+    }
+
+    /// <summary>
+    ///     Looks up a header case-insensitively (API Gateway header casing varies), checking both
+    ///     the single-value and multi-value maps. Repeated values are ambiguous and yield <see langword="null" />.
+    /// </summary>
+    private static string? GetHeader(APIGatewayProxyRequest request, string name)
+    {
+        if (request.Headers is not null)
+            foreach (var header in request.Headers)
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return header.Value;
+
+        if (request.MultiValueHeaders is not null)
+            foreach (var header in request.MultiValueHeaders)
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return header.Value is [var single] ? single : null;
+
+        return null;
     }
 
     private APIGatewayProxyResponse HandleDiscovery()
