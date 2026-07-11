@@ -1,0 +1,214 @@
+#nullable enable
+Restate.Sdk.Testing.MockContext
+Restate.Sdk.Testing.MockContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
+Restate.Sdk.Testing.MockContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Restate.Sdk.Testing.MockContext.CurrentTime.get -> System.DateTimeOffset
+Restate.Sdk.Testing.MockContext.CurrentTime.set -> void
+Restate.Sdk.Testing.MockContext.MockContext(string? invocationId = null) -> void
+Restate.Sdk.Testing.MockContext.RegisterClient<TClient>(TClient! client) -> void
+Restate.Sdk.Testing.MockContext.Sends.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSend!>!
+Restate.Sdk.Testing.MockContext.SetLogger(Microsoft.Extensions.Logging.ILogger! logger) -> void
+Restate.Sdk.Testing.MockContext.SetupAwakeable<T>(T result) -> void
+Restate.Sdk.Testing.MockContext.SetupCall<T>(string! service, string! handler, T result) -> void
+Restate.Sdk.Testing.MockContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
+Restate.Sdk.Testing.MockContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
+Restate.Sdk.Testing.MockObjectContext
+Restate.Sdk.Testing.MockObjectContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
+Restate.Sdk.Testing.MockObjectContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Restate.Sdk.Testing.MockObjectContext.GetStateValue<T>(string! key) -> T?
+Restate.Sdk.Testing.MockObjectContext.HasState(string! key) -> bool
+Restate.Sdk.Testing.MockObjectContext.MockObjectContext(string! key = "test-key", string? invocationId = null) -> void
+Restate.Sdk.Testing.MockObjectContext.RegisterClient<TClient>(TClient! client) -> void
+Restate.Sdk.Testing.MockObjectContext.Sends.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSend!>!
+Restate.Sdk.Testing.MockObjectContext.SetupAwakeable<T>(T result) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupCall<T>(string! service, string! handler, T result) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupState<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+Restate.Sdk.Testing.MockObjectContext.SetupState<T>(string! key, T value) -> void
+Restate.Sdk.Testing.MockObjectContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
+Restate.Sdk.Testing.MockSharedObjectContext
+Restate.Sdk.Testing.MockSharedObjectContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
+Restate.Sdk.Testing.MockSharedObjectContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Restate.Sdk.Testing.MockSharedObjectContext.GetStateValue<T>(string! key) -> T?
+Restate.Sdk.Testing.MockSharedObjectContext.HasState(string! key) -> bool
+Restate.Sdk.Testing.MockSharedObjectContext.MockSharedObjectContext(string! key = "test-key", string? invocationId = null) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.RegisterClient<TClient>(TClient! client) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.Sends.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSend!>!
+Restate.Sdk.Testing.MockSharedObjectContext.SetupAwakeable<T>(T result) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupCall<T>(string! service, string! handler, T result) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupState<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.SetupState<T>(string! key, T value) -> void
+Restate.Sdk.Testing.MockSharedObjectContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
+Restate.Sdk.Testing.MockSharedWorkflowContext
+Restate.Sdk.Testing.MockSharedWorkflowContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
+Restate.Sdk.Testing.MockSharedWorkflowContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Restate.Sdk.Testing.MockSharedWorkflowContext.GetPromiseRejection(string! name) -> string?
+Restate.Sdk.Testing.MockSharedWorkflowContext.GetPromiseValue<T>(string! name) -> T?
+Restate.Sdk.Testing.MockSharedWorkflowContext.GetStateValue<T>(string! key) -> T?
+Restate.Sdk.Testing.MockSharedWorkflowContext.HasState(string! key) -> bool
+Restate.Sdk.Testing.MockSharedWorkflowContext.IsPromiseRejected(string! name) -> bool
+Restate.Sdk.Testing.MockSharedWorkflowContext.IsPromiseResolved(string! name) -> bool
+Restate.Sdk.Testing.MockSharedWorkflowContext.MockSharedWorkflowContext(string! key = "test-key", string? invocationId = null) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.RegisterClient<TClient>(TClient! client) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.Sends.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSend!>!
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupAwakeable<T>(T result) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupCall<T>(string! service, string! handler, T result) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupPromise<T>(string! name, T value) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupState<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.SetupState<T>(string! key, T value) -> void
+Restate.Sdk.Testing.MockSharedWorkflowContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
+Restate.Sdk.Testing.MockWorkflowContext
+Restate.Sdk.Testing.MockWorkflowContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
+Restate.Sdk.Testing.MockWorkflowContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Restate.Sdk.Testing.MockWorkflowContext.GetPromiseRejection(string! name) -> string?
+Restate.Sdk.Testing.MockWorkflowContext.GetPromiseValue<T>(string! name) -> T?
+Restate.Sdk.Testing.MockWorkflowContext.GetStateValue<T>(string! key) -> T?
+Restate.Sdk.Testing.MockWorkflowContext.HasState(string! key) -> bool
+Restate.Sdk.Testing.MockWorkflowContext.IsPromiseRejected(string! name) -> bool
+Restate.Sdk.Testing.MockWorkflowContext.IsPromiseResolved(string! name) -> bool
+Restate.Sdk.Testing.MockWorkflowContext.MockWorkflowContext(string! key = "test-key", string? invocationId = null) -> void
+Restate.Sdk.Testing.MockWorkflowContext.RegisterClient<TClient>(TClient! client) -> void
+Restate.Sdk.Testing.MockWorkflowContext.Sends.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSend!>!
+Restate.Sdk.Testing.MockWorkflowContext.SetupAwakeable<T>(T result) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupCall<T>(string! service, string! handler, T result) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupPromise<T>(string! name, T value) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupState<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+Restate.Sdk.Testing.MockWorkflowContext.SetupState<T>(string! key, T value) -> void
+Restate.Sdk.Testing.MockWorkflowContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
+Restate.Sdk.Testing.RecordedCall
+Restate.Sdk.Testing.RecordedCall.<Clone>$() -> Restate.Sdk.Testing.RecordedCall!
+Restate.Sdk.Testing.RecordedCall.Deconstruct(out string! Service, out string? Key, out string! Handler, out object? Request, out string? IdempotencyKey) -> void
+Restate.Sdk.Testing.RecordedCall.Equals(Restate.Sdk.Testing.RecordedCall? other) -> bool
+Restate.Sdk.Testing.RecordedCall.Handler.get -> string!
+Restate.Sdk.Testing.RecordedCall.Handler.init -> void
+Restate.Sdk.Testing.RecordedCall.IdempotencyKey.get -> string?
+Restate.Sdk.Testing.RecordedCall.IdempotencyKey.init -> void
+Restate.Sdk.Testing.RecordedCall.Key.get -> string?
+Restate.Sdk.Testing.RecordedCall.Key.init -> void
+Restate.Sdk.Testing.RecordedCall.RecordedCall(string! Service, string? Key, string! Handler, object? Request, string? IdempotencyKey = null) -> void
+Restate.Sdk.Testing.RecordedCall.Request.get -> object?
+Restate.Sdk.Testing.RecordedCall.Request.init -> void
+Restate.Sdk.Testing.RecordedCall.Service.get -> string!
+Restate.Sdk.Testing.RecordedCall.Service.init -> void
+Restate.Sdk.Testing.RecordedSend
+Restate.Sdk.Testing.RecordedSend.<Clone>$() -> Restate.Sdk.Testing.RecordedSend!
+Restate.Sdk.Testing.RecordedSend.Deconstruct(out string! Service, out string? Key, out string! Handler, out object? Request, out System.TimeSpan? Delay, out string? IdempotencyKey) -> void
+Restate.Sdk.Testing.RecordedSend.Delay.get -> System.TimeSpan?
+Restate.Sdk.Testing.RecordedSend.Delay.init -> void
+Restate.Sdk.Testing.RecordedSend.Equals(Restate.Sdk.Testing.RecordedSend? other) -> bool
+Restate.Sdk.Testing.RecordedSend.Handler.get -> string!
+Restate.Sdk.Testing.RecordedSend.Handler.init -> void
+Restate.Sdk.Testing.RecordedSend.IdempotencyKey.get -> string?
+Restate.Sdk.Testing.RecordedSend.IdempotencyKey.init -> void
+Restate.Sdk.Testing.RecordedSend.Key.get -> string?
+Restate.Sdk.Testing.RecordedSend.Key.init -> void
+Restate.Sdk.Testing.RecordedSend.RecordedSend(string! Service, string? Key, string! Handler, object? Request, System.TimeSpan? Delay, string? IdempotencyKey) -> void
+Restate.Sdk.Testing.RecordedSend.Request.get -> object?
+Restate.Sdk.Testing.RecordedSend.Request.init -> void
+Restate.Sdk.Testing.RecordedSend.Service.get -> string!
+Restate.Sdk.Testing.RecordedSend.Service.init -> void
+Restate.Sdk.Testing.RecordedSleep
+Restate.Sdk.Testing.RecordedSleep.<Clone>$() -> Restate.Sdk.Testing.RecordedSleep!
+Restate.Sdk.Testing.RecordedSleep.Deconstruct(out System.TimeSpan Duration) -> void
+Restate.Sdk.Testing.RecordedSleep.Duration.get -> System.TimeSpan
+Restate.Sdk.Testing.RecordedSleep.Duration.init -> void
+Restate.Sdk.Testing.RecordedSleep.Equals(Restate.Sdk.Testing.RecordedSleep? other) -> bool
+Restate.Sdk.Testing.RecordedSleep.RecordedSleep(System.TimeSpan Duration) -> void
+override Restate.Sdk.Testing.MockContext.Aborted.get -> System.Threading.CancellationToken
+override Restate.Sdk.Testing.MockContext.All<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T[]!>
+override Restate.Sdk.Testing.MockContext.AllSettled<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<Restate.Sdk.SettledResult<T>[]!>
+override Restate.Sdk.Testing.MockContext.Any<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
+override Restate.Sdk.Testing.MockContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.Console.get -> Restate.Sdk.DurableConsole!
+override Restate.Sdk.Testing.MockContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockContext.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+override Restate.Sdk.Testing.MockContext.InvocationId.get -> string!
+override Restate.Sdk.Testing.MockContext.Logger.get -> Microsoft.Extensions.Logging.ILogger!
+override Restate.Sdk.Testing.MockContext.Now() -> System.Threading.Tasks.ValueTask<System.DateTimeOffset>
+override Restate.Sdk.Testing.MockContext.ObjectClient<TClient>(string! key) -> TClient!
+override Restate.Sdk.Testing.MockContext.ObjectSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.Testing.MockContext.Race<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Random.get -> Restate.Sdk.DurableRandom!
+override Restate.Sdk.Testing.MockContext.RejectAwakeable(string! id, string! reason) -> void
+override Restate.Sdk.Testing.MockContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<T>! action) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.ServiceClient<TClient>() -> TClient!
+override Restate.Sdk.Testing.MockContext.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.Testing.MockContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
+override Restate.Sdk.Testing.MockContext.WaitAll(params Restate.Sdk.IDurableFuture![]! futures) -> System.Collections.Generic.IAsyncEnumerable<(Restate.Sdk.IDurableFuture! future, System.Exception? error)>!
+override Restate.Sdk.Testing.MockContext.WorkflowClient<TClient>(string! key) -> TClient!
+override Restate.Sdk.Testing.MockContext.WorkflowSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.Testing.MockObjectContext.Clear(string! key) -> void
+override Restate.Sdk.Testing.MockObjectContext.ClearAll() -> void
+override Restate.Sdk.Testing.MockObjectContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockObjectContext.Key.get -> string!
+override Restate.Sdk.Testing.MockObjectContext.Set<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+override Restate.Sdk.Testing.MockObjectContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+override Restate.Sdk.Testing.MockSharedObjectContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockSharedObjectContext.Key.get -> string!
+override Restate.Sdk.Testing.MockSharedObjectContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+override Restate.Sdk.Testing.MockSharedWorkflowContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockSharedWorkflowContext.Key.get -> string!
+override Restate.Sdk.Testing.MockSharedWorkflowContext.PeekPromise<T>(string! name) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockSharedWorkflowContext.RejectPromise(string! name, string! reason) -> void
+override Restate.Sdk.Testing.MockSharedWorkflowContext.ResolvePromise<T>(string! name, T payload) -> void
+override Restate.Sdk.Testing.MockSharedWorkflowContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+override Restate.Sdk.Testing.MockWorkflowContext.Clear(string! key) -> void
+override Restate.Sdk.Testing.MockWorkflowContext.ClearAll() -> void
+override Restate.Sdk.Testing.MockWorkflowContext.Get<T>(Restate.Sdk.StateKey<T> key) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockWorkflowContext.Key.get -> string!
+override Restate.Sdk.Testing.MockWorkflowContext.PeekPromise<T>(string! name) -> System.Threading.Tasks.ValueTask<T?>
+override Restate.Sdk.Testing.MockWorkflowContext.Promise<T>(string! name) -> System.Threading.Tasks.ValueTask<T>
+override Restate.Sdk.Testing.MockWorkflowContext.RejectPromise(string! name, string! reason) -> void
+override Restate.Sdk.Testing.MockWorkflowContext.ResolvePromise<T>(string! name, T payload) -> void
+override Restate.Sdk.Testing.MockWorkflowContext.Set<T>(Restate.Sdk.StateKey<T> key, T value) -> void
+override Restate.Sdk.Testing.MockWorkflowContext.StateKeys() -> System.Threading.Tasks.ValueTask<string![]!>
+override Restate.Sdk.Testing.RecordedCall.Equals(object? obj) -> bool
+override Restate.Sdk.Testing.RecordedCall.GetHashCode() -> int
+override Restate.Sdk.Testing.RecordedCall.ToString() -> string!
+override Restate.Sdk.Testing.RecordedSend.Equals(object? obj) -> bool
+override Restate.Sdk.Testing.RecordedSend.GetHashCode() -> int
+override Restate.Sdk.Testing.RecordedSend.ToString() -> string!
+override Restate.Sdk.Testing.RecordedSleep.Equals(object? obj) -> bool
+override Restate.Sdk.Testing.RecordedSleep.GetHashCode() -> int
+override Restate.Sdk.Testing.RecordedSleep.ToString() -> string!
+static Restate.Sdk.Testing.RecordedCall.operator !=(Restate.Sdk.Testing.RecordedCall? left, Restate.Sdk.Testing.RecordedCall? right) -> bool
+static Restate.Sdk.Testing.RecordedCall.operator ==(Restate.Sdk.Testing.RecordedCall? left, Restate.Sdk.Testing.RecordedCall? right) -> bool
+static Restate.Sdk.Testing.RecordedSend.operator !=(Restate.Sdk.Testing.RecordedSend? left, Restate.Sdk.Testing.RecordedSend? right) -> bool
+static Restate.Sdk.Testing.RecordedSend.operator ==(Restate.Sdk.Testing.RecordedSend? left, Restate.Sdk.Testing.RecordedSend? right) -> bool
+static Restate.Sdk.Testing.RecordedSleep.operator !=(Restate.Sdk.Testing.RecordedSleep? left, Restate.Sdk.Testing.RecordedSleep? right) -> bool
+static Restate.Sdk.Testing.RecordedSleep.operator ==(Restate.Sdk.Testing.RecordedSleep? left, Restate.Sdk.Testing.RecordedSleep? right) -> bool

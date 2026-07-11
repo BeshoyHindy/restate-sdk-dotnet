@@ -1,0 +1,32 @@
+#nullable enable
+Restate.Sdk.Testing.Containers.RestateBuilder
+Restate.Sdk.Testing.Containers.RestateBuilder.RestateBuilder() -> void
+Restate.Sdk.Testing.Containers.RestateBuilder.RestateBuilder(DotNet.Testcontainers.Images.IImage! image) -> void
+Restate.Sdk.Testing.Containers.RestateBuilder.RestateBuilder(string! image) -> void
+Restate.Sdk.Testing.Containers.RestateConfiguration
+Restate.Sdk.Testing.Containers.RestateConfiguration.RestateConfiguration() -> void
+Restate.Sdk.Testing.Containers.RestateConfiguration.RestateConfiguration(DotNet.Testcontainers.Configurations.IContainerConfiguration! resourceConfiguration) -> void
+Restate.Sdk.Testing.Containers.RestateConfiguration.RestateConfiguration(DotNet.Testcontainers.Configurations.IResourceConfiguration<Docker.DotNet.Models.CreateContainerParameters!>! resourceConfiguration) -> void
+Restate.Sdk.Testing.Containers.RestateConfiguration.RestateConfiguration(Restate.Sdk.Testing.Containers.RestateConfiguration! oldValue, Restate.Sdk.Testing.Containers.RestateConfiguration! newValue) -> void
+Restate.Sdk.Testing.Containers.RestateConfiguration.RestateConfiguration(Restate.Sdk.Testing.Containers.RestateConfiguration! resourceConfiguration) -> void
+Restate.Sdk.Testing.Containers.RestateContainer
+Restate.Sdk.Testing.Containers.RestateContainer.CreateIngressClient() -> Restate.Sdk.Client.RestateClient!
+Restate.Sdk.Testing.Containers.RestateContainer.GetAdminUri() -> System.Uri!
+Restate.Sdk.Testing.Containers.RestateContainer.GetIngressUri() -> System.Uri!
+Restate.Sdk.Testing.Containers.RestateContainer.RegisterDeploymentAsync(int hostPort, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Restate.Sdk.Testing.Containers.RestateContainer.RestateContainer(Restate.Sdk.Testing.Containers.RestateConfiguration! configuration) -> void
+Restate.Sdk.Testing.Containers.RestateTestHarness
+Restate.Sdk.Testing.Containers.RestateTestHarness.Client.get -> Restate.Sdk.Client.RestateClient!
+Restate.Sdk.Testing.Containers.RestateTestHarness.Container.get -> Restate.Sdk.Testing.Containers.RestateContainer!
+Restate.Sdk.Testing.Containers.RestateTestHarness.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.Image.get -> string!
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.Image.set -> void
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.RestateTestHarnessOptions() -> void
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.StartupTimeout.get -> System.TimeSpan
+Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.StartupTimeout.set -> void
+const Restate.Sdk.Testing.Containers.RestateBuilder.AdminPort = 9070 -> ushort
+const Restate.Sdk.Testing.Containers.RestateBuilder.IngressPort = 8080 -> ushort
+const Restate.Sdk.Testing.Containers.RestateBuilder.RestateImage = "docker.io/restatedev/restate:1.7" -> string!
+override Restate.Sdk.Testing.Containers.RestateBuilder.Build() -> Restate.Sdk.Testing.Containers.RestateContainer!
+static Restate.Sdk.Testing.Containers.RestateTestHarness.StartAsync(System.Action<Restate.Sdk.Hosting.RestateHostBuilder!>! configure, Restate.Sdk.Testing.Containers.RestateTestHarnessOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.Testing.Containers.RestateTestHarness!>!

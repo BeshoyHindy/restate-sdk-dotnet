@@ -31,9 +31,14 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Access=Internal: the generated messages live under Restate.Sdk.Internal.Protocol.Generated
+             and are consumed only by this assembly and its InternalsVisibleTo friends (tests,
+             benchmarks); public visibility would drag the whole protobuf surface into the tracked
+             public API baseline. -->
         <Protobuf Include="../../proto/dev/restate/service/protocol.proto"
                   GrpcServices="None"
-                  ProtoRoot="../../proto"/>
+                  ProtoRoot="../../proto"
+                  Access="Internal"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -62,5 +67,11 @@
                                     PackagePath="analyzers/dotnet/cs"/>
         </ItemGroup>
     </Target>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all"/>
+        <AdditionalFiles Include="PublicAPI.Shipped.txt"/>
+        <AdditionalFiles Include="PublicAPI.Unshipped.txt"/>
+    </ItemGroup>
 
 </Project>
