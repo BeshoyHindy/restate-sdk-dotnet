@@ -7,6 +7,7 @@ using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.Serialization.SystemTextJson;
+using Microsoft.Extensions.Logging;
 using Restate.Sdk.Hosting;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
@@ -48,6 +49,7 @@ public abstract class RestateLambdaHandler
 
     private readonly ServiceRegistry _registry;
 
+    private ILoggerFactory? _loggerFactory;
     private readonly RequestIdentityVerifier? _identityVerifier;
 
     /// <summary>
@@ -57,7 +59,7 @@ public abstract class RestateLambdaHandler
     {
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
-        _handler = new InvocationHandler();
+        _handler = new InvocationHandler(_loggerFactory);
         _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
     }
 
@@ -67,6 +69,28 @@ public abstract class RestateLambdaHandler
     protected void Bind<TService>() where TService : class
     {
         _serviceTypes.Add(typeof(TService));
+    }
+
+    /// <summary>
+    ///     Configures the logger factory used for SDK logging and <see cref="Context.Logger" />.
+    ///     Call from <see cref="Register" />. When not configured, logging is disabled.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the invocation pipeline has already
+    ///     been built and a late factory would be silently ignored.
+    /// </exception>
+    protected void UseLoggerFactory(ILoggerFactory loggerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(UseLoggerFactory)} must be called from {nameof(Register)}(); " +
+                "the invocation pipeline has already been built.");
+        }
+
+        _loggerFactory = loggerFactory;
     }
 
     /// <summary>

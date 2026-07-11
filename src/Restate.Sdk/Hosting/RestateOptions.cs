@@ -7,6 +7,12 @@ public sealed class RestateOptions
 {
     internal List<Type> ServiceTypes { get; } = [];
 
+    /// <summary>
+    ///     Telemetry options for the SDK's tracing and metrics instrumentation
+    ///     (the <c>Restate.Sdk</c> ActivitySource and Meter).
+    /// </summary>
+    public RestateTelemetryOptions Telemetry { get; } = new();
+
     internal List<string> IdentityKeys { get; } = [];
 
     /// <summary>Registers a Restate service type (reads the attribute to determine kind).</summary>

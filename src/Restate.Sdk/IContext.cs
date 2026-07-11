@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Restate.Sdk;
 
 /// <summary>
@@ -9,6 +11,12 @@ public interface IContext
 {
     /// <summary>Unique identifier of the current invocation.</summary>
     string InvocationId { get; }
+
+    /// <summary>
+    ///     Logger scoped to the current invocation. Output is suppressed while the invocation
+    ///     replays journal entries, so re-executed handler code does not log duplicate lines.
+    /// </summary>
+    ILogger Logger { get; }
 
     /// <summary>Request headers from the original invocation.</summary>
     IReadOnlyDictionary<string, string> Headers { get; }

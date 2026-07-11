@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
@@ -42,31 +43,58 @@ internal sealed partial class InvocationStateMachine
         if (State == InvocationState.Replaying)
             return ReplayResultAsync<T>();
 
-        var result = action();
-        var serialized = Serialize(result);
-
-        var completionId = NextCompletionId();
-        WriteRunCommand(name, completionId);
-        WriteRunProposal(completionId, serialized.Span);
-
-        var flushTask = FlushAsync(ct);
-        var serializedCopy = CopyToPooled(serialized);
-        if (flushTask.IsCompletedSuccessfully)
+        var activity = StartOperationActivity("restate.run");
+        activity?.SetTag("restate.run.name", name);
+        try
         {
-            _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
-            Log.SideEffectExecuted(Logger, name, InvocationId);
-            return new ValueTask<T>(result);
-        }
+            var result = action();
+            var serialized = Serialize(result);
 
-        return RunSyncAwaitFlush(flushTask, result, serializedCopy, name);
+            var completionId = NextCompletionId();
+            WriteRunCommand(name, completionId);
+            WriteRunProposal(completionId, serialized.Span);
+
+            var flushTask = FlushAsync(ct);
+            var serializedCopy = CopyToPooled(serialized);
+            if (flushTask.IsCompletedSuccessfully)
+            {
+                _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
+                Log.SideEffectExecuted(Logger, name, InvocationId);
+                return new ValueTask<T>(result);
+            }
+
+            var pending = RunSyncAwaitFlush(flushTask, result, serializedCopy, name, activity);
+
+            // RunSync executes synchronously on the caller's execution context, so
+            // StartActivity made this span Activity.Current *in the caller*. The span is
+            // disposed by RunSyncAwaitFlush on a forked context, where the automatic
+            // Current restore is invisible to the caller — restore it here so subsequent
+            // operations don't parent under a stopped "restate.run" span.
+            if (activity is not null && ReferenceEquals(Activity.Current, activity))
+                Activity.Current = activity.Parent;
+
+            activity = null; // Ownership transferred to RunSyncAwaitFlush.
+            return pending;
+        }
+        finally
+        {
+            activity?.Dispose();
+        }
     }
 
-    private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, ReadOnlyMemory<byte> serializedCopy, string name)
+    private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, ReadOnlyMemory<byte> serializedCopy, string name, Activity? activity)
     {
-        await flushTask.ConfigureAwait(false);
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
-        Log.SideEffectExecuted(Logger, name, InvocationId);
-        return result;
+        try
+        {
+            await flushTask.ConfigureAwait(false);
+            _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
+            Log.SideEffectExecuted(Logger, name, InvocationId);
+            return result;
+        }
+        finally
+        {
+            activity?.Dispose();
+        }
     }
 
     public async ValueTask<T> RunAsync<T>(string name, Func<Task<T>> action, CancellationToken ct,
@@ -76,6 +104,9 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
             return await ReplayResultAsync<T>().ConfigureAwait(false);
+
+        using var activity = StartOperationActivity("restate.run");
+        activity?.SetTag("restate.run.name", name);
 
         T result;
         if (retryPolicy is not null)
@@ -107,6 +138,9 @@ internal sealed partial class InvocationStateMachine
             _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return;
         }
+
+        using var activity = StartOperationActivity("restate.run");
+        activity?.SetTag("restate.run.name", name);
 
         if (retryPolicy is not null)
             await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
@@ -293,6 +327,8 @@ internal sealed partial class InvocationStateMachine
         if (State == InvocationState.Replaying)
             return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
+        using var activity = StartCallActivity(service, handler);
+
         var requestBytes = SerializeObject(request);
 
         // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
@@ -312,6 +348,19 @@ internal sealed partial class InvocationStateMachine
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
+    }
+
+    /// <summary>Starts an opt-in child activity for an outgoing call, tagged with the RPC target.</summary>
+    private Activity? StartCallActivity(string service, string handler)
+    {
+        var activity = StartOperationActivity("restate.call");
+        if (activity is not null)
+        {
+            activity.SetTag("rpc.service", service);
+            activity.SetTag("rpc.method", handler);
+        }
+
+        return activity;
     }
 
     public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
@@ -640,6 +689,9 @@ internal sealed partial class InvocationStateMachine
             return;
         }
 
+        using var activity = StartOperationActivity("restate.sleep");
+        activity?.SetTag("restate.sleep.duration_ms", duration.TotalMilliseconds);
+
         var wakeUpTime = (ulong)DateTimeOffset.UtcNow.Add(duration).ToUnixTimeMilliseconds();
         var completionId = NextCompletionId();
 
@@ -822,6 +874,8 @@ internal sealed partial class InvocationStateMachine
         if (State == InvocationState.Replaying)
             return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
+        using var activity = StartCallActivity(service, handler);
+
         var requestBytes = Serialize(request);
 
         // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
@@ -910,6 +964,8 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
             return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
+
+        using var activity = StartCallActivity(service, handler);
 
         var requestBytes = SerializeObject(request);
 

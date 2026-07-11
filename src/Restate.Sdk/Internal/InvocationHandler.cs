@@ -13,12 +13,14 @@ namespace Restate.Sdk.Internal;
 
 internal sealed class InvocationHandler
 {
-    private static readonly ActivitySource ActivitySource = new("Restate.Sdk");
+    internal static readonly ActivitySource ActivitySource = new("Restate.Sdk");
     private readonly ILoggerFactory _loggerFactory;
+    private readonly RestateTelemetryOptions _telemetryOptions;
 
-    public InvocationHandler(ILoggerFactory? loggerFactory = null)
+    public InvocationHandler(ILoggerFactory? loggerFactory = null, RestateTelemetryOptions? telemetryOptions = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _telemetryOptions = telemetryOptions ?? new RestateTelemetryOptions();
     }
 
     public async Task HandleAsync(
@@ -30,15 +32,19 @@ internal sealed class InvocationHandler
         ServiceProtocolVersion protocolVersion,
         CancellationToken ct)
     {
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var outcome = InvocationOutcome.Error;
         var logger = _loggerFactory.CreateLogger("Restate.Invocation");
         var jsonOptions = JsonSerde.SerializerOptions;
         using var reader = new ProtocolReader(requestBodyReader);
         using var writer = new ProtocolWriter(responseBodyWriter);
 
-        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger, protocolVersion);
+        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger, protocolVersion,
+            _telemetryOptions.EnableOperationActivities);
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;
         Activity? activity = null;
+        IDisposable? invocationLogScope = null;
 
         try
         {
@@ -48,12 +54,23 @@ internal sealed class InvocationHandler
 
             activity = StartActivity(service, handler, sm.Headers, startInfo.InvocationId);
 
+            // ctx.Logger: replay-aware wrapper over a handler-facing logger, with an
+            // invocation-id scope spanning the handler execution. Skipped entirely when
+            // no logger factory is configured (e.g. Lambda without UseLoggerFactory).
+            ILogger contextLogger = NullLogger.Instance;
+            if (!ReferenceEquals(_loggerFactory, NullLoggerFactory.Instance))
+            {
+                var handlerLogger = _loggerFactory.CreateLogger(service.Name);
+                contextLogger = new ReplayAwareLogger(handlerLogger, () => sm.IsReplaying);
+                invocationLogScope = handlerLogger.BeginScope(new InvocationLogScope(startInfo.InvocationId));
+            }
+
             incomingTask = sm.ProcessIncomingMessagesAsync(incomingCts.Token);
 
             // Use the linked token so the handler cancels when either:
             // (a) the external caller cancels, or (b) the incoming reader detects connection close.
             var handlerToken = incomingCts.Token;
-            var context = CreateContext(sm, service.Type, handler.IsShared, logger, handlerToken);
+            var context = CreateContext(sm, service.Type, handler.IsShared, contextLogger, handlerToken);
 
             object? input = null;
             if (handler.InputDeserializer is not null)
@@ -71,12 +88,18 @@ internal sealed class InvocationHandler
                     ? sm.SerializeObject(result)
                     : ReadOnlyMemory<byte>.Empty;
                 await sm.CompleteAsync(output, ct).ConfigureAwait(false);
+                outcome = InvocationOutcome.Success;
 
                 Log.InvocationCompleted(logger, sm.InvocationId);
+            }
+            else
+            {
+                outcome = InvocationOutcome.Suspended;
             }
         }
         catch (TerminalException ex)
         {
+            outcome = InvocationOutcome.TerminalError;
             Log.TerminalException(logger, sm.InvocationId, ex.Code);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
@@ -84,6 +107,7 @@ internal sealed class InvocationHandler
         }
         catch (SuspensionException)
         {
+            outcome = InvocationOutcome.Suspended;
             // The input stream closed while the handler awaited a durable result — suspend.
             Log.InvocationSuspending(logger, sm.InvocationId);
             try { await sm.SuspendAsync(CancellationToken.None).ConfigureAwait(false); }
@@ -91,6 +115,7 @@ internal sealed class InvocationHandler
         }
         catch (OperationCanceledException) when (sm.InputClosed && !ct.IsCancellationRequested)
         {
+            outcome = InvocationOutcome.Suspended;
             // The poisoned durable wait surfaced wrapped as a cancellation (e.g. user code
             // converted the SuspensionException). Input EOF means no completion can ever
             // arrive, so this is still a suspension, not a failure.
@@ -100,6 +125,7 @@ internal sealed class InvocationHandler
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            outcome = InvocationOutcome.Cancelled;
             Log.InvocationCancelled(logger, sm.InvocationId);
         }
         catch (ProtocolException ex)
@@ -118,7 +144,18 @@ internal sealed class InvocationHandler
         }
         finally
         {
-            activity?.Dispose();
+            invocationLogScope?.Dispose();
+
+            if (activity is not null)
+            {
+                activity.SetTag("restate.journal.commands", sm.JournalCommandCount);
+                activity.SetTag("restate.replayed", sm.ReplayedCommandCount > 1);
+                activity.Dispose();
+            }
+
+            RestateMetrics.RecordInvocation(
+                service.Name, handler.Name, outcome,
+                Stopwatch.GetElapsedTime(startTimestamp), sm.ReplayedCommandCount);
 
             // Each cleanup operation is wrapped in try-catch because the stream may already
             // be in a broken state. Without this, a failure in any cleanup step would prevent
@@ -163,6 +200,8 @@ internal sealed class InvocationHandler
         if (activity is not null)
         {
             activity.SetTag("restate.invocation.id", invocationId);
+            activity.SetTag("restate.service", service.Name);
+            activity.SetTag("restate.handler", handler.Name);
             activity.SetTag("rpc.service", service.Name);
             activity.SetTag("rpc.method", handler.Name);
             activity.SetTag("rpc.system", "restate");
@@ -172,18 +211,19 @@ internal sealed class InvocationHandler
     }
 
     private static Restate.Sdk.Context CreateContext(
-        InvocationStateMachine sm, ServiceType serviceType, bool isShared, ILogger logger, CancellationToken ct)
+        InvocationStateMachine sm, ServiceType serviceType, bool isShared, ILogger contextLogger,
+        CancellationToken ct)
     {
         return serviceType switch
         {
-            ServiceType.Service => new DefaultContext(sm, logger, ct),
+            ServiceType.Service => new DefaultContext(sm, contextLogger, ct),
             ServiceType.VirtualObject => isShared
-                ? new DefaultSharedObjectContext(sm, logger, ct)
-                : new DefaultObjectContext(sm, logger, ct),
+                ? new DefaultSharedObjectContext(sm, contextLogger, ct)
+                : new DefaultObjectContext(sm, contextLogger, ct),
             ServiceType.Workflow => isShared
-                ? new DefaultSharedWorkflowContext(sm, logger, ct)
-                : new DefaultWorkflowContext(sm, logger, ct),
-            _ => new DefaultContext(sm, logger, ct)
+                ? new DefaultSharedWorkflowContext(sm, contextLogger, ct)
+                : new DefaultWorkflowContext(sm, contextLogger, ct),
+            _ => new DefaultContext(sm, contextLogger, ct)
         };
     }
 }
