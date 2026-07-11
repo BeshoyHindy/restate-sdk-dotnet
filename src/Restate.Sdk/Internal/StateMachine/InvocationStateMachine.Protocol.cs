@@ -129,6 +129,20 @@ internal sealed partial class InvocationStateMachine
             if (message is null)
             {
                 Log.StreamEnded(Logger, InvocationId);
+
+                // EOF: the runtime half-closed the request stream. Every buffered frame has
+                // already been delivered (ReadMessageAsync only returns null once the pipe is
+                // drained), so no completion can ever arrive again. Poison both completion
+                // managers so pending — and future — durable waits unwind with
+                // SuspensionException and the invocation suspends.
+                if (State != InvocationState.Closed)
+                {
+                    Log.InputStreamClosed(Logger, InvocationId);
+                    InputClosed = true;
+                    _completions.Poison();
+                    _signalCompletions.Poison();
+                }
+
                 break;
             }
 
@@ -143,7 +157,9 @@ internal sealed partial class InvocationStateMachine
     {
         var type = message.Header.Type;
 
-        if (type == MessageType.EntryAck)
+        // ProposeRunCompletionAck is only sent when the SDK sets the REQUIRES_ACK flag on
+        // ProposeRunCompletion, which this SDK never does — ignore it defensively.
+        if (type is MessageType.EntryAck or MessageType.ProposeRunCompletionAck)
             return;
 
         // Signal notifications (awakeable completions delivered via the signal mechanism)

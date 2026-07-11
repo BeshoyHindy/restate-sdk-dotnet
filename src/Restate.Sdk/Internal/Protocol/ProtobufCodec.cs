@@ -455,6 +455,37 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
+    ///     Creates a SuspensionMessage in the encoding of the negotiated protocol version:
+    ///     V5/V6 fill the legacy <c>waiting_completions</c>/<c>waiting_signals</c> lists,
+    ///     V7 wraps the same ids in an <c>awaiting_on</c> Future — a flat leaf with
+    ///     FIRST_COMPLETED semantics, so any resolvable id wakes the invocation.
+    /// </summary>
+    public static Gen.SuspensionMessage CreateSuspensionMessage(
+        ServiceProtocolVersion version, List<int> completionIds, List<int> signalIds)
+    {
+        var msg = new Gen.SuspensionMessage();
+
+        if (version >= ServiceProtocolVersion.V7)
+        {
+            var future = new Gen.Future { CombinatorType = Gen.CombinatorType.FirstCompleted };
+            for (var i = 0; i < completionIds.Count; i++)
+                future.WaitingCompletions.Add((uint)completionIds[i]);
+            for (var i = 0; i < signalIds.Count; i++)
+                future.WaitingSignals.Add((uint)signalIds[i]);
+            msg.AwaitingOn = future;
+        }
+        else
+        {
+            for (var i = 0; i < completionIds.Count; i++)
+                msg.WaitingCompletions.Add((uint)completionIds[i]);
+            for (var i = 0; i < signalIds.Count; i++)
+                msg.WaitingSignals.Add((uint)signalIds[i]);
+        }
+
+        return msg;
+    }
+
+    /// <summary>
     ///     Creates a SendSignalCommandMessage with the CANCEL built-in signal
     ///     to cancel a running invocation identified by its invocation ID.
     /// </summary>

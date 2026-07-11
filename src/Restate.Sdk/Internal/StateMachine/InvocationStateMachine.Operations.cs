@@ -918,7 +918,7 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public async ValueTask FailTerminalAsync(ushort code, string message, CancellationToken ct)
     {
-        if (State == InvocationState.Closed)
+        if (State is InvocationState.Closed or InvocationState.Suspended)
             return;
 
         State = InvocationState.Closed;
@@ -935,7 +935,7 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     public async ValueTask FailAsync(ushort code, string message, CancellationToken ct)
     {
-        if (State == InvocationState.Closed)
+        if (State is InvocationState.Closed or InvocationState.Suspended)
             return;
 
         State = InvocationState.Closed;
@@ -943,6 +943,43 @@ internal sealed partial class InvocationStateMachine
         WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message));
 
         _writer.WriteHeaderOnly(MessageType.End);
+        await FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    // ------- Suspension -------
+
+    /// <summary>
+    ///     Suspends the invocation: writes a SuspensionMessage listing every pending completion
+    ///     id and signal index so the runtime can resume the invocation once one of them is
+    ///     resolvable. The wire encoding is version-dependent: V5/V6 use the legacy
+    ///     <c>waiting_completions</c>/<c>waiting_signals</c> lists, V7 wraps the same ids in an
+    ///     <c>awaiting_on</c> Future (flat FIRST_COMPLETED leaf — conservative: a spurious resume
+    ///     replays and re-suspends, but a wake-up is never missed). SuspensionMessage is terminal
+    ///     on its own — no End frame follows. If nothing is pending, the protocol's "at least one
+    ///     element" requirement cannot be met and the invocation fails retryably instead.
+    /// </summary>
+    public async ValueTask SuspendAsync(CancellationToken ct)
+    {
+        if (State is InvocationState.Closed or InvocationState.Suspended)
+            return;
+
+        var completionIds = _completions.CollectPendingIds();
+        var signalIds = _signalCompletions.CollectPendingIds();
+
+        if (completionIds.Count == 0 && signalIds.Count == 0)
+        {
+            await FailAsync(500,
+                "Input stream closed but no durable operation is pending — nothing to suspend on",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Set Suspended BEFORE flushing to prevent re-entry if FlushAsync throws.
+        State = InvocationState.Suspended;
+
+        Log.InvocationSuspended(Logger, InvocationId, completionIds.Count, signalIds.Count);
+        WriteCommand(MessageType.Suspension,
+            ProtobufCodec.CreateSuspensionMessage(NegotiatedVersion, completionIds, signalIds));
         await FlushAsync(ct).ConfigureAwait(false);
     }
 }

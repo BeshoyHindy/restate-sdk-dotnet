@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Text.Json;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Tests.StateMachine;
 
@@ -382,6 +383,126 @@ public class InvocationStateMachineTests : IDisposable
 
         sm.RejectPromise("name", "reason");
         Assert.Equal(InvocationState.Processing, sm.State);
+    }
+
+    // ------- Suspension -------
+
+    /// <summary>Completes the outbound writer and reads back every frame the SM flushed.</summary>
+    private async Task<List<(MessageType Type, byte[] Payload)>> DrainOutboundAsync()
+    {
+        _outbound.Writer.Complete();
+        var frames = new List<(MessageType Type, byte[] Payload)>();
+        using var reader = new ProtocolReader(_outbound.Reader);
+        while (await reader.ReadMessageAsync() is { } msg)
+        {
+            frames.Add((msg.Header.Type, msg.Payload.ToArray()));
+            msg.Dispose();
+        }
+
+        return frames;
+    }
+
+    [Fact]
+    public async Task SuspendAsync_LegacyVersion_UsesLegacyWaitingLists()
+    {
+        using var sm = new InvocationStateMachine(_reader, _writer,
+            negotiatedVersion: ServiceProtocolVersion.V6);
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        await sm.SuspendAsync(CancellationToken.None);
+
+        Assert.Equal(InvocationState.Suspended, sm.State);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.SleepCommand, frames[0].Type);
+        Assert.Equal(MessageType.Suspension, frames[1].Type);
+
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[1].Payload);
+        Assert.Equal(new uint[] { 0 }, suspension.WaitingCompletions);
+        Assert.Empty(suspension.WaitingSignals);
+        Assert.Null(suspension.AwaitingOn);
+    }
+
+    [Fact]
+    public async Task SuspendAsync_V7_UsesAwaitingOnFuture()
+    {
+        using var sm = new InvocationStateMachine(_reader, _writer,
+            negotiatedVersion: ServiceProtocolVersion.V7);
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        _ = sm.Awakeable();
+        await sm.SuspendAsync(CancellationToken.None);
+
+        Assert.Equal(InvocationState.Suspended, sm.State);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.Suspension, frames[^1].Type);
+
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[^1].Payload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
+        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingCompletions);
+        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Empty(suspension.WaitingCompletions);
+        Assert.Empty(suspension.WaitingSignals);
+    }
+
+    [Fact]
+    public async Task SuspendAsync_NothingPending_FailsRetryablyInstead()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await sm.SuspendAsync(CancellationToken.None);
+
+        // The protocol requires at least one element to wait on — with nothing pending the
+        // invocation can never be woken, so it must fail retryably instead of suspending.
+        Assert.Equal(InvocationState.Closed, sm.State);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.Error, frames[0].Type);
+        Assert.Equal(500u, Gen.ErrorMessage.Parser.ParseFrom(frames[0].Payload).Code);
+        Assert.Equal(MessageType.End, frames[1].Type);
+    }
+
+    [Fact]
+    public async Task SuspendAsync_IsIdempotent()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        await sm.SuspendAsync(CancellationToken.None);
+        await sm.SuspendAsync(CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count); // SleepCommand + exactly one Suspension
+        Assert.Equal(MessageType.Suspension, frames[1].Type);
+    }
+
+    [Fact]
+    public async Task ProcessIncomingMessages_InputEof_PoisonsPendingAndFutureWaits()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var pending = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        _inbound.Writer.Complete();
+        await incoming;
+
+        Assert.True(sm.InputClosed);
+        await Assert.ThrowsAsync<SuspensionException>(() => pending.Task);
+
+        // Waits registered after EOF suspend immediately (critical for Lambda, where the
+        // whole request is buffered and EOF precedes handler execution).
+        var late = await sm.SleepFutureAsync(TimeSpan.FromMinutes(1), CancellationToken.None);
+        await Assert.ThrowsAsync<SuspensionException>(() => late.Task);
     }
 
     // ------- Disposal -------

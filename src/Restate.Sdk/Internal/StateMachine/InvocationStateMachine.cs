@@ -68,6 +68,13 @@ internal sealed partial class InvocationStateMachine : IDisposable
     /// </summary>
     public ServiceProtocolVersion NegotiatedVersion { get; }
 
+    /// <summary>
+    ///     True once the request input stream has reached EOF. After that point no completion
+    ///     or signal can ever arrive, so pending durable waits are poisoned with
+    ///     <see cref="SuspensionException" /> and the invocation suspends.
+    /// </summary>
+    public bool InputClosed { get; private set; }
+
     public string InvocationId { get; private set; } = "";
 
     public byte[] RawInvocationId { get; private set; } = [];
@@ -147,7 +154,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     private void EnsureActive()
     {
-        if (State is InvocationState.WaitingStart or InvocationState.Closed)
+        if (State is InvocationState.WaitingStart or InvocationState.Suspended or InvocationState.Closed)
             ThrowInvalidState(State, "perform operations");
     }
 

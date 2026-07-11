@@ -62,18 +62,40 @@ internal sealed class InvocationHandler
             var serviceInstance = service.Factory(serviceProvider);
             var result = await handler.Invoker(serviceInstance, context, input, handlerToken).ConfigureAwait(false);
 
-            var output = result is not null
-                ? sm.SerializeObject(result)
-                : ReadOnlyMemory<byte>.Empty;
-            await sm.CompleteAsync(output, ct).ConfigureAwait(false);
+            // Defensive: never write Output/End after a SuspensionMessage. Catching Exception
+            // around durable awaits in user code is unsupported (same caveat as other SDKs) —
+            // if the SuspensionException was swallowed there, the invocation state still wins.
+            if (sm.State != InvocationState.Suspended)
+            {
+                var output = result is not null
+                    ? sm.SerializeObject(result)
+                    : ReadOnlyMemory<byte>.Empty;
+                await sm.CompleteAsync(output, ct).ConfigureAwait(false);
 
-            Log.InvocationCompleted(logger, sm.InvocationId);
+                Log.InvocationCompleted(logger, sm.InvocationId);
+            }
         }
         catch (TerminalException ex)
         {
             Log.TerminalException(logger, sm.InvocationId, ex.Code);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Stream already broken — nothing more we can do */ }
+        }
+        catch (SuspensionException)
+        {
+            // The input stream closed while the handler awaited a durable result — suspend.
+            Log.InvocationSuspending(logger, sm.InvocationId);
+            try { await sm.SuspendAsync(CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Stream already broken — nothing more we can do */ }
+        }
+        catch (OperationCanceledException) when (sm.InputClosed && !ct.IsCancellationRequested)
+        {
+            // The poisoned durable wait surfaced wrapped as a cancellation (e.g. user code
+            // converted the SuspensionException). Input EOF means no completion can ever
+            // arrive, so this is still a suspension, not a failure.
+            Log.InvocationSuspending(logger, sm.InvocationId);
+            try { await sm.SuspendAsync(CancellationToken.None).ConfigureAwait(false); }
             catch { /* Stream already broken — nothing more we can do */ }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

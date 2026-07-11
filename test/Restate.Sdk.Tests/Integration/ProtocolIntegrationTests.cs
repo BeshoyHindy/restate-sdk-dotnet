@@ -50,6 +50,22 @@ public class SleepyGreeterService
 }
 
 /// <summary>
+///     A service that blocks on an awakeable — used by the suspension tests to verify that
+///     pending signal indices are reported in the SuspensionMessage.
+/// </summary>
+[Service(Name = "AwakeableGreeter")]
+public class AwakeableGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        var approval = ctx.Awakeable<string>();
+        var value = await approval.Value;
+        return $"{value}, {name}!";
+    }
+}
+
+/// <summary>
 ///     A service that calls a downstream service and then sleeps — used to verify that
 ///     completion ids allocated after a resumed replay do not collide with replayed ids.
 /// </summary>
@@ -452,6 +468,117 @@ public class ProtocolIntegrationTests
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    // ------- Suspension (poison-on-EOF) -------
+
+    /// <summary>
+    ///     Runs an invocation whose request stream contains only Start + Input and then hits
+    ///     EOF — simulating the runtime half-closing the stream while the handler awaits a
+    ///     durable result — and returns the raw response bytes.
+    /// </summary>
+    private static async Task<byte[]> RunUntilInputClosedAsync<TService>(
+        string handlerName, ServiceProtocolVersion version, Func<TService> factory)
+        where TService : class
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+        var startPayload = BuildStartMessagePayload("suspend-inv-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == handlerName);
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => factory()),
+            version,
+            CancellationToken.None);
+
+        return responseStream.ToArray();
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringSleep_V7_ProducesSuspensionWithAwaitingOn()
+    {
+        var responseData = await RunUntilInputClosedAsync<SleepyGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new SleepyGreeterService());
+
+        var offset = 0;
+
+        // The live sleep command is flushed before the handler parks on its completion.
+        var (sleepHeader, sleepPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.SleepCommand, sleepHeader.Type);
+        var sleepMsg = Gen.SleepCommandMessage.Parser.ParseFrom(sleepPayload);
+        Assert.Equal(1u, sleepMsg.ResultCompletionId);
+
+        // V7 encodes the await point as an awaiting_on Future.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingCompletions);
+        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Empty(suspension.WaitingCompletions);
+        Assert.Empty(suspension.WaitingSignals);
+
+        // SuspensionMessage is terminal on its own: no End, Error, or Output may follow.
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringAwakeable_ProducesSuspensionWithPendingSignal()
+    {
+        var responseData = await RunUntilInputClosedAsync<AwakeableGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new AwakeableGreeterService());
+
+        var offset = 0;
+
+        // Awakeables write no command — the suspension frame is the only output.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
+        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    public async Task HandleAsync_InputClosesDuringSleep_LegacyVersions_UseLegacyWaitingLists(int versionNumber)
+    {
+        var responseData = await RunUntilInputClosedAsync<SleepyGreeterService>(
+            "Greet", (ServiceProtocolVersion)versionNumber, () => new SleepyGreeterService());
+
+        var offset = 0;
+
+        var (sleepHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.SleepCommand, sleepHeader.Type);
+
+        // Pre-V7 encodes the pending ids in the legacy waiting_* lists; awaiting_on stays unset.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.Null(suspension.AwaitingOn);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingCompletions);
+        Assert.Empty(suspension.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }
