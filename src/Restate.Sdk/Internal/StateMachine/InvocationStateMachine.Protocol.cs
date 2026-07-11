@@ -35,7 +35,13 @@ internal sealed partial class InvocationStateMachine
             fields.Key ?? "",
             fields.RandomSeed,
             (int)fields.KnownEntries,
-            fields.EagerState);
+            fields.EagerState,
+            fields.IsPartialState);
+
+        // V7 scope fields — captured internally, no public API yet.
+        Scope = fields.Scope;
+        LimitKey = fields.LimitKey;
+        IdempotencyKey = fields.IdempotencyKey;
 
         // The InputCommand always follows StartMessage (regardless of known_entries).
         Log.ReadingMessage(Logger, InvocationId);

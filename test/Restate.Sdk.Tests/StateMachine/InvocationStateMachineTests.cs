@@ -191,7 +191,7 @@ public class InvocationStateMachineTests : IDisposable
     }
 
     [Fact]
-    public async Task GetStateAsync_WithEagerState_ReturnsWithoutWire()
+    public async Task GetStateAsync_CompleteStateKeyPresent_ResolvesLocallyAndJournalsEagerCommand()
     {
         var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
         {
@@ -203,10 +203,36 @@ public class InvocationStateMachineTests : IDisposable
 
         var value = await sm.GetStateAsync<int>("count", CancellationToken.None);
         Assert.Equal(42, value);
+
+        var frames = await DrainOutboundAsync();
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.GetEagerStateCommand, frame.Type);
+
+        var msg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(frame.Payload);
+        Assert.Equal("count", msg.Key.ToStringUtf8());
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Value, msg.ResultCase);
+        Assert.Equal(42, JsonSerializer.Deserialize<int>(msg.Value.Content.Span));
     }
 
     [Fact]
-    public async Task GetStateAsync_WithEmptyEagerState_ReturnsDefault()
+    public async Task GetStateAsync_CompleteStateKeyAbsent_ReturnsDefaultAndJournalsEagerVoid()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        var value = await sm.GetStateAsync<int>("missing", CancellationToken.None);
+        Assert.Equal(0, value);
+
+        var frames = await DrainOutboundAsync();
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.GetEagerStateCommand, frame.Type);
+
+        var msg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(frame.Payload);
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Void, msg.ResultCase);
+    }
+
+    [Fact]
+    public async Task GetStateAsync_WithEmptyEagerValue_ReturnsDefault()
     {
         var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
         {
@@ -218,6 +244,125 @@ public class InvocationStateMachineTests : IDisposable
 
         var value = await sm.GetStateAsync<int>("empty", CancellationToken.None);
         Assert.Equal(0, value);
+    }
+
+    [Fact]
+    public async Task GetStateAsync_PartialStateKeyPresent_ResolvesLocally()
+    {
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        {
+            ["count"] = JsonSerializer.SerializeToUtf8Bytes(7)
+        };
+
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, eagerState, stateIsPartial: true);
+
+        var value = await sm.GetStateAsync<int>("count", CancellationToken.None);
+        Assert.Equal(7, value);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.GetEagerStateCommand, Assert.Single(frames).Type);
+    }
+
+    [Fact]
+    public async Task GetStateAsync_PartialStateKeyAbsent_FallsBackToLazyCommand()
+    {
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        {
+            ["other"] = JsonSerializer.SerializeToUtf8Bytes(1)
+        };
+
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, eagerState, stateIsPartial: true);
+
+        // A partial map that misses the key cannot answer locally — the read goes to the wire.
+        var pending = sm.GetStateAsync<int>("missing", CancellationToken.None).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var frames = await DrainOutboundAsync();
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.GetLazyStateCommand, frame.Type);
+        Assert.Equal("missing",
+            Gen.GetLazyStateCommandMessage.Parser.ParseFrom(frame.Payload).Key.ToStringUtf8());
+    }
+
+    [Fact]
+    public async Task SetState_UnderPartialState_DoesNotMakeOtherKeysLocallyKnown()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        sm.SetState("a", 1);
+
+        // "a" was just written, so it is locally known and resolves eagerly...
+        var a = await sm.GetStateAsync<int>("a", CancellationToken.None);
+        Assert.Equal(1, a);
+
+        // ...but "b" must NOT be reported as absent just because SetState created the local
+        // map (the pre-V7 latent bug): under partial state it falls back to a lazy read.
+        var pending = sm.GetStateAsync<int>("b", CancellationToken.None).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(3, frames.Count);
+        Assert.Equal(MessageType.SetStateCommand, frames[0].Type);
+        Assert.Equal(MessageType.GetEagerStateCommand, frames[1].Type);
+        Assert.Equal(MessageType.GetLazyStateCommand, frames[2].Type);
+    }
+
+    [Fact]
+    public async Task GetStateKeysAsync_CompleteState_ResolvesLocallyAndJournalsEagerCommand()
+    {
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        {
+            ["a"] = JsonSerializer.SerializeToUtf8Bytes(1),
+            ["b"] = JsonSerializer.SerializeToUtf8Bytes(2)
+        };
+
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
+
+        var keys = await sm.GetStateKeysAsync(CancellationToken.None);
+        Array.Sort(keys);
+        Assert.Equal(["a", "b"], keys);
+
+        var frames = await DrainOutboundAsync();
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.GetEagerStateKeysCommand, frame.Type);
+        Assert.Equal(2, Gen.GetEagerStateKeysCommandMessage.Parser.ParseFrom(frame.Payload).Value.Keys.Count);
+    }
+
+    [Fact]
+    public async Task GetStateKeysAsync_PartialState_FallsBackToLazyCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        var pending = sm.GetStateKeysAsync(CancellationToken.None).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.GetLazyStateKeysCommand, Assert.Single(frames).Type);
+    }
+
+    [Fact]
+    public async Task ClearAllState_MakesPartialStateComplete()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        sm.ClearAllState();
+
+        // After ClearAllState the (empty) local view is authoritative: reads resolve eagerly.
+        var value = await sm.GetStateAsync<int>("anything", CancellationToken.None);
+        Assert.Equal(0, value);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.ClearAllStateCommand, frames[0].Type);
+        Assert.Equal(MessageType.GetEagerStateCommand, frames[1].Type);
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Void,
+            Gen.GetEagerStateCommandMessage.Parser.ParseFrom(frames[1].Payload).ResultCase);
     }
 
     // ------- Awakeable -------
@@ -296,6 +441,40 @@ public class InvocationStateMachineTests : IDisposable
         await sm.FailAsync(500, "something broke", CancellationToken.None);
 
         Assert.Equal(InvocationState.Closed, sm.State);
+    }
+
+    [Fact]
+    public async Task FailAsync_DefaultBehavior_IsRetry()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await sm.FailAsync(500, "transient", CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.Error, frames[0].Type);
+        Assert.Equal(MessageType.End, frames[1].Type);
+
+        var error = Gen.ErrorMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal(500u, error.Code);
+        // RETRY is wire value 0 (never serialized) — identical to pre-V7 ErrorMessages.
+        Assert.Equal(Gen.ErrorBehavior.Retry, error.Behavior);
+    }
+
+    [Fact]
+    public async Task FailAsync_ExplicitBehavior_IsSerialized()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await sm.FailAsync(500, "paused", Gen.ErrorBehavior.Pause, CancellationToken.None);
+
+        Assert.Equal(InvocationState.Closed, sm.State);
+
+        var frames = await DrainOutboundAsync();
+        var error = Gen.ErrorMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal(Gen.ErrorBehavior.Pause, error.Behavior);
     }
 
     // ------- Replay -------

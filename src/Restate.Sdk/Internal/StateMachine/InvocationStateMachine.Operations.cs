@@ -1,6 +1,7 @@
 using System.Text;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Internal.StateMachine;
 
@@ -460,13 +461,6 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
 
-        if (_initialState is not null)
-        {
-            if (_initialState.TryGetValue(key, out var eager))
-                return eager.Length > 0 ? Deserialize<T>(eager) : default;
-            return default;
-        }
-
         if (State == InvocationState.Replaying)
         {
             var replay = TakeReplayEntry();
@@ -482,6 +476,27 @@ internal sealed partial class InvocationStateMachine
             return replayCompletion.Value.IsEmpty ? default : Deserialize<T>(replayCompletion.Value);
         }
 
+        // Eager path: the value is locally known — present in the state map, or absent from a
+        // complete map (absence is then definitive). The read is journaled as a
+        // GetEagerStateCommand with the result embedded; like SetState it needs no flush.
+        if (_initialState is not null && _initialState.TryGetValue(key, out var eager))
+        {
+            WriteCommand(MessageType.GetEagerStateCommand,
+                ProtobufCodec.CreateGetEagerStateCommand(key, eager));
+            _journal.Append(JournalEntry.Completed(JournalEntryType.GetState, ReadOnlyMemory<byte>.Empty, key));
+            return eager.Length > 0 ? Deserialize<T>(eager) : default;
+        }
+
+        if (!_stateIsPartial)
+        {
+            WriteCommand(MessageType.GetEagerStateCommand,
+                ProtobufCodec.CreateGetEagerStateCommand(key, null));
+            _journal.Append(JournalEntry.Completed(JournalEntryType.GetState, ReadOnlyMemory<byte>.Empty, key));
+            return default;
+        }
+
+        // Lazy path: the state map is partial and does not contain the key — only the
+        // runtime knows whether it exists.
         var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
@@ -551,7 +566,10 @@ internal sealed partial class InvocationStateMachine
         WriteCommand(MessageType.ClearAllStateCommand, ProtobufCodec.CreateClearAllStateCommand());
         _journal.Append(JournalEntry.Completed(JournalEntryType.ClearAllState, ReadOnlyMemory<byte>.Empty));
 
+        // After clearing everything, the (empty) local view is definitively complete —
+        // subsequent reads can resolve eagerly even if the StartMessage map was partial.
         _initialState?.Clear();
+        _stateIsPartial = false;
     }
 
     public async ValueTask<string[]> GetStateKeysAsync(CancellationToken ct)
@@ -570,6 +588,27 @@ internal sealed partial class InvocationStateMachine
             var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             replayCompletion.ThrowIfFailure();
             return Deserialize<string[]>(replayCompletion.Value) ?? [];
+        }
+
+        // Eager path: a complete local view knows the full key set. The read is journaled as a
+        // GetEagerStateKeysCommand with the keys embedded; like SetState it needs no flush.
+        if (!_stateIsPartial)
+        {
+            string[] localKeys;
+            if (_initialState is { Count: > 0 })
+            {
+                localKeys = new string[_initialState.Count];
+                _initialState.Keys.CopyTo(localKeys, 0);
+            }
+            else
+            {
+                localKeys = [];
+            }
+
+            WriteCommand(MessageType.GetEagerStateKeysCommand,
+                ProtobufCodec.CreateGetEagerStateKeysCommand(localKeys));
+            _journal.Append(JournalEntry.Completed(JournalEntryType.GetStateKeys, ReadOnlyMemory<byte>.Empty));
+            return localKeys;
         }
 
         var completionId = NextCompletionId();
@@ -930,17 +969,28 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Sends a transient error as an ErrorMessage.
-    ///     Restate treats this as retryable — the invocation will be retried.
+    ///     Sends a transient error as an ErrorMessage with the default
+    ///     <see cref="Gen.ErrorBehavior.Retry" /> behavior — the invocation will be retried.
     /// </summary>
-    public async ValueTask FailAsync(ushort code, string message, CancellationToken ct)
+    public ValueTask FailAsync(ushort code, string message, CancellationToken ct)
+    {
+        return FailAsync(code, message, Gen.ErrorBehavior.Retry, ct);
+    }
+
+    /// <summary>
+    ///     Sends an error as an ErrorMessage. <paramref name="behavior" /> (V7, field 9) tells the
+    ///     runtime what to do with the failed invocation; <see cref="Gen.ErrorBehavior.Retry" /> is
+    ///     wire value 0 (not serialized) and matches the semantics of every previous protocol
+    ///     version, so it is always safe to send.
+    /// </summary>
+    public async ValueTask FailAsync(ushort code, string message, Gen.ErrorBehavior behavior, CancellationToken ct)
     {
         if (State is InvocationState.Closed or InvocationState.Suspended)
             return;
 
         State = InvocationState.Closed;
 
-        WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message));
+        WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message, behavior));
 
         _writer.WriteHeaderOnly(MessageType.End);
         await FlushAsync(ct).ConfigureAwait(false);

@@ -82,6 +82,25 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A virtual object used by the eager-state tests: reads a counter, increments it,
+///     and returns the new value.
+/// </summary>
+[VirtualObject(Name = "EagerCounter")]
+public class EagerCounterObject
+{
+    private static readonly StateKey<int> Count = new("count");
+
+    [Handler]
+    public async Task<int> Add(ObjectContext ctx, int delta)
+    {
+        var current = await ctx.Get(Count);
+        var next = current + delta;
+        ctx.Set(Count, next);
+        return next;
+    }
+}
+
+/// <summary>
 ///     Integration tests that exercise the full Restate binary protocol flow:
 ///     construct a proper binary stream (StartMessage + InputCommand),
 ///     send it to InvocationHandler via in-memory streams,
@@ -100,6 +119,31 @@ public class ProtocolIntegrationTests
             Key = key,
             RandomSeed = randomSeed
         };
+        return msg.ToByteArray();
+    }
+
+    private static byte[] BuildStartMessagePayloadWithState(
+        string debugId, uint knownEntries, string key, ulong randomSeed,
+        bool partialState, params (string Key, byte[] Value)[] state)
+    {
+        var msg = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8(debugId),
+            DebugId = debugId,
+            KnownEntries = knownEntries,
+            Key = key,
+            RandomSeed = randomSeed,
+            PartialState = partialState
+        };
+        foreach (var (stateKey, stateValue) in state)
+        {
+            msg.StateMap.Add(new Gen.StartMessage.Types.StateEntry
+            {
+                Key = ByteString.CopyFromUtf8(stateKey),
+                Value = ByteString.CopyFrom(stateValue)
+            });
+        }
+
         return msg.ToByteArray();
     }
 
@@ -465,6 +509,183 @@ public class ProtocolIntegrationTests
         var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
         Assert.Equal("\"downstream-result-done\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    // ------- Eager state -------
+
+    [Fact]
+    public async Task HandleAsync_CompleteStateMap_EmitsEagerStateCommand()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes(1);
+
+        // A complete state map (partial_state == false) makes every key locally known:
+        // the read must be journaled as a GetEagerStateCommand with the value embedded,
+        // not as a GetLazyStateCommand round-trip.
+        var startPayload = BuildStartMessagePayloadWithState(
+            "eager-inv-1", 1, "counter-key", 42, partialState: false,
+            ("count", JsonSerializer.SerializeToUtf8Bytes(41)));
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(EagerCounterObject))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Add");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new EagerCounterObject()),
+            ServiceProtocolVersion.V7,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (eagerHeader, eagerPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.GetEagerStateCommand, eagerHeader.Type);
+        var eagerMsg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(eagerPayload);
+        Assert.Equal("count", eagerMsg.Key.ToStringUtf8());
+        Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Value, eagerMsg.ResultCase);
+        Assert.Equal(41, JsonSerializer.Deserialize<int>(eagerMsg.Value.Content.Span));
+
+        var (setHeader, setPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.SetStateCommand, setHeader.Type);
+        var setMsg = Gen.SetStateCommandMessage.Parser.ParseFrom(setPayload);
+        Assert.Equal(42, JsonSerializer.Deserialize<int>(setMsg.Value.Content.Span));
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("42", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_PartialStateMapMissingKey_FallsBackToLazyStateCommand()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes(1);
+
+        // Partial state map without the key: only the runtime knows whether it exists, so
+        // the SDK must issue a lazy read and await the completion notification.
+        var startPayload = BuildStartMessagePayloadWithState(
+            "eager-inv-2", 1, "counter-key", 42, partialState: true);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var lazyCompletionPayload = new Gen.GetLazyStateCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(41)) }
+        }.ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.GetLazyStateCompletion, lazyCompletionPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(EagerCounterObject))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Add");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new EagerCounterObject()),
+            ServiceProtocolVersion.V7,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (lazyHeader, lazyPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.GetLazyStateCommand, lazyHeader.Type);
+        var lazyMsg = Gen.GetLazyStateCommandMessage.Parser.ParseFrom(lazyPayload);
+        Assert.Equal("count", lazyMsg.Key.ToStringUtf8());
+        Assert.Equal(1u, lazyMsg.ResultCompletionId);
+
+        var (setHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.SetStateCommand, setHeader.Type);
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("42", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedEagerStateCommand_ResolvesFromEmbeddedValue()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes(1);
+
+        // Replay of a journal the SDK itself would have produced: the eager read's value is
+        // embedded in the replayed command, and the replayed SetState just advances the cursor.
+        // The state map is deliberately DIFFERENT (count=100) — replay must win over it.
+        var startPayload = BuildStartMessagePayloadWithState(
+            "eager-replay-1", 3, "counter-key", 42, partialState: false,
+            ("count", JsonSerializer.SerializeToUtf8Bytes(100)));
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var eagerCommandPayload = ProtobufCodec
+            .CreateGetEagerStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(41))
+            .ToByteArray();
+        var setCommandPayload = ProtobufCodec
+            .CreateSetStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(42))
+            .ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.GetEagerStateCommand, eagerCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.SetStateCommand, setCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(EagerCounterObject))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Add");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new EagerCounterObject()),
+            ServiceProtocolVersion.V7,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        // No replayed command is re-sent — the invocation completes directly.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("42", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);

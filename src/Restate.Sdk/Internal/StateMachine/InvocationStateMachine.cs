@@ -42,6 +42,10 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private readonly ProtocolWriter _writer;
     private Dictionary<string, ReadOnlyMemory<byte>>? _initialState;
 
+    // True when the StartMessage state map is partial: only the keys it contains are locally
+    // known; absence from the map is NOT definitive and must fall back to a lazy state read.
+    private bool _stateIsPartial;
+
     // Reusable Utf8JsonWriter — avoids allocating a new writer per Serialize call.
     // Reset() is called before each use to point at _serializeBuffer.
     private Utf8JsonWriter? _jsonWriter;
@@ -82,6 +86,23 @@ internal sealed partial class InvocationStateMachine : IDisposable
     public string Key { get; private set; } = "";
 
     public ulong RandomSeed { get; private set; }
+
+    /// <summary>
+    ///     The scope this invocation was called within (StartMessage V7 field 10), or null.
+    ///     Captured for diagnostics; no public API is built on top of it yet.
+    /// </summary>
+    public string? Scope { get; private set; }
+
+    /// <summary>
+    ///     The concurrency limit key of this invocation (StartMessage V7 field 11), or null.
+    ///     Only meaningful when <see cref="Scope" /> is set.
+    /// </summary>
+    public string? LimitKey { get; private set; }
+
+    /// <summary>
+    ///     The idempotency key this invocation was submitted with (StartMessage V7 field 12), or null.
+    /// </summary>
+    public string? IdempotencyKey { get; private set; }
 
     public JsonSerializerOptions JsonOptions { get; }
 
@@ -127,12 +148,14 @@ internal sealed partial class InvocationStateMachine : IDisposable
     }
 
     public void Initialize(string invocationId, string key, ulong randomSeed,
-        int knownEntries, Dictionary<string, ReadOnlyMemory<byte>>? initialState = null) =>
-        Initialize(invocationId, [], key, randomSeed, knownEntries, initialState);
+        int knownEntries, Dictionary<string, ReadOnlyMemory<byte>>? initialState = null,
+        bool stateIsPartial = false) =>
+        Initialize(invocationId, [], key, randomSeed, knownEntries, initialState, stateIsPartial);
 
     public void Initialize(string invocationId, byte[] rawInvocationId, string key, ulong randomSeed,
         int knownEntries,
-        Dictionary<string, ReadOnlyMemory<byte>>? initialState = null)
+        Dictionary<string, ReadOnlyMemory<byte>>? initialState = null,
+        bool stateIsPartial = false)
     {
         if (State != InvocationState.WaitingStart)
             ThrowInvalidState(State, "initialize");
@@ -142,6 +165,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
         Key = key;
         RandomSeed = randomSeed;
         _initialState = initialState;
+        _stateIsPartial = stateIsPartial;
         _journal.Initialize(knownEntries);
         State = knownEntries > 0 ? InvocationState.Replaying : InvocationState.Processing;
 

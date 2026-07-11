@@ -43,8 +43,10 @@ internal static class ProtobufCodec
     {
         var msg = Gen.StartMessage.Parser.ParseFrom(payload);
 
+        // Always build the state map — a partial map still resolves the keys it contains
+        // locally. partial_state only tells whether absence from the map is definitive.
         Dictionary<string, ReadOnlyMemory<byte>>? eagerState = null;
-        if (!msg.PartialState)
+        if (msg.StateMap.Count > 0)
         {
             eagerState = new Dictionary<string, ReadOnlyMemory<byte>>(msg.StateMap.Count);
             foreach (var entry in msg.StateMap)
@@ -57,7 +59,11 @@ internal static class ProtobufCodec
             msg.Key.Length > 0 ? msg.Key : null,
             msg.KnownEntries,
             msg.RandomSeed,
-            eagerState);
+            eagerState,
+            msg.PartialState,
+            msg.HasScope ? msg.Scope : null,
+            msg.HasLimitKey ? msg.LimitKey : null,
+            msg.HasIdempotencyKey ? msg.IdempotencyKey : null);
     }
 
     public static (ReadOnlyMemory<byte> Input, Dictionary<string, string>? Headers) ParseInputCommand(ReadOnlySpan<byte> payload)
@@ -369,6 +375,33 @@ internal static class ProtobufCodec
         };
     }
 
+    /// <summary>
+    ///     Creates a GetEagerStateCommand recording a state read resolved from the locally known
+    ///     state map. The result is embedded in the command itself: the Value oneof when the key
+    ///     is present, the Void oneof when it is definitively absent (<paramref name="value" /> null).
+    /// </summary>
+    public static Gen.GetEagerStateCommandMessage CreateGetEagerStateCommand(string key, ReadOnlyMemory<byte>? value)
+    {
+        var msg = new Gen.GetEagerStateCommandMessage { Key = ByteString.CopyFromUtf8(key) };
+        if (value is not null)
+            msg.Value = new Gen.Value { Content = ByteString.CopyFrom(value.Value.Span) };
+        else
+            msg.Void = new Gen.Void();
+        return msg;
+    }
+
+    /// <summary>
+    ///     Creates a GetEagerStateKeysCommand recording a state-keys read resolved from the locally
+    ///     known (complete) state map. The keys are embedded in the command itself.
+    /// </summary>
+    public static Gen.GetEagerStateKeysCommandMessage CreateGetEagerStateKeysCommand(string[] keys)
+    {
+        var stateKeys = new Gen.StateKeys();
+        for (var i = 0; i < keys.Length; i++)
+            stateKeys.Keys.Add(ByteString.CopyFromUtf8(keys[i]));
+        return new Gen.GetEagerStateKeysCommandMessage { Value = stateKeys };
+    }
+
     public static Gen.CompleteAwakeableCommandMessage CreateCompleteAwakeableSuccess(string id, ReadOnlySpan<byte> value)
     {
         return new Gen.CompleteAwakeableCommandMessage
@@ -445,12 +478,19 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.ErrorMessage CreateErrorMessage(uint code, string message)
+    /// <summary>
+    ///     Creates an ErrorMessage. <paramref name="behavior" /> (V7, field 9) tells the runtime
+    ///     what to do with the failed invocation; the default RETRY is wire value 0 — it is not
+    ///     serialized and matches the behavior of all previous protocol versions.
+    /// </summary>
+    public static Gen.ErrorMessage CreateErrorMessage(uint code, string message,
+        Gen.ErrorBehavior behavior = Gen.ErrorBehavior.Retry)
     {
         return new Gen.ErrorMessage
         {
             Code = code,
-            Message = message
+            Message = message,
+            Behavior = behavior
         };
     }
 
