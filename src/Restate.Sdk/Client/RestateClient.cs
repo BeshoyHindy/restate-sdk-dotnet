@@ -52,7 +52,9 @@ public sealed class RestateClient : IDisposable
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        options.MakeReadOnly();
+        // Populate the default reflection resolver: MakeReadOnly() without a resolver throws.
+        // Safe here — the whole class is annotated RequiresUnreferencedCode/RequiresDynamicCode.
+        options.MakeReadOnly(populateMissingResolver: true);
         return options;
     }
 
