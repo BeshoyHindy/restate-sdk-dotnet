@@ -115,8 +115,9 @@ internal sealed class RequestIdentityVerifier
             return false;
         }
 
-        int byteCount = Encoding.UTF8.GetByteCount(token);
-        byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        // Rent by the worst-case size instead of pre-scanning the token: GetByteCount would
+        // walk the (up to 8 KB) string once just to size the rent, then GetBytes walks it again.
+        byte[] rented = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(token.Length));
         try
         {
             int written = Encoding.UTF8.GetBytes(token, rented);
