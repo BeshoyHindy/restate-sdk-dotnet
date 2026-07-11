@@ -434,6 +434,18 @@ public class CombinatorTests
         Assert.Throws<ArgumentNullException>(() => SettledResult<int>.Failure(null!));
     }
 
+    [Fact]
+    public void SettledResult_FailureBranch_ErrorFlowsAsNonNull()
+    {
+        var result = SettledResult<int>.Failure(new InvalidOperationException("boom"));
+
+        // [MemberNotNullWhen(false, nameof(Error))]: no null-forgiving operator needed here.
+        if (!result.IsSuccess)
+            Assert.Equal("boom", result.Error.Message);
+        else
+            Assert.Fail("Expected a failed settlement");
+    }
+
     // ── MockContext Any / AllSettled ──
 
     [Fact]
