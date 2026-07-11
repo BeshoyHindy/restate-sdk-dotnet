@@ -7,6 +7,8 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <!-- Test-only: Ed25519 signing for identity tests (the SDK ships verify-only code) -->
+        <PackageReference Include="BouncyCastle.Cryptography"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
         <PackageReference Include="xunit"/>
         <PackageReference Include="xunit.runner.visualstudio">
