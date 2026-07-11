@@ -35,7 +35,13 @@ internal sealed partial class InvocationStateMachine
             fields.Key ?? "",
             fields.RandomSeed,
             (int)fields.KnownEntries,
-            fields.EagerState);
+            fields.EagerState,
+            fields.IsPartialState);
+
+        // V7 scope fields — captured internally, no public API yet.
+        Scope = fields.Scope;
+        LimitKey = fields.LimitKey;
+        IdempotencyKey = fields.IdempotencyKey;
 
         // The InputCommand always follows StartMessage (regardless of known_entries).
         Log.ReadingMessage(Logger, InvocationId);
@@ -60,10 +66,14 @@ internal sealed partial class InvocationStateMachine
         }
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.Input, input));
+        _nextCompletionId = (uint)_journal.Count;
         inputMsg.Dispose();
 
-        // Read remaining known entries (replayed commands and notifications).
-        // known_entries includes the InputCommand (entry 0), so we start from 1.
+        // Drain the remaining known entries. known_entries counts commands AND notifications
+        // (a resumed journal always contains notifications), but only commands advance the
+        // handler's replay progress: commands are staged for in-order consumption while
+        // notifications route into the completion manager as (early) results.
+        var commandCount = 1; // The InputCommand consumed above is command 0.
         for (var i = 1; i < (int)fields.KnownEntries; i++)
         {
             Log.ReadingMessage(Logger, InvocationId);
@@ -75,8 +85,19 @@ internal sealed partial class InvocationStateMachine
             {
                 var (detachedBuf, detachedMem) = msg.DetachPayload();
                 _journal.TrackPooledBuffer(detachedBuf);
-                _journal.Append(JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type), detachedMem));
+                _journal.StageReplay(JournalEntry.Replayed(
+                    MapMessageTypeToEntry(msg.Header.Type), msg.Header.Type, detachedMem));
+                commandCount++;
+
+                // Keep the live counter ahead of every completion id consumed by the replayed
+                // prefix so post-replay commands never collide with replayed ones. For calls the
+                // result id is allocated after the invocation-id index, so it covers both.
+                if (ProtobufCodec.CommandHasCompletionId(msg.Header.Type))
+                {
+                    var replayedId = ProtobufCodec.ParseCommandCompletionId(msg.Header.Type, detachedMem.Span);
+                    if (replayedId >= _nextCompletionId)
+                        _nextCompletionId = replayedId + 1;
+                }
             }
             else if (msg.Header.Type.IsNotification())
             {
@@ -86,7 +107,11 @@ internal sealed partial class InvocationStateMachine
             msg.Dispose();
         }
 
-        // After reading all known entries, transition to Processing
+        // The replay boundary is the command count, not known_entries: notifications in the
+        // replayed prefix must not keep the state machine in Replaying once every command
+        // has been re-traversed.
+        _journal.SetReplayBoundary(commandCount);
+
         if (!_journal.IsReplaying)
         {
             State = InvocationState.Processing;
@@ -110,6 +135,20 @@ internal sealed partial class InvocationStateMachine
             if (message is null)
             {
                 Log.StreamEnded(Logger, InvocationId);
+
+                // EOF: the runtime half-closed the request stream. Every buffered frame has
+                // already been delivered (ReadMessageAsync only returns null once the pipe is
+                // drained), so no completion can ever arrive again. Poison both completion
+                // managers so pending — and future — durable waits unwind with
+                // SuspensionException and the invocation suspends.
+                if (State != InvocationState.Closed)
+                {
+                    Log.InputStreamClosed(Logger, InvocationId);
+                    InputClosed = true;
+                    _completions.Poison();
+                    _signalCompletions.Poison();
+                }
+
                 break;
             }
 
@@ -124,7 +163,9 @@ internal sealed partial class InvocationStateMachine
     {
         var type = message.Header.Type;
 
-        if (type == MessageType.EntryAck)
+        // ProposeRunCompletionAck is only sent when the SDK sets the REQUIRES_ACK flag on
+        // ProposeRunCompletion, which this SDK never does — ignore it defensively.
+        if (type is MessageType.EntryAck or MessageType.ProposeRunCompletionAck)
             return;
 
         // Signal notifications (awakeable completions delivered via the signal mechanism)
@@ -192,37 +233,12 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Reads messages until the next journal command is appended at the expected index.
-    ///     Notifications (completions, acks) are handled inline but don't advance the journal —
-    ///     the loop continues until a Command message arrives or the stream ends.
-    ///     Cancellation token guards against indefinite waits.
+    ///     Consumes the next replayed command entry (staged during the StartAsync drain) and
+    ///     transitions to Processing when the replay boundary is reached.
     /// </summary>
-    private async ValueTask<JournalEntry> ReplayNextEntryAsync(
-        JournalEntryType expectedType, string? name, CancellationToken ct)
+    private JournalEntry TakeReplayEntry()
     {
-        var index = _journal.Count;
-
-        while (index >= _journal.Count)
-        {
-            var msg = await _reader.ReadMessageAsync(ct).ConfigureAwait(false)
-                      ?? throw new ProtocolException("Stream ended during replay");
-
-            if (msg.Header.Type.IsCommand())
-            {
-                var (detachedBuf, detachedMem) = msg.DetachPayload();
-                _journal.TrackPooledBuffer(detachedBuf);
-                _journal.Append(JournalEntry.Completed(
-                    MapMessageTypeToEntry(msg.Header.Type), detachedMem, name));
-            }
-            else if (msg.Header.Type.IsNotification())
-            {
-                HandleIncomingMessage(msg);
-            }
-
-            msg.Dispose();
-        }
-
-        var replayEntry = _journal[index];
+        var entry = _journal.TakeReplayEntry();
 
         if (!_journal.IsReplaying)
         {
@@ -230,17 +246,37 @@ internal sealed partial class InvocationStateMachine
             Log.ReplayCompleted(Logger, InvocationId);
         }
 
-        return replayEntry;
+        return entry;
     }
 
-    private void AdvanceReplayIndex(JournalEntryType type)
+    /// <summary>
+    ///     Skips over a replayed non-completable command (e.g. SetState) that produces no result.
+    /// </summary>
+    private void AdvanceReplayIndex()
     {
-        _journal.Append(JournalEntry.Completed(type, ReadOnlyMemory<byte>.Empty));
-        if (!_journal.IsReplaying)
-        {
-            State = InvocationState.Processing;
-            Log.ReplayCompleted(Logger, InvocationId);
-        }
+        _ = TakeReplayEntry();
+    }
+
+    /// <summary>
+    ///     Registers for the result of a replayed completable command. The completion id is parsed
+    ///     from the replayed command payload; the result itself was (or will be) delivered as a
+    ///     notification — replayed notifications are already stored as early results, live ones
+    ///     resolve the returned source when they arrive.
+    /// </summary>
+    private TaskCompletionSource<CompletionResult> RegisterReplayCompletion(in JournalEntry replay)
+    {
+        var completionId = (int)ProtobufCodec.ParseCommandCompletionId(replay.CommandType, replay.Result.Span);
+        Log.AwaitingCompletion(Logger, InvocationId, completionId);
+        return _completions.GetOrRegister(completionId);
+    }
+
+    /// <summary>
+    ///     Awaits the result of a replayed completable command (see <see cref="RegisterReplayCompletion" />).
+    /// </summary>
+    private async ValueTask<CompletionResult> AwaitReplayCompletionAsync(JournalEntry replay)
+    {
+        var tcs = RegisterReplayCompletion(in replay);
+        return await tcs.Task.ConfigureAwait(false);
     }
 
     private static JournalEntryType MapMessageTypeToEntry(MessageType type)

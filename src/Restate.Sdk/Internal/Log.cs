@@ -42,6 +42,10 @@ internal static partial class Log
         Message = "Incoming message reader stopped: invocationId={InvocationId}")]
     public static partial void IncomingReaderStopped(ILogger logger, Exception exception, string invocationId);
 
+    [LoggerMessage(EventId = 11, Level = LogLevel.Information,
+        Message = "Invocation suspending: invocationId={InvocationId}")]
+    public static partial void InvocationSuspending(ILogger logger, string invocationId);
+
     // --- Protocol diagnostics (Trace level, zero-overhead when disabled) ---
 
     [LoggerMessage(EventId = 100, Level = LogLevel.Trace,
@@ -91,4 +95,12 @@ internal static partial class Log
     [LoggerMessage(EventId = 111, Level = LogLevel.Debug,
         Message = "[{InvocationId}] Cancelling invocation '{TargetInvocationId}'")]
     public static partial void CancellingInvocation(ILogger logger, string invocationId, string targetInvocationId);
+
+    [LoggerMessage(EventId = 112, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Input stream closed — poisoning pending durable waits")]
+    public static partial void InputStreamClosed(ILogger logger, string invocationId);
+
+    [LoggerMessage(EventId = 113, Level = LogLevel.Debug,
+        Message = "[{InvocationId}] Suspending: pendingCompletions={PendingCompletions}, pendingSignals={PendingSignals}")]
+    public static partial void InvocationSuspended(ILogger logger, string invocationId, int pendingCompletions, int pendingSignals);
 }
