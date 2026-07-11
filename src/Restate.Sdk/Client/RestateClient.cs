@@ -116,9 +116,11 @@ public sealed class RestateClient : IDisposable
     ///     Attaches to a running invocation by ID and awaits its result.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
     public async Task<TResponse> Attach<TResponse>(string invocationId, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
@@ -140,9 +142,11 @@ public sealed class RestateClient : IDisposable
     ///     Gets the output of a completed invocation, or throws if not yet available.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
     public async Task<TResponse> GetOutput<TResponse>(string invocationId, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
         var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
@@ -270,10 +274,15 @@ public readonly record struct ServiceHandle
     ///     AOT-safe: serializes the request and deserializes the response using the provided
     ///     <see cref="JsonTypeInfo{T}" /> instances.
     /// </summary>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="requestTypeInfo" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
     public Task<TResponse> Call<TRequest, TResponse>(string handler, TRequest? request,
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(requestTypeInfo);
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
         return _client.CallAsync(BuildPath(handler), request, requestTypeInfo, responseTypeInfo, ct);
     }
 
@@ -281,9 +290,11 @@ public readonly record struct ServiceHandle
     ///     Calls a handler that takes no request payload and returns the response.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
     public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
         return _client.CallAsync(BuildPath(handler), responseTypeInfo, ct);
     }
 
@@ -300,9 +311,11 @@ public readonly record struct ServiceHandle
     ///     Sends a one-way invocation and returns the invocation ID.
     ///     AOT-safe: serializes the request using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="requestTypeInfo" /> is null.</exception>
     public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
         TimeSpan? delay = null, string? idempotencyKey = null, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(requestTypeInfo);
         return _client.SendAsync(BuildPath(handler), request, requestTypeInfo, delay, idempotencyKey, ct);
     }
 

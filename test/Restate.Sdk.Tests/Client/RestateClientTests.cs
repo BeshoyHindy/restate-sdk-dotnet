@@ -133,6 +133,61 @@ public class RestateClientTests
         Assert.Equal("done", response.Message);
     }
 
+    // ── Failure modes ──
+
+    [Fact]
+    public async Task Call_NullLiteralRequest_BindsToTypeInfoOverload_ThrowsWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        // A null argument is a better match for JsonTypeInfo<TResponse> than for object?, so this
+        // binds to the AOT overload; it must fail fast before any HTTP request is issued.
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => client.Service("Greeter").Call<GreetResponse>("Greet", null!));
+
+        Assert.Equal("responseTypeInfo", ex.ParamName);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task Send_NullThirdArgument_BindsToTypeInfoOverload_ThrowsWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        // With a typed request, a null third argument binds to the JsonTypeInfo overload
+        // (not the reflection overload's TimeSpan? delay); it must fail fast before sending.
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(
+            () => client.Service("Greeter").Send("Greet", new GreetRequest("Ada"), null!));
+
+        Assert.Equal("requestTypeInfo", ex.ParamName);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task Call_TypeInfo_ErrorStatus_ThrowsHttpRequestException()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        handler.ResponseBody = """{"message":"boom"}""";
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("null")]
+    public async Task Send_TypeInfo_MissingInvocationId_ReturnsEmpty(string responseBody)
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = responseBody;
+
+        var invocationId = await client.Service("Greeter").Send(
+            "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
+
+        Assert.Equal("", invocationId);
+    }
+
     // ── Reflection overloads (behavioral parity) ──
 
     [Fact]
@@ -176,6 +231,7 @@ public class RestateClientTests
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastRequestBody { get; private set; }
         public string ResponseBody { get; set; } = "{}";
+        public HttpStatusCode ResponseStatusCode { get; set; } = HttpStatusCode.OK;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -184,7 +240,7 @@ public class RestateClientTests
             LastRequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(ResponseStatusCode)
             {
                 Content = new StringContent(ResponseBody, Encoding.UTF8, "application/json")
             };
