@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Restate.Sdk.Internal.Identity;
 
 namespace Restate.Sdk.Hosting;
 
@@ -26,6 +27,7 @@ public static class RestateHost
 public sealed class RestateHostBuilder
 {
     private readonly List<Type> _serviceTypes = [];
+    private readonly List<string> _identityKeys = [];
     private int _port = 9080;
 
     internal RestateHostBuilder()
@@ -65,6 +67,23 @@ public sealed class RestateHostBuilder
     }
 
     /// <summary>
+    ///     Configures Restate identity public keys (<c>publickeyv1_&lt;base58&gt;</c>) used to verify
+    ///     that incoming requests originate from a trusted Restate instance. When at least one key is
+    ///     configured, every request to the Restate endpoints must carry a valid
+    ///     <c>x-restate-signature-scheme: v1</c> signature; requests that fail verification are
+    ///     rejected with <c>401 Unauthorized</c>. When no keys are configured, requests are not verified.
+    /// </summary>
+    /// <param name="keys">The serialized identity keys, as printed by <c>restate-server</c> on startup.</param>
+    /// <returns>This builder for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="keys" /> is <see langword="null" />.</exception>
+    public RestateHostBuilder WithIdentityKeys(params string[] keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        _identityKeys.AddRange(keys);
+        return this;
+    }
+
+    /// <summary>
     ///     Builds a <see cref="WebApplication" /> with Restate routes mapped.
     /// </summary>
     [RequiresUnreferencedCode("Build uses reflection-based DI and JSON serialization.")]
@@ -76,10 +95,13 @@ public sealed class RestateHostBuilder
         ConfigureKestrel(builder);
 
         var types = _serviceTypes;
+        var identityKeys = _identityKeys;
         builder.Services.AddRestate(opts =>
         {
             foreach (var type in types)
                 opts.ServiceTypes.Add(type);
+
+            opts.IdentityKeys.AddRange(identityKeys);
         });
 
         var app = builder.Build();
@@ -104,6 +126,9 @@ public sealed class RestateHostBuilder
         ConfigureKestrel(builder);
 
         configureServices(builder.Services);
+
+        if (_identityKeys.Count > 0)
+            builder.Services.AddSingleton(RequestIdentityVerifier.FromKeys(_identityKeys));
 
         var app = builder.Build();
         app.MapRestate();
