@@ -407,6 +407,55 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
+    public override ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var futuresCopy = new IDurableFuture<T>[futures.Length];
+        futures.CopyTo(futuresCopy);
+        return AwaitAny(futuresCopy);
+
+        static async ValueTask<T> AwaitAny(IDurableFuture<T>[] items)
+        {
+            List<Exception>? errors = null;
+            foreach (var item in items)
+                try
+                {
+                    return await item.GetResult();
+                }
+                catch (Exception ex)
+                {
+                    errors ??= new List<Exception>(items.Length);
+                    errors.Add(ex);
+                }
+
+            throw new AggregateException("All durable futures failed.", errors ?? []);
+        }
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<SettledResult<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var futuresCopy = new IDurableFuture<T>[futures.Length];
+        futures.CopyTo(futuresCopy);
+        return AwaitAllSettled(futuresCopy);
+
+        static async ValueTask<SettledResult<T>[]> AwaitAllSettled(IDurableFuture<T>[] items)
+        {
+            var results = new SettledResult<T>[items.Length];
+            for (var i = 0; i < items.Length; i++)
+                try
+                {
+                    results[i] = SettledResult<T>.Success(await items[i].GetResult());
+                }
+                catch (Exception ex)
+                {
+                    results[i] = SettledResult<T>.Failure(ex);
+                }
+
+            return results;
+        }
+    }
+
+    /// <inheritdoc />
     public override async IAsyncEnumerable<(IDurableFuture future, Exception? error)> WaitAll(
         params IDurableFuture[] futures)
     {
