@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-11
+
+### Added
+
+- Service protocol V7 support, negotiated per request from the `Content-Type`; V5 remains the
+  minimum. Unsupported versions are rejected with 415, and the response content-type now echoes
+  the negotiated version instead of a hardcoded v6.
+- Suspension: invocations blocked on durable results (sleeps, awakeables, calls, promises) emit
+  a `SuspensionMessage` and release the connection when the input stream closes, instead of
+  holding the HTTP/2 stream open. Restate re-invokes with the longer journal on completion.
+- Request identity verification: configure `publickeyv1_...` keys via `WithIdentityKeys(...)`
+  (host builder, `RestateOptions`, or the Lambda handler) to require a valid `x-restate-jwt-v1`
+  Ed25519 signature on `/invoke` and `/discover`; unsigned or invalid requests get 401.
+  Implemented with a vendored, verify-only Ed25519 — no new dependencies, Native AOT-safe.
+- Eager state: state known from the invocation start message is journaled with eager-state
+  commands instead of lazy server round-trips.
+- Discovery manifest v4 negotiation.
+- AOT-safe ingress client: `JsonTypeInfo<T>` overloads across `RestateClient` so Native AOT
+  applications can call Restate services without reflection.
+- `Any` and `AllSettled` combinators on `Context`, with `SettledResult<T>`
+  (adopted from a community contribution by @stevefan1999-personal).
+- New package `Restate.Sdk.Testing.Containers`: a testcontainers harness
+  (`RestateTestHarness`, `RestateBuilder`/`RestateContainer`) for integration-testing services
+  against a real Restate server in Docker.
+- Observability: a `Restate.Sdk` meter (invocation counter, duration histogram,
+  replayed-commands histogram), enriched invocation spans, opt-in per-operation activities via
+  `RestateTelemetryOptions` on all hosting paths, and a replay-aware `ctx.Logger`.
+- Public API surface tracked with `Microsoft.CodeAnalysis.PublicApiAnalyzers` across all
+  shipped packages.
+
+### Fixed
+
+- Journals containing notifications (produced by suspension/resume) now replay correctly: the
+  replay boundary counted only commands, and replayed results were read from command payloads
+  instead of completion notifications.
+- Replayed `ctx.CancelInvocation` entries no longer fail the invocation on resume.
+- `Run` closures whose completion was never journaled are re-executed on replay instead of
+  waiting forever.
+- Awakeable signal indices no longer collide with the protocol's reserved built-in range, so a
+  runtime cancellation can no longer resolve a user awakeable.
+- Pending durable waits are failed when the connection dies abnormally (server restart,
+  malformed frame), so handlers unwind instead of leaking parked invocations.
+- `Any`/`AllSettled`/`WaitAll` propagate suspension instead of recording phantom failures, and
+  treat canceled futures as failures rather than hanging.
+- Cancelled invocation attempts end with a terminal error frame, keeping Lambda responses
+  protocol-valid.
+- Partial-state invocations no longer return wrong `Get` results after a `Set` on another key.
+- The ingress client no longer throws on first use when reflection serialization is active.
+- Identity keys are validated eagerly at configuration time, and configuring keys after Lambda
+  handler construction now throws instead of being silently ignored.
+- NativeAotCounter and NativeAotSaga sample ports no longer collide with Saga and FanOut.
+
+### Changed
+
+- Invocation hot path allocates less: cached loggers and handler display names, no tracing
+  setup when no listener is attached, single-pass JWT decoding.
+- Dependency floor: Amazon.Lambda.Core 3.1.1, Amazon.Lambda.APIGatewayEvents 3.0.0,
+  Google.Protobuf 3.35, Grpc.Tools 2.81; CI runs against restate-server 1.7.
+
 ## [0.1.0-alpha.5] - 2026-02-23
 
 ### Changed

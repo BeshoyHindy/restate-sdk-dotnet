@@ -40,14 +40,15 @@ that run on the Restate runtime.
 ### Install
 
 ```bash
-dotnet add package Restate.Sdk --prerelease
+dotnet add package Restate.Sdk
 ```
 
 Optional packages:
 
 ```bash
-dotnet add package Restate.Sdk.Testing --prerelease   # Mock contexts for unit testing
-dotnet add package Restate.Sdk.Lambda --prerelease    # AWS Lambda adapter
+dotnet add package Restate.Sdk.Testing              # Mock contexts for unit testing
+dotnet add package Restate.Sdk.Testing.Containers   # Testcontainers integration harness
+dotnet add package Restate.Sdk.Lambda               # AWS Lambda adapter
 ```
 
 > The Roslyn source generator is bundled with `Restate.Sdk` -- typed clients and service
@@ -468,7 +469,7 @@ dotnet run
 
 | SDK Version | Restate Server | Protocol | .NET |
 |-------------|----------------|----------|------|
-| 0.1.0-alpha.5 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.2.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 
 ## Contributing
 
