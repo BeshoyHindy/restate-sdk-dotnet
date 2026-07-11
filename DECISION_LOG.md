@@ -126,3 +126,43 @@ alternatives considered, and rationale.
 | Handler registration | Annotation scan | Manual | Manual | Attribute macros | Decorators | **Source generator + attributes** |
 | State typing | StateKey | String keys | String keys | String keys | String keys | **StateKey\<T\>** |
 | Protocol version | v5-v6 | v5-v6 | v5-v6 | v5-v6 | v5-v6 | **v5-v6** |
+
+## 11. Suspension via Poison-on-EOF
+
+**Decision:** When the input stream reaches EOF, `CompletionManager.Poison()` fails every pending durable wait with an internal `SuspensionException`; the handler unwinds naturally at exactly the awaits it is blocked on, and the SDK emits a `SuspensionMessage` listing the pending completion/signal ids (legacy fields on v5/v6 streams, `awaiting_on` on v7) without an `End` frame.
+
+**Context:** After input EOF no completion can ever arrive, so every pending wait is unresolvable. The same mechanism covers abnormal disconnects (reader faults poison the waits too, so handlers never leak).
+
+**Alternatives:**
+- Dedicated quiescence tracking integrated with the scheduler: rejected as complex and invasive
+- Suspending on SDK-side inactivity timers: rejected — the server owns that decision via stream close
+
+The v7 `awaiting_on` future is emitted as a flat FIRST_COMPLETED leaf: a spurious resume replays and re-suspends, but a wake is never missed. Precise combinator trees are a possible follow-up.
+
+## 12. Vendored Verify-Only Ed25519 for Request Identity
+
+**Decision:** Request identity verification vendors the public-domain Chaos.NaCl Ed25519 verification path (~1.2k lines, CC0, attribution kept) instead of taking a dependency. Signing exists only in tests (BouncyCastle as a test-only dependency). Correctness is anchored by RFC 8032 §7.1 test vectors.
+
+**Context:** .NET 10 ships no standalone Ed25519.
+
+**Alternatives:**
+- BouncyCastle: rejected — ~10 MB dependency for one primitive
+- NSec/libsodium: rejected — native binaries complicate Lambda deployment and trimming
+
+## 13. Protocol V7 with V5 Minimum, One Proto for All Versions
+
+**Decision:** The endpoint negotiates v5–v7 from the request content-type and varies suspension encoding by version. One vendored proto file serves all three versions by keeping the legacy `SuspensionMessage` fields alongside `awaiting_on` (documented divergence from upstream, which reserves them). Scopes/limit keys and the pause/fail error behavior are wired at the protocol layer without new public API until the semantics settle upstream.
+
+## 14. Separate Restate.Sdk.Testing.Containers Package
+
+**Decision:** The testcontainers harness ships as its own package so `Restate.Sdk.Testing` (mock contexts) stays dependency-free. The harness exposes `IAsyncDisposable` and documents an xunit `IAsyncLifetime` fixture instead of referencing xunit.
+
+**Context:** Testcontainers transitively pulls Docker.DotNet and friends; mock-only consumers should not inherit that. Mirrors the Java SDK's separate testing artifact.
+
+## 15. Repository Process: Trunk-Based with Checks-Only Protection
+
+**Decision:** GitHub Flow with checks-only branch protection (required: Build & Test, Format Check, Integration Test, CodeQL; linear history; squash-only; applies to admins; no required review count while there is a single maintainer). Releases flow through release-please; conventional-commit PR titles are linted.
+
+**Alternatives:**
+- Classic GitFlow: rejected — ceremony without benefit for a single-maintainer pre-1.0 library
+- Required reviews: deferred until a second maintainer exists (would block the solo maintainer's own PRs)
