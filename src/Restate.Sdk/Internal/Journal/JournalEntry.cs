@@ -1,3 +1,5 @@
+using Restate.Sdk.Internal.Protocol;
+
 namespace Restate.Sdk.Internal.Journal;
 
 internal enum JournalEntryType
@@ -30,12 +32,23 @@ internal readonly struct JournalEntry
     public ReadOnlyMemory<byte> Result { get; }
     public bool IsCompleted { get; }
 
-    private JournalEntry(JournalEntryType type, string? name, ReadOnlyMemory<byte> result, bool completed)
+    /// <summary>
+    ///     For replayed entries, the wire command type this entry was created from
+    ///     (e.g. distinguishes <see cref="MessageType.GetLazyStateCommand" /> from
+    ///     <see cref="MessageType.GetEagerStateCommand" />, which map to the same
+    ///     <see cref="JournalEntryType" />). For locally created entries this is
+    ///     <see cref="MessageType.Start" /> (the default) and must not be read.
+    /// </summary>
+    public MessageType CommandType { get; }
+
+    private JournalEntry(JournalEntryType type, string? name, ReadOnlyMemory<byte> result, bool completed,
+        MessageType commandType = MessageType.Start)
     {
         Type = type;
         Name = name;
         Result = result;
         IsCompleted = completed;
+        CommandType = commandType;
     }
 
     public static JournalEntry Completed(JournalEntryType type, ReadOnlyMemory<byte> result, string? name = null)
@@ -48,8 +61,18 @@ internal readonly struct JournalEntry
         return new JournalEntry(type, name, ReadOnlyMemory<byte>.Empty, false);
     }
 
+    /// <summary>
+    ///     Creates an entry for a replayed command. <paramref name="commandPayload" /> holds the raw
+    ///     protobuf command bytes (not the operation's result value — results arrive as notifications).
+    /// </summary>
+    public static JournalEntry Replayed(JournalEntryType type, MessageType commandType,
+        ReadOnlyMemory<byte> commandPayload, string? name = null)
+    {
+        return new JournalEntry(type, name, commandPayload, true, commandType);
+    }
+
     public JournalEntry WithCompletion(ReadOnlyMemory<byte> result)
     {
-        return new JournalEntry(Type, Name, result, true);
+        return new JournalEntry(Type, Name, result, true, CommandType);
     }
 }

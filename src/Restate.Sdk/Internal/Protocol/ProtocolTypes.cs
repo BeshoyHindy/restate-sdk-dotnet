@@ -1,7 +1,11 @@
 namespace Restate.Sdk.Internal.Protocol;
 
 /// <summary>
-///     Parsed StartMessage fields.
+///     Parsed StartMessage fields. <paramref name="EagerState" /> holds the state map sent by the
+///     runtime (null when empty); <paramref name="IsPartialState" /> tells whether that map is
+///     complete — when false, a key absent from the map is definitively unset. The V7 scope
+///     fields (<paramref name="Scope" />, <paramref name="LimitKey" />,
+///     <paramref name="IdempotencyKey" />) are null when the runtime did not send them.
 /// </summary>
 internal readonly record struct StartMessageFields(
     byte[] RawId,
@@ -9,7 +13,11 @@ internal readonly record struct StartMessageFields(
     string? Key,
     uint KnownEntries,
     ulong RandomSeed,
-    Dictionary<string, ReadOnlyMemory<byte>>? EagerState);
+    Dictionary<string, ReadOnlyMemory<byte>>? EagerState,
+    bool IsPartialState,
+    string? Scope,
+    string? LimitKey,
+    string? IdempotencyKey);
 
 /// <summary>
 ///     Parsed completion notification fields from the Restate protocol.

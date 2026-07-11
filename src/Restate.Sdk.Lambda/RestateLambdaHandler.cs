@@ -8,8 +8,10 @@ using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.Serialization.SystemTextJson;
 using Microsoft.Extensions.Logging;
+using Restate.Sdk.Hosting;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Protocol;
 
 [assembly: LambdaSerializer(typeof(DefaultLambdaJsonSerializer))]
 
@@ -99,29 +101,57 @@ public abstract class RestateLambdaHandler
     {
         var path = request.Path ?? "";
 
-        if (path.EndsWith("/discover", StringComparison.OrdinalIgnoreCase)) return HandleDiscovery();
+        if (path.EndsWith("/discover", StringComparison.OrdinalIgnoreCase)) return HandleDiscovery(request);
 
         return await HandleInvocation(request, context).ConfigureAwait(false);
     }
 
-    private APIGatewayProxyResponse HandleDiscovery()
+    private APIGatewayProxyResponse HandleDiscovery(APIGatewayProxyRequest request)
     {
+        // Mirror the ASP.NET endpoint's manifest version negotiation via the Accept header.
+        // API Gateway does not normalize header casing, so scan case-insensitively.
+        var acceptHeader = GetHeader(request.Headers, "accept");
+        var selectedContentType = RestateEndpointRouteBuilderExtensions.NegotiateVersion(acceptHeader);
+
+        if (selectedContentType is null)
+            return new APIGatewayProxyResponse
+            {
+                StatusCode = 415,
+                Body = $"Unsupported discovery manifest version. Accept header was '{acceptHeader}'"
+            };
+
         var manifest = EndpointManifest.FromRegistry(_registry, "REQUEST_RESPONSE");
         var json = JsonSerializer.Serialize(manifest, DiscoveryJsonContext.Default.EndpointManifest);
 
-        // Lambda deployments typically use v1 since the runtime discovers via API Gateway.
-        // Version negotiation is not needed here (no Accept header in Lambda proxy events).
         return new APIGatewayProxyResponse
         {
             StatusCode = 200,
             Headers = new Dictionary<string, string>
             {
-                ["content-type"] = "application/vnd.restate.endpointmanifest.v3+json",
+                ["content-type"] = selectedContentType,
                 ["x-restate-server"] = ServerVersion
             },
             Body = json,
             IsBase64Encoded = false
         };
+    }
+
+    /// <summary>
+    ///     Case-insensitive header lookup. API Gateway proxy events preserve the original
+    ///     header casing from the client, so a plain dictionary lookup is not reliable.
+    /// </summary>
+    private static string? GetHeader(IDictionary<string, string>? headers, string name)
+    {
+        if (headers is null)
+            return null;
+
+        foreach (var header in headers)
+        {
+            if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                return header.Value;
+        }
+
+        return null;
     }
 
     private async Task<APIGatewayProxyResponse> HandleInvocation(APIGatewayProxyRequest request, ILambdaContext context)
@@ -153,6 +183,16 @@ public abstract class RestateLambdaHandler
             {
                 StatusCode = 404,
                 Body = $"Handler '{handlerName}' not found on service '{serviceName}'"
+            };
+
+        // Negotiate the service protocol version from the request content type.
+        var contentType = GetHeader(request.Headers, "content-type");
+        if (!ServiceProtocolVersionExtensions.TryParse(contentType, out var protocolVersion))
+            return new APIGatewayProxyResponse
+            {
+                StatusCode = 415,
+                Body = $"Unsupported invocation content type '{contentType}'. " +
+                       $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}"
             };
 
         // Decode the binary protocol body
@@ -189,6 +229,7 @@ public abstract class RestateLambdaHandler
                 service,
                 handlerDef,
                 services,
+                protocolVersion,
                 cts.Token).ConfigureAwait(false);
         }
         finally
@@ -206,7 +247,8 @@ public abstract class RestateLambdaHandler
             StatusCode = 200,
             Headers = new Dictionary<string, string>
             {
-                ["content-type"] = "application/vnd.restate.invocation.v6",
+                // Echo the negotiated protocol version back to the runtime.
+                ["content-type"] = protocolVersion.ToContentType(),
                 ["x-restate-server"] = ServerVersion
             },
             Body = Convert.ToBase64String(responseBody),

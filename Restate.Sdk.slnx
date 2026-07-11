@@ -19,11 +19,13 @@
         <Project Path="src/Restate.Sdk/Restate.Sdk.csproj"/>
         <Project Path="src/Restate.Sdk.Generators/Restate.Sdk.Generators.csproj"/>
         <Project Path="src/Restate.Sdk.Testing/Restate.Sdk.Testing.csproj"/>
+        <Project Path="src/Restate.Sdk.Testing.Containers/Restate.Sdk.Testing.Containers.csproj"/>
         <Project Path="src/Restate.Sdk.Lambda/Restate.Sdk.Lambda.csproj"/>
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/Restate.Sdk.Generators.Tests/Restate.Sdk.Generators.Tests.csproj"/>
         <Project Path="test/Restate.Sdk.Tests/Restate.Sdk.Tests.csproj"/>
+        <Project Path="test/Restate.Sdk.Testing.Containers.Tests/Restate.Sdk.Testing.Containers.Tests.csproj"/>
         <Project Path="test/Restate.Sdk.Benchmarks/Restate.Sdk.Benchmarks.csproj"/>
     </Folder>
 </Solution>

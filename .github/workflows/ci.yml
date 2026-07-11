@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -30,7 +30,23 @@ jobs:
         run: dotnet build --no-restore -c Release
 
       - name: Test
-        run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx"
+        run: dotnet test --no-build -c Release --logger "trx;LogFileName=results.trx" --collect:"XPlat Code Coverage"
+
+      - name: Coverage summary
+        run: |
+          {
+            echo "## Code Coverage"
+            echo ""
+            echo "| Test project | Line | Branch |"
+            echo "|--------------|------|--------|"
+            find . -path '*/TestResults/*' -name 'coverage.cobertura.xml' | sort | while read -r f; do
+              proj=$(echo "$f" | sed -E 's|^\./(.*)/TestResults/.*|\1|')
+              line=$(grep -o 'line-rate="[0-9.]*"' "$f" | head -1 | grep -o '[0-9.]*')
+              branch=$(grep -o 'branch-rate="[0-9.]*"' "$f" | head -1 | grep -o '[0-9.]*')
+              awk -v p="$proj" -v l="$line" -v b="$branch" \
+                'BEGIN { printf "| %s | %.1f%% | %.1f%% |\n", p, l*100, b*100 }'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Pack
         run: dotnet pack --no-build -c Release -o ./artifacts
@@ -52,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -69,7 +85,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

@@ -1,0 +1,12 @@
+- name: Getting Started
+  href: getting-started.md
+- name: Service Types
+  href: service-types.md
+- name: Durable Building Blocks
+  href: durable-building-blocks.md
+- name: Testing
+  href: testing.md
+- name: AWS Lambda
+  href: lambda.md
+- name: Native AOT
+  href: native-aot.md

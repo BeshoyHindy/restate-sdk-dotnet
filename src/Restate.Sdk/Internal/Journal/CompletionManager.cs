@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Internal.Journal;
 
@@ -47,11 +48,23 @@ internal sealed class CompletionManager
 {
     private readonly ConcurrentDictionary<int, CompletionSlot> _slots = new();
 
+    // Set once when the input stream closes. After that point no completion can ever
+    // arrive, so every pending wait — and every wait registered afterwards — is
+    // unresolvable and fails with SuspensionException.
+    private volatile bool _poisoned;
+
     public TaskCompletionSource<CompletionResult> Register(int entryIndex)
     {
         var tcs = new TaskCompletionSource<CompletionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_slots.TryAdd(entryIndex, new CompletionSlot(tcs)))
+        {
+            // Double-check after insertion: closes the race where Poison() enumerates the
+            // dictionary concurrently with this registration, and makes waits registered
+            // after the input closed suspend immediately.
+            if (_poisoned)
+                FailWithSuspension(tcs);
             return tcs;
+        }
 
         // Slot already occupied — either an early completion or a duplicate registration.
         if (_slots.TryRemove(entryIndex, out var slot))
@@ -68,6 +81,8 @@ internal sealed class CompletionManager
             _slots.TryAdd(entryIndex, new CompletionSlot(tcs));
         }
 
+        if (_poisoned)
+            FailWithSuspension(tcs);
         return tcs;
     }
 
@@ -78,7 +93,13 @@ internal sealed class CompletionManager
                 new TaskCompletionSource<CompletionResult>(TaskCreationOptions.RunContinuationsAsynchronously)));
 
         if (slot.Kind == CompletionSlot.SlotKind.Tcs)
+        {
+            // Double-check after insertion (see Register). TrySetException is a no-op on
+            // slots that already resolved, so early results are never clobbered.
+            if (_poisoned)
+                FailWithSuspension(slot.Tcs);
             return slot.Tcs;
+        }
 
         // An early completion arrived before we registered — create a pre-resolved TCS.
         var earlyTcs = new TaskCompletionSource<CompletionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -127,5 +148,69 @@ internal sealed class CompletionManager
         }
 
         _slots.Clear();
+    }
+
+    /// <summary>
+    ///     Marks the manager as poisoned (input stream closed) and fails every pending wait
+    ///     with <see cref="SuspensionException" />. Idempotent. Slots holding early results
+    ///     or failures are untouched — those completions were already delivered.
+    /// </summary>
+    public void Poison()
+    {
+        _poisoned = true;
+
+        foreach (var pair in _slots)
+        {
+            if (pair.Value.Kind == CompletionSlot.SlotKind.Tcs)
+                FailWithSuspension(pair.Value.Tcs);
+        }
+    }
+
+    /// <summary>
+    ///     Collects the ids of every unresolved wait: slots whose task is still incomplete or
+    ///     faulted with <see cref="SuspensionException" />. The keys are the protocol completion
+    ///     ids / signal indices the runtime must observe to resume the invocation. Sorted for
+    ///     deterministic wire output.
+    /// </summary>
+    public List<int> CollectPendingIds()
+    {
+        var ids = new List<int>(_slots.Count);
+        foreach (var pair in _slots)
+        {
+            if (pair.Value.Kind != CompletionSlot.SlotKind.Tcs)
+                continue;
+
+            var task = pair.Value.Tcs.Task;
+            if (!task.IsCompleted || IsSuspensionFault(task))
+                ids.Add(pair.Key);
+        }
+
+        ids.Sort();
+        return ids;
+    }
+
+    private static void FailWithSuspension(TaskCompletionSource<CompletionResult> tcs)
+    {
+        if (tcs.TrySetException(new SuspensionException()))
+        {
+            // Touch Exception to mark it observed: some poisoned slots are never awaited
+            // (e.g. a call's invocation-id notification slot), and an unobserved faulted
+            // task would otherwise raise TaskScheduler.UnobservedTaskException on finalization.
+            _ = tcs.Task.Exception;
+        }
+    }
+
+    private static bool IsSuspensionFault(Task task)
+    {
+        if (!task.IsFaulted)
+            return false;
+
+        foreach (var inner in task.Exception!.InnerExceptions)
+        {
+            if (inner is SuspensionException)
+                return true;
+        }
+
+        return false;
     }
 }

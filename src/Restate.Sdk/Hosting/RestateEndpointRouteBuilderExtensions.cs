@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
+using Restate.Sdk.Internal.Protocol;
 
 namespace Restate.Sdk.Hosting;
 
@@ -20,9 +21,11 @@ public static class RestateEndpointRouteBuilderExtensions
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
 
     // Supported manifest versions, highest priority first.
-    // v4 adds lambda compression fields we don't support yet, so we cap at v3.
+    // v4 only adds the optional lambdaCompression field; we omit it (absence = no
+    // compression), which is a valid v4 manifest, so we can advertise v4.
     private static readonly string[] SupportedContentTypes =
     [
+        "application/vnd.restate.endpointmanifest.v4+json",
         "application/vnd.restate.endpointmanifest.v3+json",
         "application/vnd.restate.endpointmanifest.v2+json",
         "application/vnd.restate.endpointmanifest.v1+json",
@@ -38,12 +41,14 @@ public static class RestateEndpointRouteBuilderExtensions
             return SupportedContentTypes[^1];
 
         // Check version-specific substrings directly (highest priority first)
-        if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v4", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[0];
-        if (acceptHeader.Contains("endpointmanifest.v2", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[1];
-        if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
+        if (acceptHeader.Contains("endpointmanifest.v2", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[2];
+        if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
+            return SupportedContentTypes[3];
 
         return null; // No mutually supported version → 415
     }
@@ -108,8 +113,18 @@ public static class RestateEndpointRouteBuilderExtensions
                 return;
             }
 
+            // Negotiate the service protocol version from the request content type.
+            if (!ServiceProtocolVersionExtensions.TryParse(context.Request.ContentType, out var protocolVersion))
+            {
+                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                await context.Response.WriteAsync(
+                    $"Unsupported invocation content type '{context.Request.ContentType}'. " +
+                    $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}");
+                return;
+            }
+
             context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "application/vnd.restate.invocation.v6";
+            context.Response.ContentType = protocolVersion.ToContentType();
             context.Response.Headers.Append("x-restate-server", ServerVersion);
 
             // Disable response buffering so protocol frames are written directly to the HTTP/2 stream.
@@ -127,6 +142,7 @@ public static class RestateEndpointRouteBuilderExtensions
                     service,
                     handlerDef,
                     context.RequestServices,
+                    protocolVersion,
                     context.RequestAborted);
             }
             catch
