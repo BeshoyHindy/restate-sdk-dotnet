@@ -101,6 +101,7 @@ public sealed class RestateTestHarness : IAsyncDisposable
     /// <param name="options">Optional harness options (image, startup timeout).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>A running harness; dispose it to tear everything down.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure" /> is <see langword="null" />.</exception>
     /// <exception cref="TimeoutException">
     ///     Startup did not complete within <see cref="RestateTestHarnessOptions.StartupTimeout" />.
     /// </exception>
