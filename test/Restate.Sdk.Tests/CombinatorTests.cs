@@ -253,6 +253,27 @@ public class CombinatorTests
         Assert.Empty(ex.InnerExceptions);
     }
 
+    [Fact]
+    public async Task Any_CanceledFuture_CountsAsFailure()
+    {
+        // Invocation abort cancels pending completions (CompletionManager.CancelAll),
+        // so canceled futures must aggregate like failures, in input order.
+        var ctx = new BareContext();
+        var (f1, tcs1) = PendingFuture<int>();
+        var (f2, tcs2) = PendingFuture<int>();
+
+        var task = ctx.Any(f1, f2).AsTask();
+
+        tcs1.SetResult(CompletionResult.Failure(500, "boom"));
+        tcs2.SetCanceled();
+
+        var ex = await Assert.ThrowsAsync<AggregateException>(() => task);
+
+        Assert.Equal(2, ex.InnerExceptions.Count);
+        Assert.IsType<TerminalException>(ex.InnerExceptions[0]);
+        Assert.IsType<TaskCanceledException>(ex.InnerExceptions[1]);
+    }
+
     // ── AllSettled ──
 
     [Fact]
@@ -319,6 +340,24 @@ public class CombinatorTests
 
         Assert.True(results[0].IsSuccess);
         Assert.False(results[1].IsSuccess);
+    }
+
+    [Fact]
+    public async Task AllSettled_CanceledFuture_ReportsFailureWithoutThrowing()
+    {
+        // Invocation abort cancels pending completions (CompletionManager.CancelAll);
+        // AllSettled must settle the canceled future as a failure instead of throwing.
+        var ctx = new BareContext();
+        var f1 = CompletedFuture(1);
+        var (f2, tcs2) = PendingFuture<int>();
+
+        tcs2.SetCanceled();
+
+        var results = await ctx.AllSettled(f1, f2);
+
+        Assert.True(results[0].IsSuccess);
+        Assert.False(results[1].IsSuccess);
+        Assert.IsType<TaskCanceledException>(results[1].Error);
     }
 
     // ── SettledResult ──
