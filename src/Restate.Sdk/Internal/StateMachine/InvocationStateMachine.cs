@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
@@ -44,13 +45,18 @@ internal sealed partial class InvocationStateMachine : IDisposable
     // Tracks ArrayPool rentals from CopyToPooled for batch return on Dispose.
     private List<byte[]>? _rentedBuffers;
 
+    // When true, durable operations (Run/Call/Sleep) start opt-in child activities.
+    private readonly bool _enableOperationActivities;
+
     public InvocationStateMachine(ProtocolReader reader, ProtocolWriter writer,
-        JsonSerializerOptions? jsonOptions = null, ILogger? logger = null)
+        JsonSerializerOptions? jsonOptions = null, ILogger? logger = null,
+        bool enableOperationActivities = false)
     {
         _reader = reader;
         _writer = writer;
         JsonOptions = jsonOptions ?? JsonSerde.SerializerOptions;
         Logger = logger ?? NullLogger.Instance;
+        _enableOperationActivities = enableOperationActivities;
     }
 
     public InvocationState State { get; private set; } = InvocationState.WaitingStart;
@@ -66,6 +72,15 @@ internal sealed partial class InvocationStateMachine : IDisposable
     public JsonSerializerOptions JsonOptions { get; }
 
     public bool IsReplaying => _journal.IsReplaying;
+
+    /// <summary>Number of journal commands recorded for this invocation so far.</summary>
+    public int JournalCommandCount => _journal.Count;
+
+    /// <summary>
+    ///     Number of journal commands the server replayed at start (<c>known_entries</c>),
+    ///     including the input command. Greater than 1 means this attempt replayed prior progress.
+    /// </summary>
+    public int ReplayedCommandCount => _journal.KnownEntries;
 
     // Lazy headers: raw pairs stored on parse, FrozenDictionary built only on first access.
     private Dictionary<string, string>? _rawHeaders;
@@ -104,6 +119,19 @@ internal sealed partial class InvocationStateMachine : IDisposable
         source.Span.CopyTo(rented);
         (_rentedBuffers ??= new List<byte[]>(8)).Add(rented);
         return rented.AsMemory(0, source.Length);
+    }
+
+    /// <summary>
+    ///     Starts an opt-in child activity for a durable operation (Run/Call/Sleep).
+    ///     Returns null unless per-operation activities are enabled AND a listener is attached
+    ///     to the <c>Restate.Sdk</c> source — zero cost on the hot path when off.
+    ///     Replay branches never start activities: no user code executes during replay.
+    /// </summary>
+    private Activity? StartOperationActivity(string name)
+    {
+        return _enableOperationActivities && InvocationHandler.ActivitySource.HasListeners()
+            ? InvocationHandler.ActivitySource.StartActivity(name)
+            : null;
     }
 
     public void Initialize(string invocationId, string key, ulong randomSeed,

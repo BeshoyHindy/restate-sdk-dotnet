@@ -13,12 +13,14 @@ namespace Restate.Sdk.Internal;
 
 internal sealed class InvocationHandler
 {
-    private static readonly ActivitySource ActivitySource = new("Restate.Sdk");
+    internal static readonly ActivitySource ActivitySource = new("Restate.Sdk");
     private readonly ILoggerFactory _loggerFactory;
+    private readonly RestateTelemetryOptions _telemetryOptions;
 
-    public InvocationHandler(ILoggerFactory? loggerFactory = null)
+    public InvocationHandler(ILoggerFactory? loggerFactory = null, RestateTelemetryOptions? telemetryOptions = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _telemetryOptions = telemetryOptions ?? new RestateTelemetryOptions();
     }
 
     public async Task HandleAsync(
@@ -29,12 +31,15 @@ internal sealed class InvocationHandler
         IServiceProvider serviceProvider,
         CancellationToken ct)
     {
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var outcome = InvocationOutcome.Error;
         var logger = _loggerFactory.CreateLogger("Restate.Invocation");
         var jsonOptions = JsonSerde.SerializerOptions;
         using var reader = new ProtocolReader(requestBodyReader);
         using var writer = new ProtocolWriter(responseBodyWriter);
 
-        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger);
+        using var sm = new InvocationStateMachine(reader, writer, jsonOptions, logger,
+            _telemetryOptions.EnableOperationActivities);
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;
         Activity? activity = null;
@@ -65,11 +70,13 @@ internal sealed class InvocationHandler
                 ? sm.SerializeObject(result)
                 : ReadOnlyMemory<byte>.Empty;
             await sm.CompleteAsync(output, ct).ConfigureAwait(false);
+            outcome = InvocationOutcome.Success;
 
             Log.InvocationCompleted(logger, sm.InvocationId);
         }
         catch (TerminalException ex)
         {
+            outcome = InvocationOutcome.TerminalError;
             Log.TerminalException(logger, sm.InvocationId, ex.Code);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
@@ -77,6 +84,7 @@ internal sealed class InvocationHandler
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            outcome = InvocationOutcome.Cancelled;
             Log.InvocationCancelled(logger, sm.InvocationId);
         }
         catch (ProtocolException ex)
@@ -95,7 +103,16 @@ internal sealed class InvocationHandler
         }
         finally
         {
-            activity?.Dispose();
+            if (activity is not null)
+            {
+                activity.SetTag("restate.journal.commands", sm.JournalCommandCount);
+                activity.SetTag("restate.replayed", sm.ReplayedCommandCount > 1);
+                activity.Dispose();
+            }
+
+            RestateMetrics.RecordInvocation(
+                service.Name, handler.Name, outcome,
+                Stopwatch.GetElapsedTime(startTimestamp), sm.ReplayedCommandCount);
 
             // Each cleanup operation is wrapped in try-catch because the stream may already
             // be in a broken state. Without this, a failure in any cleanup step would prevent
@@ -140,6 +157,8 @@ internal sealed class InvocationHandler
         if (activity is not null)
         {
             activity.SetTag("restate.invocation.id", invocationId);
+            activity.SetTag("restate.service", service.Name);
+            activity.SetTag("restate.handler", handler.Name);
             activity.SetTag("rpc.service", service.Name);
             activity.SetTag("rpc.method", handler.Name);
             activity.SetTag("rpc.system", "restate");

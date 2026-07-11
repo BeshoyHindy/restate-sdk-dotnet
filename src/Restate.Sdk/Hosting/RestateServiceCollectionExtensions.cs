@@ -31,6 +31,7 @@ public static class RestateServiceCollectionExtensions
 
         var registry = ServiceRegistry.FromTypes(options.ServiceTypes);
         services.AddSingleton(registry);
+        services.TryAddSingleton(options.Telemetry);
         services.TryAddSingleton<InvocationHandler>();
 
         foreach (var type in options.ServiceTypes)
