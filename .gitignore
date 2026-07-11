@@ -485,3 +485,7 @@ $RECYCLE.BIN/
 
 # Temporary test projects
 _temp-*
+
+# Local tooling state
+.claude/
+.serena/

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/BeshoyHindy/restate-sdk-dotnet/discussions
+    about: Ask usage questions and discuss ideas in Discussions instead of the issue tracker.
+  - name: Restate server issues
+    url: https://github.com/restatedev/restate/issues
+    about: Problems with the Restate server itself belong in the upstream repository.
+  - name: Restate Discord
+    url: https://discord.gg/skW3AZ6uGd
+    about: The Restate community chat — good for general durable-execution questions.
