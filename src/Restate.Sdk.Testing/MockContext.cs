@@ -18,6 +18,7 @@ public sealed class MockContext : Context
     private readonly List<RecordedSend> _sends = [];
     private readonly List<RecordedSleep> _sleeps = [];
     private int _invocationCounter;
+    private ILogger _logger = NullLogger.Instance;
 
     /// <summary>Creates a new mock context with the given invocation ID.</summary>
     public MockContext(string? invocationId = null)
@@ -41,6 +42,9 @@ public sealed class MockContext : Context
 
     /// <inheritdoc />
     public override CancellationToken Aborted => CancellationToken.None;
+
+    /// <inheritdoc />
+    public override ILogger Logger => _logger;
 
     /// <summary>All recorded Call invocations.</summary>
     public IReadOnlyList<RecordedCall> Calls => _calls;
@@ -111,6 +115,17 @@ public sealed class MockContext : Context
         _clients[typeof(TClient)] = client;
     }
 
+    /// <summary>
+    ///     Sets the logger returned by <see cref="Logger" /> (and exposed to Run blocks via
+    ///     <see cref="IRunContext.Logger" />) so tests can capture handler log output.
+    ///     Defaults to <see cref="NullLogger.Instance" />.
+    /// </summary>
+    public void SetLogger(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+    }
+
     /// <inheritdoc />
     public override ValueTask<T> Run<T>(string name, Func<Task<T>> action)
     {
@@ -132,13 +147,13 @@ public sealed class MockContext : Context
     /// <inheritdoc />
     public override ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action)
     {
-        return new ValueTask<T>(action(new MockRunContext()));
+        return new ValueTask<T>(action(new MockRunContext(_logger)));
     }
 
     /// <inheritdoc />
     public override ValueTask Run(string name, Func<IRunContext, Task> action)
     {
-        return new ValueTask(action(new MockRunContext()));
+        return new ValueTask(action(new MockRunContext(_logger)));
     }
 
     /// <inheritdoc />
@@ -478,10 +493,10 @@ public sealed class MockContext : Context
         }
     }
 
-    private sealed class MockRunContext : IRunContext
+    private sealed class MockRunContext(ILogger logger) : IRunContext
     {
         public CancellationToken CancellationToken => CancellationToken.None;
-        public ILogger Logger { get; } = NullLogger.Instance;
+        public ILogger Logger { get; } = logger;
     }
 }
 

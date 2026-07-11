@@ -7,6 +7,7 @@ using System.Text.Json;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.Serialization.SystemTextJson;
+using Microsoft.Extensions.Logging;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
 
@@ -43,6 +44,8 @@ public abstract class RestateLambdaHandler
 
     private readonly ServiceRegistry _registry;
 
+    private ILoggerFactory? _loggerFactory;
+
     /// <summary>
     ///     Initializes the Lambda handler, building the service registry from registered services.
     /// </summary>
@@ -50,7 +53,7 @@ public abstract class RestateLambdaHandler
     {
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
-        _handler = new InvocationHandler();
+        _handler = new InvocationHandler(_loggerFactory);
     }
 
     /// <summary>
@@ -59,6 +62,16 @@ public abstract class RestateLambdaHandler
     protected void Bind<TService>() where TService : class
     {
         _serviceTypes.Add(typeof(TService));
+    }
+
+    /// <summary>
+    ///     Configures the logger factory used for SDK logging and <see cref="Context.Logger" />.
+    ///     Call from <see cref="Register" />. When not configured, logging is disabled.
+    /// </summary>
+    protected void UseLoggerFactory(ILoggerFactory loggerFactory)
+    {
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+        _loggerFactory = loggerFactory;
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Text.Json;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 using Restate.Sdk.Endpoint;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Protocol;
@@ -49,6 +50,18 @@ public class ObsActivityRunnerService
     public async Task<int> Compute(Context ctx, string input)
     {
         return await ctx.Run("side-effect", () => 42);
+    }
+}
+
+[Service(Name = "ObsLogging")]
+public class ObsLoggingService
+{
+    [Handler]
+    public Task<string> LogSomething(Context ctx, string input)
+    {
+        // Direct ILogger.Log call: test projects also build with CA1848 (LoggerMessage) enforced.
+        ctx.Logger.Log(LogLevel.Information, default, "hello from handler", null, static (state, _) => state);
+        return Task.FromResult("ok");
     }
 }
 

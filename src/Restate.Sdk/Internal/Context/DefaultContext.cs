@@ -20,6 +20,10 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     }
 
     public override string InvocationId => _stateMachine.InvocationId;
+
+    // The replay-aware, invocation-scoped logger created by InvocationHandler.
+    public override ILogger Logger => _logger;
+
     public override DurableRandom Random => _random ??= new DurableRandom(_stateMachine.RandomSeed);
 
     public override DurableConsole Console => _console ??= new DurableConsole(() => _stateMachine.IsReplaying);

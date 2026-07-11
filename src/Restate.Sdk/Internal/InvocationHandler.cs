@@ -43,6 +43,7 @@ internal sealed class InvocationHandler
         using var incomingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task? incomingTask = null;
         Activity? activity = null;
+        IDisposable? invocationLogScope = null;
 
         try
         {
@@ -52,12 +53,23 @@ internal sealed class InvocationHandler
 
             activity = StartActivity(service, handler, sm.Headers, startInfo.InvocationId);
 
+            // ctx.Logger: replay-aware wrapper over a handler-facing logger, with an
+            // invocation-id scope spanning the handler execution. Skipped entirely when
+            // no logger factory is configured (e.g. Lambda without UseLoggerFactory).
+            ILogger contextLogger = NullLogger.Instance;
+            if (!ReferenceEquals(_loggerFactory, NullLoggerFactory.Instance))
+            {
+                var handlerLogger = _loggerFactory.CreateLogger(service.Name);
+                contextLogger = new ReplayAwareLogger(handlerLogger, () => sm.IsReplaying);
+                invocationLogScope = handlerLogger.BeginScope(new InvocationLogScope(startInfo.InvocationId));
+            }
+
             incomingTask = sm.ProcessIncomingMessagesAsync(incomingCts.Token);
 
             // Use the linked token so the handler cancels when either:
             // (a) the external caller cancels, or (b) the incoming reader detects connection close.
             var handlerToken = incomingCts.Token;
-            var context = CreateContext(sm, service.Type, handler.IsShared, logger, handlerToken);
+            var context = CreateContext(sm, service.Type, handler.IsShared, contextLogger, handlerToken);
 
             object? input = null;
             if (handler.InputDeserializer is not null)
@@ -103,6 +115,8 @@ internal sealed class InvocationHandler
         }
         finally
         {
+            invocationLogScope?.Dispose();
+
             if (activity is not null)
             {
                 activity.SetTag("restate.journal.commands", sm.JournalCommandCount);
@@ -168,18 +182,19 @@ internal sealed class InvocationHandler
     }
 
     private static Restate.Sdk.Context CreateContext(
-        InvocationStateMachine sm, ServiceType serviceType, bool isShared, ILogger logger, CancellationToken ct)
+        InvocationStateMachine sm, ServiceType serviceType, bool isShared, ILogger contextLogger,
+        CancellationToken ct)
     {
         return serviceType switch
         {
-            ServiceType.Service => new DefaultContext(sm, logger, ct),
+            ServiceType.Service => new DefaultContext(sm, contextLogger, ct),
             ServiceType.VirtualObject => isShared
-                ? new DefaultSharedObjectContext(sm, logger, ct)
-                : new DefaultObjectContext(sm, logger, ct),
+                ? new DefaultSharedObjectContext(sm, contextLogger, ct)
+                : new DefaultObjectContext(sm, contextLogger, ct),
             ServiceType.Workflow => isShared
-                ? new DefaultSharedWorkflowContext(sm, logger, ct)
-                : new DefaultWorkflowContext(sm, logger, ct),
-            _ => new DefaultContext(sm, logger, ct)
+                ? new DefaultSharedWorkflowContext(sm, contextLogger, ct)
+                : new DefaultWorkflowContext(sm, contextLogger, ct),
+            _ => new DefaultContext(sm, contextLogger, ct)
         };
     }
 }
