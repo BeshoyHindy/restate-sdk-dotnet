@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.IO.Pipelines;
 using Restate.Sdk.Internal;
+using Restate.Sdk.Internal.Protocol;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Tests.Observability;
 
@@ -101,5 +104,49 @@ public class ActivityTests
 
         Assert.DoesNotContain(activities, a =>
             a.OperationName == "restate.run" && a.TraceId == invocation.TraceId);
+    }
+
+    [Fact]
+    public async Task RunSync_PendingFlush_DoesNotLeakOperationActivityAsCurrent()
+    {
+        var stopped = new List<Activity>();
+        using var listener = CreateListener(stopped);
+
+        // Outbound pipe with a 1-byte pause threshold: the first flush cannot complete
+        // until the reader drains, forcing RunSync's pending-flush tail (the path taken
+        // under real Kestrel backpressure).
+        var outbound = new Pipe(new PipeOptions(pauseWriterThreshold: 1, resumeWriterThreshold: 1));
+        var inbound = new Pipe();
+        var reader = new ProtocolReader(inbound.Reader);
+        var writer = new ProtocolWriter(outbound.Writer);
+        using var sm = new InvocationStateMachine(reader, writer, enableOperationActivities: true);
+        sm.Initialize("obs-act-4", "key", 1, 0);
+
+        using var invocation = InvocationHandler.ActivitySource.StartActivity("obs-act-4-invocation");
+        Assert.NotNull(invocation);
+
+        var pending = sm.RunSync("side-effect", () => 42, CancellationToken.None);
+        Assert.False(pending.IsCompleted);
+
+        // RunSync runs synchronously on the caller's execution context, so the span it
+        // started became Activity.Current here. Once ownership moves to the async flush
+        // tail, the caller's Current must be restored — otherwise every later span in
+        // this handler parents under a stopped "restate.run" activity.
+        Assert.Same(invocation, Activity.Current);
+
+        // Drain the outbound pipe so the flush — and with it the Run — completes.
+        var drained = await outbound.Reader.ReadAsync();
+        outbound.Reader.AdvanceTo(drained.Buffer.End);
+
+        Assert.Equal(42, await pending);
+
+        var run = Assert.Single(Snapshot(stopped), a =>
+            a.OperationName == "restate.run" && a.TraceId == invocation!.TraceId);
+        Assert.Equal(invocation!.SpanId, run.ParentSpanId);
+
+        inbound.Writer.Complete();
+        inbound.Reader.Complete();
+        outbound.Writer.Complete();
+        outbound.Reader.Complete();
     }
 }

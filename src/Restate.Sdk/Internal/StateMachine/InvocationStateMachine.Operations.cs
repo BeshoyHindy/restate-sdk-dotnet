@@ -37,6 +37,15 @@ internal sealed partial class InvocationStateMachine
             }
 
             var pending = RunSyncAwaitFlush(flushTask, result, serializedCopy, name, activity);
+
+            // RunSync executes synchronously on the caller's execution context, so
+            // StartActivity made this span Activity.Current *in the caller*. The span is
+            // disposed by RunSyncAwaitFlush on a forked context, where the automatic
+            // Current restore is invisible to the caller — restore it here so subsequent
+            // operations don't parent under a stopped "restate.run" span.
+            if (activity is not null && ReferenceEquals(Activity.Current, activity))
+                Activity.Current = activity.Parent;
+
             activity = null; // Ownership transferred to RunSyncAwaitFlush.
             return pending;
         }
