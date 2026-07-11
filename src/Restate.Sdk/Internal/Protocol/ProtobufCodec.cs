@@ -149,6 +149,94 @@ internal static class ProtobufCodec
         return new SignalNotification(idx, name, value, failureCode, failureMessage, isVoid);
     }
 
+    /// <summary>
+    ///     Returns whether a replayed command message carries a completion id
+    ///     (<c>result_completion_id</c>, or <c>invocation_id_notification_idx</c> for one-way calls)
+    ///     that <see cref="ParseCommandCompletionId" /> can extract.
+    /// </summary>
+    public static bool CommandHasCompletionId(MessageType type)
+    {
+        return type switch
+        {
+            MessageType.GetLazyStateCommand or
+                MessageType.GetLazyStateKeysCommand or
+                MessageType.GetPromiseCommand or
+                MessageType.PeekPromiseCommand or
+                MessageType.CompletePromiseCommand or
+                MessageType.SleepCommand or
+                MessageType.CallCommand or
+                MessageType.OneWayCallCommand or
+                MessageType.RunCommand or
+                MessageType.AttachInvocationCommand or
+                MessageType.GetInvocationOutputCommand => true,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    ///     Extracts the completion id from a replayed command payload. For completable commands this
+    ///     is <c>result_completion_id</c> (field 11); for one-way calls it is
+    ///     <c>invocation_id_notification_idx</c> (field 10). Replayed results are keyed by this id
+    ///     in the notification stream — the command payload itself never contains the result value.
+    /// </summary>
+    /// <exception cref="ProtocolException">The command type does not carry a completion id.</exception>
+    public static uint ParseCommandCompletionId(MessageType type, ReadOnlySpan<byte> payload)
+    {
+        return type switch
+        {
+            MessageType.GetLazyStateCommand =>
+                Gen.GetLazyStateCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.GetLazyStateKeysCommand =>
+                Gen.GetLazyStateKeysCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.GetPromiseCommand =>
+                Gen.GetPromiseCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.PeekPromiseCommand =>
+                Gen.PeekPromiseCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.CompletePromiseCommand =>
+                Gen.CompletePromiseCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.SleepCommand =>
+                Gen.SleepCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.CallCommand =>
+                Gen.CallCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.OneWayCallCommand =>
+                Gen.OneWayCallCommandMessage.Parser.ParseFrom(payload).InvocationIdNotificationIdx,
+            MessageType.RunCommand =>
+                Gen.RunCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.AttachInvocationCommand =>
+                Gen.AttachInvocationCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            MessageType.GetInvocationOutputCommand =>
+                Gen.GetInvocationOutputCommandMessage.Parser.ParseFrom(payload).ResultCompletionId,
+            _ => throw new ProtocolException($"Command {type} does not carry a completion id")
+        };
+    }
+
+    /// <summary>
+    ///     Extracts the embedded state value from a replayed <c>GetEagerStateCommand</c> payload.
+    ///     Returns <c>null</c> when the command recorded a void result (state key absent).
+    /// </summary>
+    public static ReadOnlyMemory<byte>? ParseEagerStateValue(ReadOnlySpan<byte> payload)
+    {
+        var msg = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(payload);
+        return msg.ResultCase == Gen.GetEagerStateCommandMessage.ResultOneofCase.Value
+            ? msg.Value.Content.Memory
+            : null;
+    }
+
+    /// <summary>
+    ///     Extracts the embedded state keys from a replayed <c>GetEagerStateKeysCommand</c> payload.
+    /// </summary>
+    public static string[] ParseEagerStateKeys(ReadOnlySpan<byte> payload)
+    {
+        var msg = Gen.GetEagerStateKeysCommandMessage.Parser.ParseFrom(payload);
+        if (msg.Value is null || msg.Value.Keys.Count == 0)
+            return [];
+
+        var keys = new string[msg.Value.Keys.Count];
+        for (var i = 0; i < keys.Length; i++)
+            keys[i] = msg.Value.Keys[i].ToStringUtf8();
+        return keys;
+    }
+
     // ── Factory methods for outgoing commands ─────────────────────────
 
     public static Gen.RunCommandMessage CreateRunCommand(string name, uint completionId)

@@ -6,6 +6,31 @@ namespace Restate.Sdk.Internal.StateMachine;
 
 internal sealed partial class InvocationStateMachine
 {
+    // ------- Shared replay helpers -------
+    //
+    // Replayed command payloads never contain the operation's result value — results arrive as
+    // notifications keyed by the command's completion id. Every completable replay branch parses
+    // that id from the replayed command and resolves through the completion manager, where the
+    // replayed notification was already stored (or a live one will land).
+
+    /// <summary>Replays a completable command whose result is required (Run, Call, Attach, GetPromise).</summary>
+    private async ValueTask<T> ReplayResultAsync<T>()
+    {
+        var replay = TakeReplayEntry();
+        var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+        completion.ThrowIfFailure();
+        return Deserialize<T>(completion.Value);
+    }
+
+    /// <summary>Replays a one-way call; the result is the target invocation id notification.</summary>
+    private async ValueTask<InvocationHandle> ReplaySendAsync()
+    {
+        var replay = TakeReplayEntry();
+        var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+        var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
+        return new InvocationHandle(invocationId);
+    }
+
     // ------- Side effects -------
 
     /// <summary>Runs a synchronous side effect without closure/Task overhead.</summary>
@@ -14,13 +39,14 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return RunSyncReplayAsync<T>(name, ct);
+            return ReplayResultAsync<T>();
 
         var result = action();
         var serialized = Serialize(result);
 
-        WriteRunCommand(name);
-        WriteRunProposal(serialized.Span);
+        var completionId = NextCompletionId();
+        WriteRunCommand(name, completionId);
+        WriteRunProposal(completionId, serialized.Span);
 
         var flushTask = FlushAsync(ct);
         var serializedCopy = CopyToPooled(serialized);
@@ -32,12 +58,6 @@ internal sealed partial class InvocationStateMachine
         }
 
         return RunSyncAwaitFlush(flushTask, result, serializedCopy, name);
-    }
-
-    private async ValueTask<T> RunSyncReplayAsync<T>(string name, CancellationToken ct)
-    {
-        var replay = await ReplayNextEntryAsync(JournalEntryType.Run, name, ct).ConfigureAwait(false);
-        return Deserialize<T>(replay.Result);
     }
 
     private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, ReadOnlyMemory<byte> serializedCopy, string name)
@@ -54,10 +74,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Run, name, ct).ConfigureAwait(false);
-            return Deserialize<T>(replay.Result);
-        }
+            return await ReplayResultAsync<T>().ConfigureAwait(false);
 
         T result;
         if (retryPolicy is not null)
@@ -67,8 +84,9 @@ internal sealed partial class InvocationStateMachine
 
         var serialized = Serialize(result);
 
-        WriteRunCommand(name);
-        WriteRunProposal(serialized.Span);
+        var completionId = NextCompletionId();
+        WriteRunCommand(name, completionId);
+        WriteRunProposal(completionId, serialized.Span);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
@@ -84,7 +102,8 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            await ReplayNextEntryAsync(JournalEntryType.Run, name, ct).ConfigureAwait(false);
+            var replay = TakeReplayEntry();
+            _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return;
         }
 
@@ -93,8 +112,9 @@ internal sealed partial class InvocationStateMachine
         else
             await action().ConfigureAwait(false);
 
-        WriteRunCommand(name);
-        WriteRunProposal(ReadOnlySpan<byte>.Empty);
+        var completionId = NextCompletionId();
+        WriteRunCommand(name, completionId);
+        WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
@@ -126,10 +146,10 @@ internal sealed partial class InvocationStateMachine
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
                 {
                     // Exhausted retries — propose failure and record journal entry
-                    var completionId = (uint)_journal.Count;
+                    var completionId = NextCompletionId();
                     var failureMsg = ProtobufCodec.CreateRunProposalFailure(
                         completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
-                    WriteRunCommand(name);
+                    WriteRunCommand(name, completionId);
                     WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
                     await FlushAsync(ct).ConfigureAwait(false);
 
@@ -171,10 +191,10 @@ internal sealed partial class InvocationStateMachine
                 var elapsed = DateTimeOffset.UtcNow - startTime;
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
                 {
-                    var completionId = (uint)_journal.Count;
+                    var completionId = NextCompletionId();
                     var failureMsg = ProtobufCodec.CreateRunProposalFailure(
                         completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
-                    WriteRunCommand(name);
+                    WriteRunCommand(name, completionId);
                     WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
                     await FlushAsync(ct).ConfigureAwait(false);
 
@@ -192,16 +212,14 @@ internal sealed partial class InvocationStateMachine
         }
     }
 
-    private void WriteRunCommand(string name)
+    private void WriteRunCommand(string name, uint completionId)
     {
-        var completionId = (uint)_journal.Count;
         var msg = ProtobufCodec.CreateRunCommand(name, completionId);
         WriteCommand(MessageType.RunCommand, msg);
     }
 
-    private void WriteRunProposal(ReadOnlySpan<byte> serialized)
+    private void WriteRunProposal(uint completionId, ReadOnlySpan<byte> serialized)
     {
-        var completionId = (uint)_journal.Count;
         var msg = ProtobufCodec.CreateRunProposal(completionId, serialized);
         WriteCommand(MessageType.ProposeRunCompletion, msg);
     }
@@ -215,18 +233,19 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Run, name, ct).ConfigureAwait(false);
-            var result = Deserialize<T>(replay.Result);
-            var replayTcs = new TaskCompletionSource<CompletionResult>();
-            replayTcs.SetResult(CompletionResult.Success(replay.Result));
-            return (replayTcs, result);
+            var replay = TakeReplayEntry();
+            var replayTcs = RegisterReplayCompletion(in replay);
+            var replayCompletion = await replayTcs.Task.ConfigureAwait(false);
+            replayCompletion.ThrowIfFailure();
+            return (replayTcs, Deserialize<T>(replayCompletion.Value));
         }
 
         var value = await action().ConfigureAwait(false);
         var serialized = Serialize(value);
 
-        WriteRunCommand(name);
-        WriteRunProposal(serialized.Span);
+        var completionId = NextCompletionId();
+        WriteRunCommand(name, completionId);
+        WriteRunProposal(completionId, serialized.Span);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
@@ -243,7 +262,8 @@ internal sealed partial class InvocationStateMachine
 
     /// <summary>
     ///     BUG 1 FIX: CallCommand now includes invocation_id_notification_idx (field 10).
-    ///     We allocate a dummy journal slot for the invocation ID notification that the SDK ignores for calls.
+    ///     The invocation-id notification gets its own completion id, which the SDK ignores for
+    ///     request/response calls.
     /// </summary>
     private void WriteCallCommandMessage(string service, string handler, string? key, ReadOnlyMemory<byte> requestBytes,
         uint invocationIdNotificationIdx, uint completionId)
@@ -270,28 +290,24 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Call, null, ct).ConfigureAwait(false);
-            return Deserialize<TResponse>(replay.Result);
-        }
+            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
         var requestBytes = SerializeObject(request);
 
-        // BUG 1 FIX: Allocate dummy slot for invocation ID notification (SDK ignores it for calls)
-        var invocationIdNotificationIdx = (uint)_journal.Count;
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Call, ReadOnlyMemory<byte>.Empty));
-        _completions.GetOrRegister((int)invocationIdNotificationIdx); // Register so CompletionManager doesn't complain
+        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        var invocationIdNotificationIdx = NextCompletionId();
+        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
@@ -303,25 +319,21 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.OneWayCall, null, ct).ConfigureAwait(false);
-            var replayId = replay.Result.IsEmpty ? "" : Encoding.UTF8.GetString(replay.Result.Span);
-            return new InvocationHandle(replayId);
-        }
+            return await ReplaySendAsync().ConfigureAwait(false);
 
         var requestBytes = SerializeObject(request);
-        var invocationIdNotificationIdx = (uint)_journal.Count;
+        var invocationIdNotificationIdx = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
+        var tcs = _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
             invocationIdNotificationIdx);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)invocationIdNotificationIdx);
         var completion = await tcs.Task.ConfigureAwait(false);
         var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
         return new InvocationHandle(invocationId);
@@ -336,33 +348,20 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Call, null, ct).ConfigureAwait(false);
-            var replayTcs = new TaskCompletionSource<CompletionResult>();
-            if (replay.IsCompleted)
-            {
-                replayTcs.SetResult(CompletionResult.Success(replay.Result));
-            }
-            else
-            {
-                // Pending replay entry — register for completion
-                var idx = _journal.Count - 1;
-                return _completions.GetOrRegister(idx);
-            }
-
-            return replayTcs;
+            var replay = TakeReplayEntry();
+            return RegisterReplayCompletion(in replay);
         }
 
         var requestBytes = SerializeObject(request);
 
-        // BUG 1 FIX: Allocate dummy slot for invocation ID notification
-        var invocationIdNotificationIdx = (uint)_journal.Count;
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Call, ReadOnlyMemory<byte>.Empty));
+        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        var invocationIdNotificationIdx = NextCompletionId();
         _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
 
@@ -380,18 +379,16 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replayIndex = _journal.Count;
-            await ReplayNextEntryAsync(JournalEntryType.Sleep, null, ct).ConfigureAwait(false);
-            // During replay, the entry might be pending (not yet completed)
-            return _completions.GetOrRegister(replayIndex);
+            var replay = TakeReplayEntry();
+            return RegisterReplayCompletion(in replay);
         }
 
         var wakeUpTime = (ulong)DateTimeOffset.UtcNow.Add(duration).ToUnixTimeMilliseconds();
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Sleep));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Sleep));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.SleepCommand, ProtobufCodec.CreateSleepCommand(wakeUpTime, completionId));
 
@@ -407,23 +404,20 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.AttachInvocation, null, ct).ConfigureAwait(false);
-            return Deserialize<TResponse>(replay.Result);
-        }
+            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.AttachInvocation));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.AttachInvocation));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.AttachInvocationCommand,
             ProtobufCodec.CreateAttachInvocationCommand(invocationId, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
@@ -435,23 +429,24 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.GetInvocationOutput, null, ct)
-                .ConfigureAwait(false);
-            return replay.Result.IsEmpty ? default : Deserialize<TResponse>(replay.Result);
+            var replay = TakeReplayEntry();
+            var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+            replayCompletion.ThrowIfFailure();
+            return replayCompletion.Value.IsEmpty ? default : Deserialize<TResponse>(replayCompletion.Value);
         }
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.GetInvocationOutput));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.GetInvocationOutput));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.GetInvocationOutputCommand,
             ProtobufCodec.CreateGetInvocationOutputCommand(invocationId, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         // Void/empty completion means not yet completed — return default
@@ -474,21 +469,30 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.GetState, key, ct).ConfigureAwait(false);
-            return replay.Result.IsEmpty ? default : Deserialize<T>(replay.Result);
+            var replay = TakeReplayEntry();
+            if (replay.CommandType == MessageType.GetEagerStateCommand)
+            {
+                // Eager-state commands embed the result in the command payload itself.
+                var eagerValue = ProtobufCodec.ParseEagerStateValue(replay.Result.Span);
+                return eagerValue is { IsEmpty: false } value ? Deserialize<T>(value) : default;
+            }
+
+            var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+            replayCompletion.ThrowIfFailure();
+            return replayCompletion.Value.IsEmpty ? default : Deserialize<T>(replayCompletion.Value);
         }
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.GetState, key));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.GetState, key));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.GetLazyStateCommand, ProtobufCodec.CreateGetStateCommand(key, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return completion.Value.IsEmpty ? default : Deserialize<T>(completion.Value);
@@ -503,7 +507,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SetState);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -523,7 +527,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.ClearState);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -540,7 +544,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.ClearAllState);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -556,21 +560,29 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.GetStateKeys, null, ct).ConfigureAwait(false);
-            return Deserialize<string[]>(replay.Result) ?? [];
+            var replay = TakeReplayEntry();
+            if (replay.CommandType == MessageType.GetEagerStateKeysCommand)
+            {
+                // Eager-state-keys commands embed the result in the command payload itself.
+                return ProtobufCodec.ParseEagerStateKeys(replay.Result.Span);
+            }
+
+            var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+            replayCompletion.ThrowIfFailure();
+            return Deserialize<string[]>(replayCompletion.Value) ?? [];
         }
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.GetStateKeys));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.GetStateKeys));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.GetLazyStateKeysCommand, ProtobufCodec.CreateGetStateKeysCommand(completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<string[]>(completion.Value) ?? [];
@@ -584,22 +596,23 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            await ReplayNextEntryAsync(JournalEntryType.Sleep, null, ct).ConfigureAwait(false);
+            var replay = TakeReplayEntry();
+            _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return;
         }
 
         var wakeUpTime = (ulong)DateTimeOffset.UtcNow.Add(duration).ToUnixTimeMilliseconds();
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Sleep));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Sleep));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.SleepCommand, ProtobufCodec.CreateSleepCommand(wakeUpTime, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         await tcs.Task.ConfigureAwait(false);
     }
 
@@ -646,7 +659,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -662,7 +675,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -679,22 +692,19 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.GetPromise, name, ct).ConfigureAwait(false);
-            return Deserialize<T>(replay.Result);
-        }
+            return await ReplayResultAsync<T>().ConfigureAwait(false);
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.GetPromise, name));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.GetPromise, name));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.GetPromiseCommand, ProtobufCodec.CreateGetPromiseCommand(name, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<T>(completion.Value);
@@ -706,21 +716,22 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.PeekPromise, name, ct).ConfigureAwait(false);
-            return replay.Result.IsEmpty ? default : Deserialize<T>(replay.Result);
+            var replay = TakeReplayEntry();
+            var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
+            return replayCompletion.Value.IsEmpty ? default : Deserialize<T>(replayCompletion.Value);
         }
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.PeekPromise, name));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.PeekPromise, name));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCommand(MessageType.PeekPromiseCommand, ProtobufCodec.CreatePeekPromiseCommand(name, completionId));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         return completion.Value.IsEmpty ? default : Deserialize<T>(completion.Value);
     }
@@ -731,12 +742,12 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompletePromise);
+            AdvanceReplayIndex();
             return;
         }
 
         var serialized = Serialize(payload);
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         WriteCommand(MessageType.CompletePromiseCommand,
             ProtobufCodec.CreateCompletePromiseSuccess(name, serialized.Span, completionId));
@@ -750,11 +761,11 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompletePromise);
+            AdvanceReplayIndex();
             return;
         }
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
 
         WriteCommand(MessageType.CompletePromiseCommand,
             ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, completionId));
@@ -770,27 +781,24 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Call, null, ct).ConfigureAwait(false);
-            return Deserialize<TResponse>(replay.Result);
-        }
+            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
         var requestBytes = Serialize(request);
 
-        // BUG 1 FIX: Allocate dummy slot for invocation ID notification
-        var invocationIdNotificationIdx = (uint)_journal.Count;
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Call, ReadOnlyMemory<byte>.Empty));
+        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        var invocationIdNotificationIdx = NextCompletionId();
         _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
-        var completionId = (uint)_journal.Count;
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        var completionId = NextCompletionId();
+        // Register journal entry and TCS before flush to prevent race with incoming notifications.
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
@@ -803,24 +811,21 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.OneWayCall, null, ct).ConfigureAwait(false);
-            var replayId = replay.Result.IsEmpty ? "" : Encoding.UTF8.GetString(replay.Result.Span);
-            return new InvocationHandle(replayId);
-        }
+            return await ReplaySendAsync().ConfigureAwait(false);
 
         var requestBytes = Serialize(request);
-        var invocationIdNotificationIdx = (uint)_journal.Count;
+        var invocationIdNotificationIdx = NextCompletionId();
 
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        // Register journal entry and TCS before flush to prevent race with incoming notifications.
+        _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
+        var tcs = _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
         WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
             invocationIdNotificationIdx);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)invocationIdNotificationIdx);
         var completion = await tcs.Task.ConfigureAwait(false);
         var invocationIdStr = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
         return new InvocationHandle(invocationIdStr);
@@ -834,7 +839,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            AdvanceReplayIndex();
             return;
         }
 
@@ -865,29 +870,25 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-        {
-            var replay = await ReplayNextEntryAsync(JournalEntryType.Call, null, ct).ConfigureAwait(false);
-            return Deserialize<TResponse>(replay.Result);
-        }
+            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
 
         var requestBytes = SerializeObject(request);
 
-        // BUG 1 FIX: Allocate dummy slot for invocation ID notification (SDK ignores it for calls)
-        var invocationIdNotificationIdx = (uint)_journal.Count;
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Call, ReadOnlyMemory<byte>.Empty));
-        _completions.GetOrRegister((int)invocationIdNotificationIdx); // Register so CompletionManager doesn't complain
+        // Allocate the invocation-id slot (ignored for calls, but the notification needs a home).
+        var invocationIdNotificationIdx = NextCompletionId();
+        _completions.GetOrRegister((int)invocationIdNotificationIdx);
 
-        var completionId = (uint)_journal.Count;
+        var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        var entryIndex = _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister(entryIndex);
+        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
+        var tcs = _completions.GetOrRegister((int)completionId);
 
         WriteCallCommandMessageWithOptions(service, handler, key, requestBytes, invocationIdNotificationIdx,
             completionId, idempotencyKey);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        Log.AwaitingCompletion(Logger, InvocationId, entryIndex);
+        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);

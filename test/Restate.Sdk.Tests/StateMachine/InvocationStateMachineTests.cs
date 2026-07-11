@@ -307,9 +307,9 @@ public class InvocationStateMachineTests : IDisposable
 
         Assert.Equal(InvocationState.Replaying, sm.State);
 
-        // During replay, SendAsync reads the next journal entry synchronously (already loaded)
-        // These won't complete because ReplayNextEntryAsync tries to read from the protocol reader
-        // which has no data. The replay-mode Send test needs protocol-level test infrastructure.
+        // During replay, SendAsync consumes staged journal entries populated by the StartAsync
+        // drain and resolves results through the completion manager. Exercising that requires
+        // protocol-level test infrastructure (see ProtocolIntegrationTests resume tests).
         // For now, verify the state machine is in the right state.
         Assert.Equal(InvocationState.Replaying, sm.State);
     }

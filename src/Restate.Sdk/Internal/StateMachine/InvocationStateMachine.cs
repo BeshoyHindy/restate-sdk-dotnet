@@ -30,6 +30,11 @@ internal sealed partial class InvocationStateMachine : IDisposable
     private readonly ProtocolReader _reader;
     private int _nextSignalIndex;
 
+    // Next completion id for live commands. Completion ids are SDK-chosen opaque keys echoed
+    // back by the runtime in notifications. On resume, StartAsync seeds this past every id
+    // found in the replayed command prefix so live commands never collide with replayed ones.
+    private uint _nextCompletionId;
+
     // Reusable buffer for serialization — avoids allocating ArrayBufferWriter<byte> per call.
     // The returned ReadOnlyMemory is only valid until the next Serialize call.
     // Thread-safe: each InvocationStateMachine handles a single invocation with no concurrent access.
@@ -136,6 +141,9 @@ internal sealed partial class InvocationStateMachine : IDisposable
         if (State == InvocationState.Replaying)
             Log.ReplayStarted(Logger, InvocationId, knownEntries);
     }
+
+    /// <summary>Allocates the next completion id for a live command.</summary>
+    private uint NextCompletionId() => _nextCompletionId++;
 
     private void EnsureActive()
     {
