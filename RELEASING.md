@@ -10,18 +10,47 @@
 
 ## Release Steps
 
-1. Update the version in `Directory.Build.props`:
+Releases are automated with [release-please](https://github.com/googleapis/release-please).
+
+1. Merge PRs to `main` with conventional-commit titles (`feat:`, `fix:`, ...).
+   The repo uses squash merges, so the PR title becomes the commit subject.
+2. The `release-please.yml` workflow maintains a release PR that:
+   - bumps `<Version>` in `Directory.Build.props` (the line is marked with
+     `x-release-please-version`)
+   - adds the pending changes to `CHANGELOG.md`
+   - updates `.release-please-manifest.json`
+3. Merge the release PR. release-please creates the `vX.Y.Z` tag and the
+   tag triggers `publish.yml`.
+
+> **Note:** tags created with the default `GITHUB_TOKEN` do not trigger other
+> workflows. Configure a `RELEASE_PLEASE_TOKEN` PAT secret (contents: write,
+> pull-requests: write) so the tag triggers `publish.yml`. Without it,
+> re-push the tag from your machine after release-please creates it:
+>
+> ```bash
+> git fetch --tags
+> git push origin :refs/tags/vX.Y.Z
+> git push origin vX.Y.Z
+> ```
+
+### Manual fallback
+
+If release-please is unavailable:
+
+1. Update the version in `Directory.Build.props` (keep the
+   `<!-- x-release-please-version -->` marker on the line):
 
    ```xml
-   <Version>0.2.0</Version>
+   <Version>0.2.0</Version> <!-- x-release-please-version -->
    ```
 
-2. Update `CHANGELOG.md`: move items from `[Unreleased]` to a new version section.
+2. Update `CHANGELOG.md`: move items from `[Unreleased]` to a new version
+   section. Update `.release-please-manifest.json` to the same version.
 
 3. Commit and push:
 
    ```bash
-   git commit -am "Release v0.2.0"
+   git commit -am "chore: release v0.2.0"
    git push
    ```
 
@@ -32,7 +61,9 @@
    git push origin v0.2.0
    ```
 
-5. The `publish.yml` workflow will automatically:
+### What publish.yml does
+
+On a `v*` tag push, the `publish.yml` workflow will automatically:
    - Validate the tag version matches `Directory.Build.props`
    - Build, test, and pack
    - Verify the source generator is bundled in the package
