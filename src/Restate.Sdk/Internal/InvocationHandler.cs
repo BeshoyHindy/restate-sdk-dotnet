@@ -127,6 +127,12 @@ internal sealed class InvocationHandler
         {
             outcome = InvocationOutcome.Cancelled;
             Log.InvocationCancelled(logger, sm.InvocationId);
+            // Best effort: end the body with a retryable ErrorMessage so the response stays
+            // protocol-well-formed. On Lambda the body is returned as HTTP 200 — without a
+            // terminal frame the runtime would classify it as a protocol error instead of a
+            // clean retry, defeating the graceful-abort margin.
+            try { await sm.FailAsync(500, "The invocation attempt was cancelled", CancellationToken.None).ConfigureAwait(false); }
+            catch { /* Stream already broken — nothing more we can do */ }
         }
         catch (ProtocolException ex)
         {

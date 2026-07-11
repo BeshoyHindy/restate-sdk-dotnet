@@ -308,6 +308,50 @@ public class ProtocolIntegrationTests
     }
 
     [Fact]
+    public async Task HandleAsync_CancelledAttempt_EndsBodyWithRetryableError()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+        var startPayload = BuildStartMessagePayload("cancelled-inv-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TestGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        // The attempt deadline already elapsed (e.g. Lambda RemainingTime margin fired).
+        // The body must still end with a terminal frame — a torso without one is a protocol
+        // violation when returned as HTTP 200.
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
+            new CancellationToken(canceled: true));
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (errorHeader, errorPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Error, errorHeader.Type);
+        Assert.Equal(500u, Gen.ErrorMessage.Parser.ParseFrom(errorPayload).Code);
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
     public async Task HandleAsync_TrailingMalformedFrame_KeepsCompletedResponse()
     {
         var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
