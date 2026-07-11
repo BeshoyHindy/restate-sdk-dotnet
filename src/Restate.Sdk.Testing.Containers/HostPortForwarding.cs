@@ -1,4 +1,5 @@
 using DotNet.Testcontainers.Configurations;
+using Renci.SshNet.Common;
 
 namespace Restate.Sdk.Testing.Containers;
 
@@ -21,6 +22,9 @@ internal static class HostPortForwarding
     ///     receive the <c>host.testcontainers.internal</c> extra-host entry when the
     ///     port-forwarding container is running at the time their builder is constructed,
     ///     so this must be called before <see cref="RestateBuilder" /> is instantiated.
+    ///     Ports the caller already forwarded directly via
+    ///     <see cref="TestcontainersSettings.ExposeHostPortsAsync(ushort, CancellationToken)" />
+    ///     are tolerated: the resulting remote-bind conflict is detected and treated as success.
     /// </remarks>
     /// <param name="port">The host port to forward.</param>
     /// <param name="ct">Cancellation token.</param>
@@ -32,7 +36,21 @@ internal static class HostPortForwarding
             if (ExposedPorts.Contains(port))
                 return;
 
-            await TestcontainersSettings.ExposeHostPortsAsync(port, ct).ConfigureAwait(false);
+            try
+            {
+                await TestcontainersSettings.ExposeHostPortsAsync(port, ct).ConfigureAwait(false);
+            }
+            catch (SshException exception) when (exception.GetType() == typeof(SshException))
+            {
+                // The sshd port-forwarding container is per-process, so a remote-forward bind
+                // conflict ("Port forwarding for '127.0.0.1' port 'X' failed to start.") can only
+                // mean this process already forwarded the port — e.g. the caller invoked
+                // TestcontainersSettings.ExposeHostPortsAsync directly, as documented on
+                // RestateContainer.RegisterDeploymentAsync. Treat it as already exposed.
+                // Connection and authentication failures are SshException subclasses and
+                // deliberately excluded by the exact-type filter.
+            }
+
             ExposedPorts.Add(port);
         }
         finally

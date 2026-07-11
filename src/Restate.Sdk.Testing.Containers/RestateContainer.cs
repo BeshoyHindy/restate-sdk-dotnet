@@ -98,7 +98,15 @@ public sealed class RestateContainer : DockerContainer
 
     private async Task RegisterDeploymentCoreAsync(int hostPort, CancellationToken ct)
     {
-        using var http = new HttpClient { BaseAddress = GetAdminUri() };
+        // Disable the 100-second per-request default timeout: the overall registration cap is
+        // enforced by the linked token, and a per-request abort would otherwise surface as an
+        // OperationCanceledException that escapes the retry loop and gets misreported as the
+        // full registration timeout.
+        using var http = new HttpClient
+        {
+            BaseAddress = GetAdminUri(),
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan,
+        };
         var deploymentsUri = new Uri("/deployments", UriKind.Relative);
         var payload = new JsonObject { ["uri"] = $"http://host.testcontainers.internal:{hostPort}" }.ToJsonString();
 
@@ -130,14 +138,21 @@ public sealed class RestateContainer : DockerContainer
         // Poll the deployment list until the new deployment shows up.
         while (true)
         {
-            using var response = await http.GetAsync(deploymentsUri, ct).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
+            try
             {
-                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                var deployments = JsonNode.Parse(body)?["deployments"]?.AsArray();
-                if (deployments is not null &&
-                    deployments.Any(d => deploymentId.Equals(d?["id"]?.GetValue<string>(), StringComparison.Ordinal)))
-                    return;
+                using var response = await http.GetAsync(deploymentsUri, ct).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var deployments = JsonNode.Parse(body)?["deployments"]?.AsArray();
+                    if (deployments is not null &&
+                        deployments.Any(d => deploymentId.Equals(d?["id"]?.GetValue<string>(), StringComparison.Ordinal)))
+                        return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Transient admin API failure; retry below.
             }
 
             await Task.Delay(RegistrationPollInterval, ct).ConfigureAwait(false);

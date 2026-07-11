@@ -11,6 +11,12 @@ public sealed class RestateHarnessFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        // xUnit v2 initializes class fixtures even when every test in the class is skipped,
+        // so gate here as well: without this, Docker-less machines would still boot the SDK
+        // endpoint and probe for a Docker daemon before the [DockerFact] skips kick in.
+        if (!DockerDetection.IsDockerAvailable)
+            return;
+
         Harness = await RestateTestHarness.StartAsync(b => b
             .AddService<HarnessGreeterService>()
             .AddVirtualObject<HarnessCounterObject>());

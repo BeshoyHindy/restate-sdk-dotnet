@@ -76,10 +76,18 @@ public sealed class RestateTestHarness : IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        Client.Dispose();
-        await _app.StopAsync().ConfigureAwait(false);
-        await _app.DisposeAsync().ConfigureAwait(false);
-        await Container.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            Client.Dispose();
+            await _app.StopAsync().ConfigureAwait(false);
+            await _app.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            // Always reap the container, even when stopping the SDK endpoint throws;
+            // otherwise it would keep running until the resource reaper catches up.
+            await Container.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>
