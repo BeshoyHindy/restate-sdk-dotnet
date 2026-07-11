@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose an addition or change to the SDK
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that the SDK currently makes hard or impossible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behavior
+      description: >
+        Sketch what you'd want it to look like. If another Restate SDK
+        (TypeScript, Java, Go, Python, Rust) already has this, link to it.
+      render: csharp
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried or other designs that could solve it.
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you be willing to open a PR for this?
+      options:
+        - "Yes"
+        - "Yes, with guidance"
+        - "No"
