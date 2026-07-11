@@ -92,4 +92,39 @@ public class MetricsTests
         var duration = Assert.Single(recorded, m => m.Instrument == "restate.sdk.invocation.duration");
         Assert.Equal("terminal_error", duration.Tags["outcome"]);
     }
+
+    [Fact]
+    public async Task RetryableException_RecordsErrorOutcome()
+    {
+        var measurements = new ConcurrentQueue<Measurement>();
+        using (CreateListener(measurements))
+        {
+            await ObservabilityTestDriver.DriveAsync<ObsMetricsBrokenService>(
+                "Break", "input", new InvocationHandler(), "obs-metrics-3");
+        }
+
+        var recorded = ForService(measurements, "ObsMetricsBroken");
+
+        var invocations = Assert.Single(recorded, m => m.Instrument == "restate.sdk.invocations");
+        Assert.Equal("error", invocations.Tags["outcome"]);
+        Assert.Equal("Break", invocations.Tags["restate.handler"]);
+    }
+
+    [Fact]
+    public async Task CancelledInvocation_RecordsCancelledOutcome()
+    {
+        var measurements = new ConcurrentQueue<Measurement>();
+        using (CreateListener(measurements))
+        {
+            await ObservabilityTestDriver.DriveAsync<ObsMetricsCancelledService>(
+                "Noop", "input", new InvocationHandler(), "obs-metrics-4",
+                new CancellationToken(canceled: true));
+        }
+
+        var recorded = ForService(measurements, "ObsMetricsCancelled");
+
+        var invocations = Assert.Single(recorded, m => m.Instrument == "restate.sdk.invocations");
+        Assert.Equal("cancelled", invocations.Tags["outcome"]);
+        Assert.Equal("Noop", invocations.Tags["restate.handler"]);
+    }
 }

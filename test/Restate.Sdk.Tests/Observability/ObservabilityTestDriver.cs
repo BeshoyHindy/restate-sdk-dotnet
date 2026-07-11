@@ -33,6 +33,26 @@ public class ObsMetricsFailingService
     }
 }
 
+[Service(Name = "ObsMetricsBroken")]
+public class ObsMetricsBrokenService
+{
+    [Handler]
+    public Task<string> Break(Context ctx, string input)
+    {
+        throw new InvalidOperationException("Transient failure");
+    }
+}
+
+[Service(Name = "ObsMetricsCancelled")]
+public class ObsMetricsCancelledService
+{
+    [Handler]
+    public Task<string> Noop(Context ctx, string input)
+    {
+        return Task.FromResult("unreachable");
+    }
+}
+
 [Service(Name = "ObsActivityGreeter")]
 public class ObsActivityGreeterService
 {
@@ -73,7 +93,8 @@ public class ObsLoggingService
 internal static class ObservabilityTestDriver
 {
     public static async Task DriveAsync<TService>(
-        string handlerName, object input, InvocationHandler handler, string invocationId)
+        string handlerName, object input, InvocationHandler handler, string invocationId,
+        CancellationToken ct = default)
         where TService : class, new()
     {
         var startMsg = new Gen.StartMessage
@@ -104,7 +125,7 @@ internal static class ObservabilityTestDriver
             serviceDef,
             handlerDef,
             new FuncServiceProvider(_ => new TService()),
-            CancellationToken.None);
+            ct);
     }
 
     private static void WriteFramedMessage(MemoryStream stream, MessageType type, byte[] payload)

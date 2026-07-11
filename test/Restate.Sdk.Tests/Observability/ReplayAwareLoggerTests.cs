@@ -101,17 +101,25 @@ public class ReplayAwareLoggerTests
 
     /// <summary>
     ///     Minimal capturing logger: records entries with the scopes active at log time.
-    ///     Single-threaded by design — each invocation handler executes sequentially.
+    ///     Lock-guarded because in the end-to-end test the SDK's concurrent incoming-message
+    ///     reader logs to this same instance (the factory returns it for every category)
+    ///     while the handler thread logs through <c>ctx.Logger</c>.
     /// </summary>
     private sealed class CapturingLogger : ILogger
     {
+        private readonly Lock _sync = new();
+
         public List<(LogLevel Level, string Message, List<object?> Scopes)> Entries { get; } = [];
         public List<object?> ActiveScopes { get; } = [];
         public LogLevel MinimumLevel { get; init; } = LogLevel.Trace;
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull
         {
-            ActiveScopes.Add(state);
+            lock (_sync)
+            {
+                ActiveScopes.Add(state);
+            }
+
             return new Scope(this, state);
         }
 
@@ -123,14 +131,21 @@ public class ReplayAwareLoggerTests
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            Entries.Add((logLevel, formatter(state, exception), [.. ActiveScopes]));
+            var message = formatter(state, exception);
+            lock (_sync)
+            {
+                Entries.Add((logLevel, message, [.. ActiveScopes]));
+            }
         }
 
         private sealed class Scope(CapturingLogger owner, object state) : IDisposable
         {
             public void Dispose()
             {
-                owner.ActiveScopes.Remove(state);
+                lock (owner._sync)
+                {
+                    owner.ActiveScopes.Remove(state);
+                }
             }
         }
     }
