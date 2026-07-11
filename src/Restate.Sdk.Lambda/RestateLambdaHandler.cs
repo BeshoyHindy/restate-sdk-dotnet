@@ -50,6 +50,7 @@ public abstract class RestateLambdaHandler
     private readonly ServiceRegistry _registry;
 
     private ILoggerFactory? _loggerFactory;
+    private readonly RestateTelemetryOptions _telemetryOptions = new();
     private readonly RequestIdentityVerifier? _identityVerifier;
 
     /// <summary>
@@ -59,7 +60,7 @@ public abstract class RestateLambdaHandler
     {
         Register();
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
-        _handler = new InvocationHandler(_loggerFactory);
+        _handler = new InvocationHandler(_loggerFactory, _telemetryOptions);
         _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
     }
 
@@ -91,6 +92,30 @@ public abstract class RestateLambdaHandler
         }
 
         _loggerFactory = loggerFactory;
+    }
+
+    /// <summary>
+    ///     Configures the SDK's tracing and metrics instrumentation (the <c>Restate.Sdk</c>
+    ///     ActivitySource and Meter). Call from <see cref="Register" />.
+    /// </summary>
+    /// <param name="configure">Callback mutating the telemetry options.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="configure" /> is <see langword="null" />.</exception>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the invocation pipeline has already
+    ///     been built and late changes would be silently ignored.
+    /// </exception>
+    protected void ConfigureTelemetry(Action<RestateTelemetryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(ConfigureTelemetry)} must be called from {nameof(Register)}(); " +
+                "the invocation pipeline has already been built.");
+        }
+
+        configure(_telemetryOptions);
     }
 
     /// <summary>

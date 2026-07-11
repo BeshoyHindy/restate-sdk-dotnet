@@ -28,6 +28,7 @@ public sealed class RestateHostBuilder
 {
     private readonly List<Type> _serviceTypes = [];
     private readonly List<string> _identityKeys = [];
+    private readonly RestateTelemetryOptions _telemetry = new();
     private int _port = 9080;
 
     internal RestateHostBuilder()
@@ -67,6 +68,20 @@ public sealed class RestateHostBuilder
     }
 
     /// <summary>
+    ///     Configures the SDK's tracing and metrics instrumentation
+    ///     (the <c>Restate.Sdk</c> ActivitySource and Meter).
+    /// </summary>
+    /// <param name="configure">Callback mutating the telemetry options.</param>
+    /// <returns>This builder for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configure" /> is <see langword="null" />.</exception>
+    public RestateHostBuilder ConfigureTelemetry(Action<RestateTelemetryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_telemetry);
+        return this;
+    }
+
+    /// <summary>
     ///     Configures Restate identity public keys (<c>publickeyv1_&lt;base58&gt;</c>) used to verify
     ///     that incoming requests originate from a trusted Restate instance. When at least one key is
     ///     configured, every request to the Restate endpoints must carry a valid
@@ -101,12 +116,14 @@ public sealed class RestateHostBuilder
 
         var types = _serviceTypes;
         var identityKeys = _identityKeys;
+        var telemetry = _telemetry;
         builder.Services.AddRestate(opts =>
         {
             foreach (var type in types)
                 opts.ServiceTypes.Add(type);
 
             opts.IdentityKeys.AddRange(identityKeys);
+            opts.Telemetry.EnableOperationActivities = telemetry.EnableOperationActivities;
         });
 
         var app = builder.Build();
@@ -131,6 +148,10 @@ public sealed class RestateHostBuilder
         ConfigureKestrel(builder);
 
         configureServices(builder.Services);
+
+        // InvocationHandler resolves the telemetry options from DI (optional parameter);
+        // without this registration ConfigureTelemetry would be silently ignored under AOT.
+        builder.Services.AddSingleton(_telemetry);
 
         if (_identityKeys.Count > 0)
             builder.Services.AddSingleton(RequestIdentityVerifier.FromKeys(_identityKeys));
