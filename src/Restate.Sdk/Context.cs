@@ -201,6 +201,70 @@ public abstract class Context : IContext
     }
 
     /// <summary>
+    ///     Returns the result of the first future to complete <em>successfully</em>.
+    ///     Failed futures are ignored unless every future fails, in which case an
+    ///     <see cref="AggregateException" /> containing all failures is thrown
+    ///     (matching the TypeScript SDK's <c>RestatePromise.any</c> / JavaScript <c>AggregateError</c> semantics).
+    /// </summary>
+    /// <exception cref="AggregateException">
+    ///     Every future failed (or none were provided); contains each failure as an inner exception.
+    /// </exception>
+    public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var tasks = new Task<T>[futures.Length];
+        for (var i = 0; i < futures.Length; i++)
+            tasks[i] = futures[i].GetResult().AsTask();
+        return AwaitAny(tasks);
+
+        static async ValueTask<T> AwaitAny(Task<T>[] tasks)
+        {
+            List<Exception>? errors = null;
+            await foreach (var completed in Task.WhenEach(tasks).ConfigureAwait(false))
+            {
+                if (completed.IsCompletedSuccessfully)
+                    return await completed.ConfigureAwait(false);
+
+                errors ??= new List<Exception>(tasks.Length);
+                errors.Add(completed.Exception?.InnerException
+                           ?? (Exception?)completed.Exception
+                           ?? new TaskCanceledException(completed));
+            }
+
+            throw new AggregateException("All durable futures failed.", errors ?? []);
+        }
+    }
+
+    /// <summary>
+    ///     Awaits all futures and returns a settlement result for each one, in input order.
+    ///     Unlike <see cref="All{T}" />, individual failures do not throw — inspect
+    ///     <see cref="SettledResult{T}.IsSuccess" /> per item
+    ///     (matching the TypeScript SDK's <c>RestatePromise.allSettled</c> semantics).
+    /// </summary>
+    public virtual ValueTask<SettledResult<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
+    {
+        var tasks = new Task<T>[futures.Length];
+        for (var i = 0; i < futures.Length; i++)
+            tasks[i] = futures[i].GetResult().AsTask();
+        return AwaitAllSettled(tasks);
+
+        static async ValueTask<SettledResult<T>[]> AwaitAllSettled(Task<T>[] tasks)
+        {
+            var results = new SettledResult<T>[tasks.Length];
+            for (var i = 0; i < tasks.Length; i++)
+                try
+                {
+                    results[i] = SettledResult<T>.Success(await tasks[i].ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    results[i] = SettledResult<T>.Failure(ex);
+                }
+
+            return results;
+        }
+    }
+
+    /// <summary>
     ///     Yields futures as they complete, in completion order.
     ///     Each element contains the completed future and an optional error.
     /// </summary>
