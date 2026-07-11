@@ -222,6 +222,27 @@ public class CombinatorTests
     }
 
     [Fact]
+    public async Task Any_AllFailed_InnerExceptionsInInputOrder()
+    {
+        var ctx = new BareContext();
+        var (f1, tcs1) = PendingFuture<int>();
+        var (f2, tcs2) = PendingFuture<int>();
+
+        var task = ctx.Any(f1, f2).AsTask();
+
+        // Fail in reverse input order: the aggregate must still list failures in input order,
+        // matching JavaScript's AggregateError.errors ordering.
+        tcs2.SetResult(CompletionResult.Failure(500, "second"));
+        tcs1.SetResult(CompletionResult.Failure(500, "first"));
+
+        var ex = await Assert.ThrowsAsync<AggregateException>(() => task);
+
+        Assert.Equal(2, ex.InnerExceptions.Count);
+        Assert.Equal("first", ex.InnerExceptions[0].Message);
+        Assert.Equal("second", ex.InnerExceptions[1].Message);
+    }
+
+    [Fact]
     public async Task Any_EmptyInput_ThrowsAggregateException()
     {
         var ctx = new BareContext();

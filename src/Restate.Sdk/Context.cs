@@ -207,7 +207,8 @@ public abstract class Context : IContext
     ///     (matching the TypeScript SDK's <c>RestatePromise.any</c> / JavaScript <c>AggregateError</c> semantics).
     /// </summary>
     /// <exception cref="AggregateException">
-    ///     Every future failed (or none were provided); contains each failure as an inner exception.
+    ///     Every future failed (or none were provided); contains each failure as an inner exception,
+    ///     in input order.
     /// </exception>
     public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -218,19 +219,19 @@ public abstract class Context : IContext
 
         static async ValueTask<T> AwaitAny(Task<T>[] tasks)
         {
-            List<Exception>? errors = null;
             await foreach (var completed in Task.WhenEach(tasks).ConfigureAwait(false))
-            {
                 if (completed.IsCompletedSuccessfully)
                     return await completed.ConfigureAwait(false);
 
-                errors ??= new List<Exception>(tasks.Length);
-                errors.Add(completed.Exception?.InnerException
-                           ?? (Exception?)completed.Exception
-                           ?? new TaskCanceledException(completed));
-            }
+            // Every task has settled without a success: aggregate the failures in input order,
+            // matching JavaScript's AggregateError.errors ordering.
+            var errors = new Exception[tasks.Length];
+            for (var i = 0; i < tasks.Length; i++)
+                errors[i] = tasks[i].Exception?.InnerException
+                            ?? (Exception?)tasks[i].Exception
+                            ?? new TaskCanceledException(tasks[i]);
 
-            throw new AggregateException("All durable futures failed.", errors ?? []);
+            throw new AggregateException("All durable futures failed.", errors);
         }
     }
 
