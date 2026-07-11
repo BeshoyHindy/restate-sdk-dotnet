@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Text.Json;
+using Google.Protobuf;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Tests.Observability;
 
@@ -148,5 +151,69 @@ public class ActivityTests
         inbound.Reader.Complete();
         outbound.Writer.Complete();
         outbound.Reader.Complete();
+    }
+
+    [Fact]
+    public async Task CallActivity_SpansAsyncCompletion_WithRpcTargetTags()
+    {
+        var stopped = new List<Activity>();
+        using var listener = CreateListener(stopped);
+
+        var inbound = new Pipe();
+        var outbound = new Pipe();
+        var reader = new ProtocolReader(inbound.Reader);
+        var writer = new ProtocolWriter(outbound.Writer);
+        using var sm = new InvocationStateMachine(reader, writer, enableOperationActivities: true);
+        sm.Initialize("obs-act-5", "key", 1, 0);
+
+        // The concurrent incoming-message reader delivers the call completion,
+        // exactly as InvocationHandler runs it during a real invocation.
+        using var incomingCts = new CancellationTokenSource();
+        var incomingTask = sm.ProcessIncomingMessagesAsync(incomingCts.Token);
+
+        using var invocation = InvocationHandler.ActivitySource.StartActivity("obs-act-5-invocation");
+        Assert.NotNull(invocation);
+
+        var call = sm.CallAsync<string>("OtherService", null, "Echo", "ping", CancellationToken.None);
+
+        // CallAsync appends the dummy invocation-id notification slot at index 0,
+        // so the call itself awaits completion id 1.
+        var notification = new Gen.NotificationTemplate
+        {
+            CompletionId = 1,
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("pong")) }
+        };
+        await inbound.Writer.WriteAsync(Frame(MessageType.CallCompletion, notification.ToByteArray()));
+
+        Assert.Equal("pong", await call);
+
+        var callActivity = Assert.Single(Snapshot(stopped), a =>
+            a.OperationName == "restate.call" && a.TraceId == invocation!.TraceId);
+        Assert.Equal("OtherService", callActivity.GetTagItem("rpc.service"));
+        Assert.Equal("Echo", callActivity.GetTagItem("rpc.method"));
+        Assert.Equal(invocation!.SpanId, callActivity.ParentSpanId);
+
+        await incomingCts.CancelAsync();
+        try
+        {
+            await incomingTask;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: the reader's pending ReadAsync observes the cancellation.
+        }
+
+        inbound.Writer.Complete();
+        inbound.Reader.Complete();
+        outbound.Writer.Complete();
+        outbound.Reader.Complete();
+    }
+
+    private static byte[] Frame(MessageType type, byte[] payload)
+    {
+        var frame = new byte[MessageHeader.Size + payload.Length];
+        MessageHeader.Create(type, MessageFlags.None, (uint)payload.Length).Write(frame);
+        payload.CopyTo(frame.AsSpan(MessageHeader.Size));
+        return frame;
     }
 }
