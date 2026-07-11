@@ -82,6 +82,25 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A service that fans out two calls and settles them with <c>ctx.AllSettled</c> — used to
+///     verify that input EOF suspends the invocation instead of settling the journaled calls
+///     as fabricated failures.
+/// </summary>
+[Service(Name = "FanOutGreeter")]
+public class FanOutGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        var first = ctx.CallFuture<string>("Downstream", "A", name);
+        var second = ctx.CallFuture<string>("Downstream", "B", name);
+
+        var settled = await ctx.AllSettled(first, second);
+        return string.Join(",", settled.Select(r => r.IsSuccess ? r.Value : "failed"));
+    }
+}
+
+/// <summary>
 ///     A service that cancels another invocation and then sleeps — used to verify that a
 ///     journaled SendSignalCommand (ctx.CancelInvocation) replays instead of failing the drain.
 /// </summary>
@@ -854,6 +873,29 @@ public class ProtocolIntegrationTests
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
         Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
 
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringAllSettled_SuspendsInsteadOfSettlingFailures()
+    {
+        var responseData = await RunUntilInputClosedAsync<FanOutGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new FanOutGreeterService());
+
+        var offset = 0;
+
+        // Both fanned-out call commands are flushed before the handler parks on AllSettled.
+        var (callAHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callAHeader.Type);
+        var (callBHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.CallCommand, callBHeader.Type);
+
+        // EOF poisons the pending call results. AllSettled must NOT settle them as failures
+        // and complete the handler with fabricated output — the invocation must suspend.
+        var (suspensionHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+
+        // SuspensionMessage is terminal on its own: no Output, Error, or End may follow.
         Assert.Equal(responseData.Length, offset);
     }
 

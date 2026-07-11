@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk;
 
@@ -220,7 +221,8 @@ public abstract class Context : IContext
     /// <exception cref="AggregateException">
     ///     Every future failed (or none were provided); contains each failure as an inner exception,
     ///     in input order. Futures canceled by an invocation abort count as failures and surface as
-    ///     <see cref="TaskCanceledException" />.
+    ///     <see cref="TaskCanceledException" />. Futures pending when the invocation suspends are
+    ///     never settled as failures — the suspension propagates instead.
     /// </exception>
     public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -236,12 +238,16 @@ public abstract class Context : IContext
                     return await completed.ConfigureAwait(false);
 
             // Every task has settled without a success: aggregate the failures in input order,
-            // matching JavaScript's AggregateError.errors ordering.
+            // matching JavaScript's AggregateError.errors ordering. Suspension is not a failure
+            // (see ThrowIfSuspension) and must win over the aggregate.
             var errors = new Exception[tasks.Length];
             for (var i = 0; i < tasks.Length; i++)
+            {
+                ThrowIfSuspension(tasks[i]);
                 errors[i] = tasks[i].Exception?.InnerException
                             ?? (Exception?)tasks[i].Exception
                             ?? new TaskCanceledException(tasks[i]);
+            }
 
             throw new AggregateException("All durable futures failed.", errors);
         }
@@ -253,7 +259,9 @@ public abstract class Context : IContext
     ///     <see cref="SettledResult{T}.IsSuccess" /> per item
     ///     (matching the TypeScript SDK's <c>RestatePromise.allSettled</c> semantics).
     ///     Futures canceled by an invocation abort settle as failures carrying a
-    ///     <see cref="TaskCanceledException" />.
+    ///     <see cref="TaskCanceledException" />. Futures pending when the invocation suspends are
+    ///     never settled as failures — the operations are journaled and WILL complete on a later
+    ///     attempt, so the suspension propagates instead of fabricating failure entries.
     /// </summary>
     public virtual ValueTask<SettledResult<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
@@ -272,6 +280,8 @@ public abstract class Context : IContext
                 }
                 catch (Exception ex)
                 {
+                    if (FindSuspension(ex) is { } suspension)
+                        throw suspension;
                     results[i] = SettledResult<T>.Failure(ex);
                 }
 
@@ -297,9 +307,39 @@ public abstract class Context : IContext
 
         await foreach (var completedTask in Task.WhenEach(tasks).ConfigureAwait(false))
         {
+            ThrowIfSuspension(completedTask);
             var future = taskToFuture[completedTask];
             var error = completedTask.IsFaulted ? completedTask.Exception?.InnerException : null;
             yield return (future, error);
+        }
+    }
+
+    /// <summary>
+    ///     Rethrows the <see cref="SuspensionException" /> buried in a settled task's fault, if any.
+    ///     Suspension is control flow, not a settlement: the input stream closed, the journaled
+    ///     operation WILL complete on a later attempt, and the invocation must suspend — recording
+    ///     the wait as a failure would durably fabricate a result.
+    /// </summary>
+    private static void ThrowIfSuspension(Task task)
+    {
+        if (task.IsFaulted && FindSuspension(task.Exception) is { } suspension)
+            throw suspension;
+    }
+
+    /// <summary>Finds a <see cref="SuspensionException" /> in an exception tree, unwrapping aggregates.</summary>
+    private static SuspensionException? FindSuspension(Exception? exception)
+    {
+        switch (exception)
+        {
+            case SuspensionException suspension:
+                return suspension;
+            case AggregateException aggregate:
+                foreach (var inner in aggregate.InnerExceptions)
+                    if (FindSuspension(inner) is { } found)
+                        return found;
+                return null;
+            default:
+                return null;
         }
     }
 }
