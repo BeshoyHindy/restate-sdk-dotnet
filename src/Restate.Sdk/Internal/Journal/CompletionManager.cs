@@ -53,15 +53,23 @@ internal sealed class CompletionManager
     // unresolvable and fails with SuspensionException.
     private volatile bool _poisoned;
 
+    // Set once when the runtime delivers the built-in CANCEL signal. Every pending wait —
+    // and every wait registered afterwards — fails with this terminal exception so the
+    // handler unwinds deterministically. Takes precedence over poisoning: a cancelled
+    // invocation must fail terminally, not suspend into a wake-up loop.
+    private volatile TerminalException? _terminalFault;
+
     public TaskCompletionSource<CompletionResult> Register(int entryIndex)
     {
         var tcs = new TaskCompletionSource<CompletionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_slots.TryAdd(entryIndex, new CompletionSlot(tcs)))
         {
-            // Double-check after insertion: closes the race where Poison() enumerates the
-            // dictionary concurrently with this registration, and makes waits registered
-            // after the input closed suspend immediately.
-            if (_poisoned)
+            // Double-check after insertion: closes the race where Poison()/FailAllWith()
+            // enumerates the dictionary concurrently with this registration, and makes waits
+            // registered after the input closed (or cancellation) fail immediately.
+            if (_terminalFault is { } fault)
+                _ = tcs.TrySetException(fault);
+            else if (_poisoned)
                 FailWithSuspension(tcs);
             return tcs;
         }
@@ -81,7 +89,9 @@ internal sealed class CompletionManager
             _slots.TryAdd(entryIndex, new CompletionSlot(tcs));
         }
 
-        if (_poisoned)
+        if (_terminalFault is { } lateFault)
+            _ = tcs.TrySetException(lateFault);
+        else if (_poisoned)
             FailWithSuspension(tcs);
         return tcs;
     }
@@ -96,7 +106,9 @@ internal sealed class CompletionManager
         {
             // Double-check after insertion (see Register). TrySetException is a no-op on
             // slots that already resolved, so early results are never clobbered.
-            if (_poisoned)
+            if (_terminalFault is { } fault)
+                _ = slot.Tcs.TrySetException(fault);
+            else if (_poisoned)
                 FailWithSuspension(slot.Tcs);
             return slot.Tcs;
         }
@@ -163,6 +175,22 @@ internal sealed class CompletionManager
         {
             if (pair.Value.Kind == CompletionSlot.SlotKind.Tcs)
                 FailWithSuspension(pair.Value.Tcs);
+        }
+    }
+
+    /// <summary>
+    ///     Fails every pending wait — and every wait registered afterwards — with the given
+    ///     terminal exception. Used when the runtime delivers the built-in CANCEL signal.
+    ///     Slots already holding results are untouched, so replayed completions still resolve.
+    /// </summary>
+    public void FailAllWith(TerminalException exception)
+    {
+        _terminalFault = exception;
+
+        foreach (var pair in _slots)
+        {
+            if (pair.Value.Kind == CompletionSlot.SlotKind.Tcs)
+                _ = pair.Value.Tcs.TrySetException(exception);
         }
     }
 

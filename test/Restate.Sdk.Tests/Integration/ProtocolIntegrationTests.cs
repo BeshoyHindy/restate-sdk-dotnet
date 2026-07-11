@@ -920,7 +920,8 @@ public class ProtocolIntegrationTests
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
-        Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingSignals);
+        // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
+        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }

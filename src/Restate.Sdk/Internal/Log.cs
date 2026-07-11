@@ -50,6 +50,10 @@ internal static partial class Log
         Message = "Incoming message reader failed: invocationId={InvocationId}")]
     public static partial void IncomingReaderFailed(ILogger logger, Exception exception, string invocationId);
 
+    [LoggerMessage(EventId = 13, Level = LogLevel.Information,
+        Message = "Invocation cancellation requested by the runtime: invocationId={InvocationId}")]
+    public static partial void InvocationCancelRequested(ILogger logger, string invocationId);
+
     // --- Protocol diagnostics (Trace level, zero-overhead when disabled) ---
 
     [LoggerMessage(EventId = 100, Level = LogLevel.Trace,

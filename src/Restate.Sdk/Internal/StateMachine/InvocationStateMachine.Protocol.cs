@@ -202,6 +202,12 @@ internal sealed partial class InvocationStateMachine
                 var signalIndex = (int)signal.Idx.Value;
                 Log.NotificationReceived(Logger, InvocationId, MessageType.SignalNotification, signalIndex, signal.IsFailure);
 
+                if (signalIndex < FirstUserSignalIndex)
+                {
+                    HandleBuiltInSignal(signalIndex);
+                    return;
+                }
+
                 if (signal.IsFailure)
                 {
                     _signalCompletions.TryFail(signalIndex, signal.FailureCode!.Value, signal.FailureMessage!);
@@ -252,6 +258,24 @@ internal sealed partial class InvocationStateMachine
 
             Log.CompletionReceived(Logger, InvocationId, entryIndex);
         }
+    }
+
+    /// <summary>
+    ///     Handles a signal in the reserved built-in range (0-16). CANCEL asks this invocation
+    ///     to stop: every pending durable wait — and every wait registered afterwards — fails
+    ///     with a terminal 409 so parked handlers unwind and compensation logic
+    ///     (try/finally, sagas) runs. Other built-ins carry no SDK semantics yet and are
+    ///     ignored; they must never resolve a user awakeable.
+    /// </summary>
+    private void HandleBuiltInSignal(int signalIndex)
+    {
+        if (signalIndex != CancelSignalIndex)
+            return;
+
+        Log.InvocationCancelRequested(Logger, InvocationId);
+        var cancellation = new TerminalException("The invocation was cancelled.", 409);
+        _completions.FailAllWith(cancellation);
+        _signalCompletions.FailAllWith(cancellation);
     }
 
     /// <summary>
