@@ -68,9 +68,21 @@ public abstract class RestateLambdaHandler
     ///     Configures the logger factory used for SDK logging and <see cref="Context.Logger" />.
     ///     Call from <see cref="Register" />. When not configured, logging is disabled.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown when called after handler construction (e.g. from a derived-class constructor
+    ///     body, which runs after <see cref="Register" />) — the invocation pipeline has already
+    ///     been built and a late factory would be silently ignored.
+    /// </exception>
     protected void UseLoggerFactory(ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        if (_handler is not null)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(UseLoggerFactory)} must be called from {nameof(Register)}(); " +
+                "the invocation pipeline has already been built.");
+        }
+
         _loggerFactory = loggerFactory;
     }
 
