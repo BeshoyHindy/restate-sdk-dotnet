@@ -82,6 +82,22 @@ public class CallThenSleepService
 }
 
 /// <summary>
+///     A service that cancels another invocation and then sleeps — used to verify that a
+///     journaled SendSignalCommand (ctx.CancelInvocation) replays instead of failing the drain.
+/// </summary>
+[Service(Name = "CancelThenSleep")]
+public class CancelThenSleepService
+{
+    [Handler]
+    public async Task<string> Run(Context ctx, string input)
+    {
+        await ctx.CancelInvocation("inv-to-cancel");
+        await ctx.Sleep(TimeSpan.FromMinutes(5));
+        return $"cancelled-then-rested-{input}";
+    }
+}
+
+/// <summary>
 ///     A virtual object used by the eager-state tests: reads a counter, increments it,
 ///     and returns the new value.
 /// </summary>
@@ -509,6 +525,67 @@ public class ProtocolIntegrationTests
         var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
         Assert.Equal("\"downstream-result-done\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ResumedJournalWithSendSignal_ReplaysAndCompletes()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        // Resumed journal of CancelThenSleepService: Input + SendSignalCommand (from
+        // ctx.CancelInvocation) + SleepCommand + SleepCompletionNotification = 4 known entries.
+        // The drain must map the replayed SendSignalCommand to a journal entry instead of
+        // throwing ProtocolException (which would brick the invocation in a retry loop).
+        var startPayload = BuildStartMessagePayload("resume-cancel-1", 4, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var sendSignalPayload = ProtobufCodec.CreateCancelInvocationCommand("inv-to-cancel").ToByteArray();
+        var sleepCommandPayload = new Gen.SleepCommandMessage
+        {
+            WakeUpTime = 123_456_789UL,
+            ResultCompletionId = 1
+        }.ToByteArray();
+        var sleepCompletionPayload = new Gen.SleepCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Void = new Gen.Void()
+        }.ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.SendSignalCommand, sendSignalPayload);
+        WriteFramedMessage(requestStream, MessageType.SleepCommand, sleepCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.SleepCompletion, sleepCompletionPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(CancelThenSleepService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Run");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new CancelThenSleepService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        // No replayed command is re-sent — the invocation completes directly.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"cancelled-then-rested-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);

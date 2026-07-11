@@ -295,6 +295,7 @@ internal sealed partial class InvocationStateMachine
             MessageType.CallCommand => JournalEntryType.Call,
             MessageType.OneWayCallCommand => JournalEntryType.OneWayCall,
             MessageType.CompleteAwakeableCommand => JournalEntryType.CompleteAwakeable,
+            MessageType.SendSignalCommand => JournalEntryType.SendSignal,
             MessageType.RunCommand => JournalEntryType.Run,
             MessageType.GetPromiseCommand => JournalEntryType.GetPromise,
             MessageType.PeekPromiseCommand => JournalEntryType.PeekPromise,
