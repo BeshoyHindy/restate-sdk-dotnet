@@ -6,7 +6,7 @@
 
 # Restate .NET SDK
 
-> **Pre-release (0.1.0-alpha.2)** -- Under active development. APIs may change between releases.
+> **Pre-release** -- Under active development. APIs may change between releases.
 >
 > This is a community-driven project, not an official Restate SDK.
 > Built by reverse-engineering the Java, TypeScript, and Go SDKs.
@@ -40,14 +40,14 @@ that run on the Restate runtime.
 ### Install
 
 ```bash
-dotnet add package Restate.Sdk --version 0.1.0-alpha.2
+dotnet add package Restate.Sdk --prerelease
 ```
 
 Optional packages:
 
 ```bash
-dotnet add package Restate.Sdk.Testing --version 0.1.0-alpha.2   # Mock contexts for unit testing
-dotnet add package Restate.Sdk.Lambda --version 0.1.0-alpha.2    # AWS Lambda adapter
+dotnet add package Restate.Sdk.Testing --prerelease   # Mock contexts for unit testing
+dotnet add package Restate.Sdk.Lambda --prerelease    # AWS Lambda adapter
 ```
 
 > The Roslyn source generator is bundled with `Restate.Sdk` -- typed clients and service
@@ -454,6 +454,8 @@ The [`samples/`](samples/) directory contains complete working examples:
 | [NativeAotGreeter](samples/NativeAotGreeter) | 9085 | NativeAOT publishing, `BuildAot()`, source-generated registration |
 | [Saga](samples/Saga) | 9086 | Saga/compensation pattern, `RetryPolicy`, cross-service orchestration |
 | [FanOut](samples/FanOut) | 9087 | Fan-out/fan-in, `RunAsync` + `All`/`Race` combinators |
+| [NativeAotCounter](samples/NativeAotCounter) | 9088 | Virtual object state under NativeAOT, `JsonSerializerContext` wiring |
+| [NativeAotSaga](samples/NativeAotSaga) | 9089 | Saga/compensation pattern under NativeAOT |
 
 Run any sample:
 
@@ -466,7 +468,7 @@ dotnet run
 
 | SDK Version | Restate Server | Protocol | .NET |
 |-------------|----------------|----------|------|
-| 0.1.0-alpha.2 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.5 | 1.6.0+ | v5 - v6 | .NET 10.0 |
 
 ## Contributing
 

@@ -326,26 +326,26 @@ echo "Starting NativeAotGreeter on port 9085..."
 "$AOT_DIR/greeter/NativeAotGreeter" &
 PIDS+=($!)
 
-echo "Starting NativeAotCounter on port 9086..."
+echo "Starting NativeAotCounter on port 9088..."
 "$AOT_DIR/counter/NativeAotCounter" &
 PIDS+=($!)
 
-echo "Starting NativeAotSaga on port 9087..."
+echo "Starting NativeAotSaga on port 9089..."
 "$AOT_DIR/saga/NativeAotSaga" &
 PIDS+=($!)
 
 echo "Waiting for AOT services to start..."
 wait_for_port 9085
-wait_for_port 9086
-wait_for_port 9087
+wait_for_port 9088
+wait_for_port 9089
 echo "All AOT services ready."
 echo ""
 
 # Register AOT deployments
 echo "Registering AOT deployments..."
 register_deployment 9085
-register_deployment 9086
-register_deployment 9087
+register_deployment 9088
+register_deployment 9089
 echo ""
 
 sleep 2
