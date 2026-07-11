@@ -280,6 +280,55 @@ public class ProtocolIntegrationTests
     }
 
     [Fact]
+    public async Task HandleAsync_TrailingMalformedFrame_KeepsCompletedResponse()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var startPayload = BuildStartMessagePayload("trailing-junk-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+
+        // Trailing garbage beyond known_entries: a header announcing a payload that never
+        // arrives. The concurrent reader faults on it, but the handler's outcome was already
+        // decided — the fault must be logged, not rethrown out of HandleAsync.
+        var junkHeader = new byte[MessageHeader.Size];
+        MessageHeader.Create(MessageType.SleepCompletion, MessageFlags.None, 64).Write(junkHeader);
+        requestStream.Write(junkHeader);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TestGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new TestGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"Hello, World!\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
     public async Task HandleAsync_NullInput_ProducesError()
     {
         var startPayload = BuildStartMessagePayload("test-inv-2", 1, "test-key", 99);

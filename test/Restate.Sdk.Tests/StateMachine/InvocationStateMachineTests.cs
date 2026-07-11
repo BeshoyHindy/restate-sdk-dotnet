@@ -684,6 +684,40 @@ public class InvocationStateMachineTests : IDisposable
         await Assert.ThrowsAsync<SuspensionException>(() => late.Task);
     }
 
+    [Fact]
+    public async Task ProcessIncomingMessages_ReaderFault_PoisonsPendingWaits()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var pending = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        // Transport failure: the read loop must not exit without failing pending waits,
+        // or a handler parked on `await tcs.Task` leaks forever.
+        _inbound.Writer.Complete(new IOException("transport reset"));
+
+        await Assert.ThrowsAsync<IOException>(() => incoming);
+        Assert.True(sm.InputClosed);
+        await Assert.ThrowsAsync<SuspensionException>(() => pending.Task);
+    }
+
+    [Fact]
+    public async Task ProcessIncomingMessages_Cancelled_CancelsPendingWaits()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var pending = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        var incoming = sm.ProcessIncomingMessagesAsync(cts.Token);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => incoming);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.Task);
+    }
+
     // ------- Disposal -------
 
     [Fact]

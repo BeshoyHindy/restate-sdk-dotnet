@@ -128,34 +128,56 @@ internal sealed partial class InvocationStateMachine
 
     public async Task ProcessIncomingMessagesAsync(CancellationToken ct)
     {
-        while (State != InvocationState.Closed)
+        try
         {
-            Log.ReadingMessage(Logger, InvocationId);
-            var message = await _reader.ReadMessageAsync(ct).ConfigureAwait(false);
-            if (message is null)
+            while (State != InvocationState.Closed)
             {
-                Log.StreamEnded(Logger, InvocationId);
-
-                // EOF: the runtime half-closed the request stream. Every buffered frame has
-                // already been delivered (ReadMessageAsync only returns null once the pipe is
-                // drained), so no completion can ever arrive again. Poison both completion
-                // managers so pending — and future — durable waits unwind with
-                // SuspensionException and the invocation suspends.
-                if (State != InvocationState.Closed)
+                Log.ReadingMessage(Logger, InvocationId);
+                var message = await _reader.ReadMessageAsync(ct).ConfigureAwait(false);
+                if (message is null)
                 {
-                    Log.InputStreamClosed(Logger, InvocationId);
-                    InputClosed = true;
-                    _completions.Poison();
-                    _signalCompletions.Poison();
+                    Log.StreamEnded(Logger, InvocationId);
+
+                    // EOF: the runtime half-closed the request stream. Every buffered frame has
+                    // already been delivered (ReadMessageAsync only returns null once the pipe is
+                    // drained), so no completion can ever arrive again. Poison both completion
+                    // managers so pending — and future — durable waits unwind with
+                    // SuspensionException and the invocation suspends.
+                    if (State != InvocationState.Closed)
+                    {
+                        Log.InputStreamClosed(Logger, InvocationId);
+                        InputClosed = true;
+                        _completions.Poison();
+                        _signalCompletions.Poison();
+                    }
+
+                    break;
                 }
 
-                break;
+                var msg = message.Value;
+                Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
+                HandleIncomingMessage(msg);
+                msg.Dispose();
             }
-
-            var msg = message.Value;
-            Log.MessageRead(Logger, InvocationId, msg.Header.Type, msg.Header.Length);
-            HandleIncomingMessage(msg);
-            msg.Dispose();
+        }
+        catch (OperationCanceledException)
+        {
+            // The reader was cancelled: either HandleAsync is unwinding after the outcome was
+            // decided, or the request aborted mid-flight. Cancel every pending wait so a handler
+            // parked on an un-cancellable `await tcs.Task` always unwinds instead of leaking.
+            _completions.CancelAll();
+            _signalCompletions.CancelAll();
+            throw;
+        }
+        catch
+        {
+            // The reader faulted (transport failure or malformed frame): stream integrity is
+            // gone and no completion can ever arrive. Poison pending — and future — waits so
+            // parked handlers unwind with SuspensionException and the invocation suspends.
+            InputClosed = true;
+            _completions.Poison();
+            _signalCompletions.Poison();
+            throw;
         }
     }
 

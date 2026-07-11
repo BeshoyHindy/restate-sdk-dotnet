@@ -175,6 +175,13 @@ internal sealed class InvocationHandler
                 {
                     Log.IncomingReaderStopped(logger, ex, sm.InvocationId);
                 }
+                catch (Exception ex)
+                {
+                    // The reader faulted (e.g. a trailing malformed frame) after the invocation
+                    // outcome was already decided and written. Log it — rethrowing here would
+                    // discard the completed response (on Lambda: turn success into a retry).
+                    Log.IncomingReaderFailed(logger, ex, sm.InvocationId);
+                }
 
             try { reader.Complete(); } catch { /* already completed or broken */ }
         }

@@ -290,6 +290,14 @@ public abstract class RestateLambdaHandler
                 protocolVersion,
                 cts.Token).ConfigureAwait(false);
         }
+        catch (Exception ex)
+        {
+            // Defensive: HandleAsync terminates the protocol body itself for every expected
+            // failure. Anything escaping is unexpected — surface a retryable function error
+            // instead of returning a half-written (non-terminal) protocol body as 200.
+            context.Logger.LogError($"Restate invocation processing failed unexpectedly: {ex}");
+            return new APIGatewayProxyResponse { StatusCode = 500 };
+        }
         finally
         {
             await requestPipe.Reader.CompleteAsync().ConfigureAwait(false);

@@ -46,6 +46,10 @@ internal static partial class Log
         Message = "Invocation suspending: invocationId={InvocationId}")]
     public static partial void InvocationSuspending(ILogger logger, string invocationId);
 
+    [LoggerMessage(EventId = 12, Level = LogLevel.Warning,
+        Message = "Incoming message reader failed: invocationId={InvocationId}")]
+    public static partial void IncomingReaderFailed(ILogger logger, Exception exception, string invocationId);
+
     // --- Protocol diagnostics (Trace level, zero-overhead when disabled) ---
 
     [LoggerMessage(EventId = 100, Level = LogLevel.Trace,
