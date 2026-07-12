@@ -5,6 +5,31 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.2.1...v0.3.0) (2026-07-12)
+
+
+### Features
+
+* Add multiple new features and samples ([38f7366](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/38f73663a570b83a331df4c83d5699ef32922d02))
+* add NativeAotCounter sample and simplify AOT registration API ([a4cb19a](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/a4cb19a00067105f0621d30969b3c6246fdace3b))
+* add NativeAotSaga sample demonstrating compensating transactions ([6a000ee](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/6a000eed8dcb0c4f849e54a52038455ee81dc630))
+* AOT-safe ingress client and Any/AllSettled combinators ([#53](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/53)) ([dc8329f](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/dc8329f5e1df34b33e21215f9b5469017763e176))
+* enable manual triggering of CI workflow with workflow_dispatch ([2deafc0](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/2deafc0e83d547e3fe1f7c563af60c1b5eec47ff))
+* enhance CI workflow with integration tests and update .NET version ([4390280](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/4390280b86db78cf8c40329fefbd51d3f507ed33))
+* Implement source-generated JSON serializer context and update DI registration methods ([ea4f080](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/ea4f0808f38cfa5af4816e3be066595e7349d0fe))
+* metrics, span enrichment, and replay-aware context logger ([#55](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/55)) ([26623a1](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/26623a137acd71bcc8e20858612e985fdeb77e75))
+* request identity verification (x-restate-signature v1) ([#54](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/54)) ([9dafff8](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/9dafff8fe036406280696752bce47d1a92a73532))
+* Restate testcontainers integration harness ([#56](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/56)) ([7efac8c](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/7efac8c4243a9010d9a7fbd33257e864d35c03e3))
+* service protocol v7, suspension, and replay-correctness fixes ([#58](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/58)) ([dee9fbc](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/dee9fbc5fae7454bc5ed64b018690044697fea55))
+
+
+### Bug Fixes
+
+* **client:** use Restate ingress send endpoint ([#64](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/64)) ([bcc8bda](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/bcc8bdab853c22b77811552a3ea7a645340a233f))
+* cover invocation-abort cancellation in Any and AllSettled ([#59](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/59)) ([b80029a](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/b80029acfa28d773be46841a297a780d61cd8763))
+* cross-cutting audit fixes and public API tracking ([#62](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/62)) ([86ee23a](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/86ee23a605d693cfc2a50d8c396157ffafcefda3))
+* resolve JsonSerializer and AOT DI registration failures on .NET 10 ([c6d7d63](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/c6d7d63d8a45a83e081abe290982f316a2e39f59))
+
 ## [Unreleased]
 
 ## [0.2.1] - 2026-07-12
