@@ -5,14 +5,9 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.2.0...v0.2.1) (2026-07-12)
-
-
-### Bug Fixes
-
-* **client:** use Restate ingress send endpoint ([#64](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/64)) ([bcc8bda](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/bcc8bdab853c22b77811552a3ea7a645340a233f))
-
 ## [Unreleased]
+
+## [0.2.1] - 2026-07-12
 
 ### Fixed
 
