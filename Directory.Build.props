@@ -10,7 +10,7 @@
 
     <!-- Shared NuGet package metadata -->
     <PropertyGroup>
-        <Version>0.2.0</Version> <!-- x-release-please-version -->
+        <Version>0.2.1</Version> <!-- x-release-please-version -->
         <Authors>Beshoy Hindy</Authors>
         <Company>Beshoy Hindy</Company>
         <Copyright>Copyright (c) 2026 Beshoy Hindy</Copyright>
