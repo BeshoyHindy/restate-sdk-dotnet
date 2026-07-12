@@ -60,4 +60,44 @@ public sealed class RestateContainerTests
 
         await app.StopAsync();
     }
+
+    [DockerFact]
+    public async Task Ingress_client_immediate_and_delayed_sends_return_attachable_invocations()
+    {
+        var app = RestateHost.CreateBuilder()
+            .WithPort(0)
+            .AddService<HarnessGreeterService>()
+            .Build();
+        await using var _ = app;
+        await app.StartAsync();
+
+        var address = app.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!.Addresses.First();
+        var hostPort = BindingAddress.Parse(address).Port;
+
+        await TestcontainersSettings.ExposeHostPortsAsync((ushort)hostPort);
+
+        await using var container = new RestateBuilder().Build();
+        await container.StartAsync();
+        await container.RegisterDeploymentAsync(hostPort);
+
+        using var client = container.CreateIngressClient();
+        var immediateInvocationId = await client
+            .Service("HarnessGreeterService")
+            .Send("Greet", new GreetRequest("Immediate"));
+        var delayedInvocationId = await client
+            .Service("HarnessGreeterService")
+            .Send("Greet", new GreetRequest("Delayed"), delay: TimeSpan.FromMilliseconds(100));
+
+        Assert.False(string.IsNullOrWhiteSpace(immediateInvocationId));
+        Assert.False(string.IsNullOrWhiteSpace(delayedInvocationId));
+
+        var immediateReply = await client.Attach<GreetReply>(immediateInvocationId);
+        var delayedReply = await client.Attach<GreetReply>(delayedInvocationId);
+
+        Assert.Equal("Hello, Immediate!", immediateReply.Message);
+        Assert.Equal("Hello, Delayed!", delayedReply.Message);
+
+        await app.StopAsync();
+    }
 }

@@ -1,1 +1,8 @@
 #nullable enable
+Restate.Sdk.Client.RestateClient.RestateClient(System.Net.Http.HttpClient! httpClient, Restate.Sdk.Client.RestateClientOptions! options) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(System.Uri! baseUrl, Restate.Sdk.Client.RestateClientOptions! options) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(string! baseUrl, Restate.Sdk.Client.RestateClientOptions! options) -> void
+Restate.Sdk.Client.RestateClientOptions
+Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
+Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.set -> void
+Restate.Sdk.Client.RestateClientOptions.RestateClientOptions() -> void

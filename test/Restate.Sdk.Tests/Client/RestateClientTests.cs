@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Restate.Sdk.Client;
 
@@ -16,11 +17,12 @@ internal sealed partial class ClientTestJsonContext : JsonSerializerContext;
 
 public class RestateClientTests
 {
-    private static (RestateClient Client, StubHandler Handler) CreateClient()
+    private static (RestateClient Client, StubHandler Handler) CreateClient(RestateClientOptions? options = null)
     {
         var handler = new StubHandler();
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8080") };
-        return (new RestateClient(http), handler);
+        var client = options is null ? new RestateClient(http) : new RestateClient(http, options);
+        return (client, handler);
     }
 
     // ── AOT-safe (JsonTypeInfo) overloads ──
@@ -69,7 +71,7 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task Send_TypeInfo_SetsFireAndForgetHeader_AndReturnsInvocationId()
+    public async Task Send_TypeInfo_PostsToSendPath_WithoutLegacyModeHeader_AndReturnsInvocationId()
     {
         var (client, handler) = CreateClient();
         handler.ResponseBody = """{"invocationId":"inv-123"}""";
@@ -78,7 +80,8 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
 
         Assert.Equal("inv-123", invocationId);
-        Assert.Equal("fire-and-forget", Assert.Single(handler.LastRequest!.Headers.GetValues("x-restate-mode")));
+        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.False(handler.LastRequest.Headers.Contains("x-restate-mode"));
         Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
     }
 
@@ -92,6 +95,7 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
             delay: TimeSpan.FromSeconds(2));
 
+        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("?delay=2000ms", handler.LastRequest!.RequestUri!.Query);
     }
 
@@ -101,10 +105,11 @@ public class RestateClientTests
         var (client, handler) = CreateClient();
         handler.ResponseBody = """{"invocationId":"inv-1"}""";
 
-        await client.Service("Greeter").Send(
+        await client.VirtualObject("Greeter", "ada").Send(
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
             idempotencyKey: "key-42");
 
+        Assert.Equal("/Greeter/ada/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("key-42", Assert.Single(handler.LastRequest!.Headers.GetValues("idempotency-key")));
     }
 
@@ -177,15 +182,15 @@ public class RestateClientTests
     [Theory]
     [InlineData("{}")]
     [InlineData("null")]
-    public async Task Send_TypeInfo_MissingInvocationId_ReturnsEmpty(string responseBody)
+    [InlineData("{\"invocationId\":\"\"}")]
+    [InlineData("{\"invocationId\":\"   \"}")]
+    public async Task Send_TypeInfo_MissingInvocationId_ThrowsJsonException(string responseBody)
     {
         var (client, handler) = CreateClient();
         handler.ResponseBody = responseBody;
 
-        var invocationId = await client.Service("Greeter").Send(
-            "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
-
-        Assert.Equal("", invocationId);
+        await Assert.ThrowsAsync<JsonException>(() => client.Service("Greeter").Send(
+            "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest));
     }
 
     // ── Reflection overloads (behavioral parity) ──
@@ -212,7 +217,76 @@ public class RestateClientTests
         var invocationId = await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"));
 
         Assert.Equal("inv-7", invocationId);
-        Assert.Equal("fire-and-forget", Assert.Single(handler.LastRequest!.Headers.GetValues("x-restate-mode")));
+        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.False(handler.LastRequest.Headers.Contains("x-restate-mode"));
+    }
+
+    [Fact]
+    public async Task Reflection_CustomJsonOptions_ApplyToCallRequestAndResponse()
+    {
+        var options = new RestateClientOptions { JsonSerializerOptions = JsonSerializerOptions.Default };
+        var (client, handler) = CreateClient(options);
+        handler.ResponseBody = """{"Message":"hello Ada"}""";
+
+        var response = await client.Service("Greeter").Call<GreetResponse>("Greet", new GreetRequest("Ada"));
+
+        Assert.Equal("""{"Name":"Ada"}""", handler.LastRequestBody);
+        Assert.Equal("hello Ada", response.Message);
+    }
+
+    [Fact]
+    public async Task Reflection_DefaultClientOptions_PreserveCamelCaseBehavior()
+    {
+        var (client, handler) = CreateClient(new RestateClientOptions());
+        handler.ResponseBody = """{"message":"hello Ada"}""";
+
+        var response = await client.Service("Greeter").Call<GreetResponse>("Greet", new GreetRequest("Ada"));
+
+        Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
+        Assert.Equal("hello Ada", response.Message);
+    }
+
+    [Fact]
+    public async Task TypeInfoOverloads_IgnoreReflectionJsonOptions()
+    {
+        var options = new RestateClientOptions { JsonSerializerOptions = JsonSerializerOptions.Default };
+        var (client, handler) = CreateClient(options);
+        handler.ResponseBody = """{"message":"hello Ada"}""";
+
+        var response = await client.Service("Greeter").Call(
+            "Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse);
+
+        Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
+        Assert.Equal("hello Ada", response.Message);
+    }
+
+    [Fact]
+    public async Task Reflection_CustomJsonOptions_ApplyToSendRequest()
+    {
+        var options = new RestateClientOptions { JsonSerializerOptions = JsonSerializerOptions.Default };
+        var (client, handler) = CreateClient(options);
+        handler.ResponseBody = """{"invocationId":"inv-custom"}""";
+
+        var invocationId = await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"));
+
+        Assert.Equal("inv-custom", invocationId);
+        Assert.Equal("""{"Name":"Ada"}""", handler.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task Reflection_CustomJsonOptions_ApplyToInvocationResponses()
+    {
+        var options = new RestateClientOptions { JsonSerializerOptions = JsonSerializerOptions.Default };
+        var (client, handler) = CreateClient(options);
+        handler.ResponseBody = """{"Message":"attached"}""";
+
+        var attached = await client.Attach<GreetResponse>("inv-1");
+        handler.ResponseBody = """{"Message":"output"}""";
+        var output = await client.GetOutput<GreetResponse>("inv-1");
+
+        Assert.Equal("attached", attached.Message);
+        Assert.Equal("output", output.Message);
     }
 
     [Fact]
@@ -224,6 +298,31 @@ public class RestateClientTests
 
         Assert.Equal(HttpMethod.Delete, handler.LastRequest!.Method);
         Assert.Equal("/restate/invocation/inv-5", handler.LastRequest.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task Responses_AreDisposed_AfterEveryClientOperation()
+    {
+        var (client, handler) = CreateClient();
+
+        handler.ResponseBody = """{"message":"called"}""";
+        await client.Service("Greeter").Call<GreetResponse>("Greet");
+        Assert.True(handler.LastResponseContent!.IsDisposed);
+
+        handler.ResponseBody = """{"invocationId":"inv-send"}""";
+        await client.Service("Greeter").Send("Greet");
+        Assert.True(handler.LastResponseContent!.IsDisposed);
+
+        handler.ResponseBody = """{"message":"attached"}""";
+        await client.Attach<GreetResponse>("inv-attach");
+        Assert.True(handler.LastResponseContent!.IsDisposed);
+
+        handler.ResponseBody = """{"message":"output"}""";
+        await client.GetOutput<GreetResponse>("inv-output");
+        Assert.True(handler.LastResponseContent!.IsDisposed);
+
+        await client.Cancel("inv-cancel");
+        Assert.True(handler.LastResponseContent!.IsDisposed);
     }
 
     // ── Argument validation ──
@@ -238,6 +337,25 @@ public class RestateClientTests
         Assert.Equal("httpClient",
             Assert.Throws<ArgumentNullException>(() => new RestateClient((HttpClient)null!)).ParamName);
         Assert.Throws<ArgumentException>(() => new RestateClient(""));
+
+        Assert.Equal("options",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient("http://localhost:8080", null!)).ParamName);
+        Assert.Equal("options",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient(
+                new Uri("http://localhost:8080"), null!)).ParamName);
+        Assert.Equal("options",
+            Assert.Throws<ArgumentNullException>(() => new RestateClient(
+                new HttpClient(), null!)).ParamName);
+    }
+
+    [Fact]
+    public void ClientOptions_NullJsonSerializerOptions_Throws()
+    {
+        var options = new RestateClientOptions();
+
+        var ex = Assert.Throws<ArgumentNullException>(() => options.JsonSerializerOptions = null!);
+
+        Assert.Equal("value", ex.ParamName);
     }
 
     [Fact]
@@ -263,6 +381,7 @@ public class RestateClientTests
     {
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastRequestBody { get; private set; }
+        public TrackingStringContent? LastResponseContent { get; private set; }
         public string ResponseBody { get; set; } = "{}";
         public HttpStatusCode ResponseStatusCode { get; set; } = HttpStatusCode.OK;
 
@@ -273,10 +392,23 @@ public class RestateClientTests
             LastRequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
+            LastResponseContent = new TrackingStringContent(ResponseBody);
             return new HttpResponseMessage(ResponseStatusCode)
             {
-                Content = new StringContent(ResponseBody, Encoding.UTF8, "application/json")
+                Content = LastResponseContent
             };
+        }
+    }
+
+    internal sealed class TrackingStringContent(string content)
+        : StringContent(content, Encoding.UTF8, "application/json")
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
         }
     }
 }
