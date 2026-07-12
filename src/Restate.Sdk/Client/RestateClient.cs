@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -23,6 +24,7 @@ public sealed class RestateClient : IDisposable
     private static JsonSerializerOptions? s_reflectionJsonOptions;
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
+    private readonly JsonSerializerOptions? _reflectionJsonOptions;
 
     /// <summary>
     ///     Creates a new Restate ingress client pointing at the given base URL.
@@ -32,6 +34,20 @@ public sealed class RestateClient : IDisposable
     /// <exception cref="ArgumentException"><paramref name="baseUrl" /> is empty.</exception>
     /// <exception cref="UriFormatException"><paramref name="baseUrl" /> is not a valid URI.</exception>
     public RestateClient(string baseUrl) : this(CreateBaseUri(baseUrl))
+    {
+    }
+
+    /// <summary>
+    ///     Creates a new Restate ingress client pointing at the given base URL.
+    /// </summary>
+    /// <param name="baseUrl">The Restate ingress URL (e.g., "http://localhost:8080").</param>
+    /// <param name="options">Options controlling reflection-based JSON serialization.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="baseUrl" /> or <paramref name="options" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="baseUrl" /> is empty.</exception>
+    /// <exception cref="UriFormatException"><paramref name="baseUrl" /> is not a valid URI.</exception>
+    public RestateClient(string baseUrl, RestateClientOptions options) : this(CreateBaseUri(baseUrl), options)
     {
     }
 
@@ -48,6 +64,23 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
+    ///     Creates a new Restate ingress client pointing at the given base URL.
+    /// </summary>
+    /// <param name="baseUrl">The Restate ingress URI (e.g., <c>http://localhost:8080</c>).</param>
+    /// <param name="options">Options controlling reflection-based JSON serialization.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="baseUrl" /> or <paramref name="options" /> is <see langword="null" />.
+    /// </exception>
+    public RestateClient(Uri baseUrl, RestateClientOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(baseUrl);
+        ArgumentNullException.ThrowIfNull(options);
+        _http = new HttpClient { BaseAddress = baseUrl };
+        _ownsClient = true;
+        _reflectionJsonOptions = options.JsonSerializerOptions;
+    }
+
+    /// <summary>
     ///     Creates a new Restate ingress client using an existing <see cref="HttpClient" />.
     ///     The caller retains ownership of the HttpClient.
     /// </summary>
@@ -58,6 +91,24 @@ public sealed class RestateClient : IDisposable
         ArgumentNullException.ThrowIfNull(httpClient);
         _http = httpClient;
         _ownsClient = false;
+    }
+
+    /// <summary>
+    ///     Creates a new Restate ingress client using an existing <see cref="HttpClient" />.
+    ///     The caller retains ownership of the HttpClient.
+    /// </summary>
+    /// <param name="httpClient">The HTTP client to use; its <see cref="HttpClient.BaseAddress" /> must point at the ingress.</param>
+    /// <param name="options">Options controlling reflection-based JSON serialization.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="httpClient" /> or <paramref name="options" /> is <see langword="null" />.
+    /// </exception>
+    public RestateClient(HttpClient httpClient, RestateClientOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentNullException.ThrowIfNull(options);
+        _http = httpClient;
+        _ownsClient = false;
+        _reflectionJsonOptions = options.JsonSerializerOptions;
     }
 
     private static Uri CreateBaseUri(string baseUrl)
@@ -79,8 +130,10 @@ public sealed class RestateClient : IDisposable
     /// </summary>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
-    private static JsonSerializerOptions GetReflectionJsonOptions()
+    private JsonSerializerOptions GetReflectionJsonOptions()
     {
+        if (_reflectionJsonOptions is not null) return _reflectionJsonOptions;
+
         return s_reflectionJsonOptions ??= CreateReflectionJsonOptions();
 
         [RequiresUnreferencedCode(ReflectionJsonMessage)]
@@ -125,7 +178,8 @@ public sealed class RestateClient : IDisposable
     public async Task<TResponse> Attach<TResponse>(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct).ConfigureAwait(false);
+        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
@@ -143,7 +197,8 @@ public sealed class RestateClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct).ConfigureAwait(false);
+        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
@@ -158,7 +213,8 @@ public sealed class RestateClient : IDisposable
     public async Task<TResponse> GetOutput<TResponse>(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct).ConfigureAwait(false);
+        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
@@ -176,7 +232,8 @@ public sealed class RestateClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct).ConfigureAwait(false);
+        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
@@ -189,7 +246,8 @@ public sealed class RestateClient : IDisposable
     public async Task Cancel(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct).ConfigureAwait(false);
+        using var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct)
+            .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }
 
@@ -197,11 +255,9 @@ public sealed class RestateClient : IDisposable
     [RequiresDynamicCode(ReflectionJsonMessage)]
     internal async Task<TResponse> CallAsync<TResponse>(string path, object? request, CancellationToken ct)
     {
-        HttpResponseMessage response;
-        if (request is not null)
-            response = await _http.PostAsJsonAsync(path, request, GetReflectionJsonOptions(), ct).ConfigureAwait(false);
-        else
-            response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var response = request is not null
+            ? await _http.PostAsJsonAsync(path, request, GetReflectionJsonOptions(), ct).ConfigureAwait(false)
+            : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
@@ -210,11 +266,9 @@ public sealed class RestateClient : IDisposable
     internal async Task<TResponse> CallAsync<TRequest, TResponse>(string path, TRequest? request,
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo, CancellationToken ct)
     {
-        HttpResponseMessage response;
-        if (request is not null)
-            response = await _http.PostAsJsonAsync(path, request, requestTypeInfo, ct).ConfigureAwait(false);
-        else
-            response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var response = request is not null
+            ? await _http.PostAsJsonAsync(path, request, requestTypeInfo, ct).ConfigureAwait(false)
+            : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
@@ -223,7 +277,7 @@ public sealed class RestateClient : IDisposable
     internal async Task<TResponse> CallAsync<TResponse>(string path, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct)
     {
-        var response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
@@ -252,10 +306,12 @@ public sealed class RestateClient : IDisposable
 
     private static HttpRequestMessage CreateSendRequest(string path, TimeSpan? delay, string? idempotencyKey)
     {
-        var url = delay.HasValue ? $"{path}?delay={delay.Value.TotalMilliseconds:F0}ms" : path;
+        var sendPath = $"{path}/send";
+        var url = delay.HasValue
+            ? $"{sendPath}?delay={delay.Value.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)}ms"
+            : sendPath;
 
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
-        httpRequest.Headers.Add("x-restate-mode", "fire-and-forget");
         if (idempotencyKey is not null)
             httpRequest.Headers.Add("idempotency-key", idempotencyKey);
 
@@ -264,13 +320,17 @@ public sealed class RestateClient : IDisposable
 
     private async Task<string> SendCoreAsync(HttpRequestMessage httpRequest, CancellationToken ct)
     {
-        var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
+        using var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         // The ingress returns the invocation ID in the response body
         var body = await response.Content
             .ReadFromJsonAsync(RestateClientJsonContext.Default.SendResponse, ct).ConfigureAwait(false);
-        return body?.InvocationId ?? "";
+        var invocationId = body?.InvocationId;
+        if (string.IsNullOrWhiteSpace(invocationId))
+            throw new JsonException("Restate ingress send response did not contain a non-empty invocationId.");
+
+        return invocationId;
     }
 }
 

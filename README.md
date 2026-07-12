@@ -442,6 +442,19 @@ var invocationId = await client.Service("EmailService")
     .Send("SendEmail", request, delay: TimeSpan.FromHours(1));
 ```
 
+Reflection-based overloads use camelCase JSON by default. To match an endpoint with different
+JSON conventions, configure the client explicitly:
+
+```csharp
+using System.Text.Json;
+
+var options = new RestateClientOptions
+{
+    JsonSerializerOptions = JsonSerializerOptions.Default
+};
+using var defaultJsonClient = new RestateClient("http://localhost:8080", options);
+```
+
 ## Samples
 
 The [`samples/`](samples/) directory contains complete working examples:

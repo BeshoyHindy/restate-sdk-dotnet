@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `RestateClient.Send` now uses the ingress `/send` endpoint (including delayed sends) instead of
+  an unsupported `x-restate-mode` header, validates returned invocation IDs, and supports explicit
+  reflection JSON configuration through `RestateClientOptions`.
+
 ## [0.2.0] - 2026-07-11
 
 ### Added
