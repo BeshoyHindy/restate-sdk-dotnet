@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-12
+
 ### Fixed
 
 - `RestateClient.Send` now uses the ingress `/send` endpoint (including delayed sends) instead of
