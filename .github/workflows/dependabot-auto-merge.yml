@@ -1,0 +1,54 @@
+name: Dependabot Auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Arm auto-merge
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Classify update
+        id: classify
+        env:
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          low_risk=false
+          if [ "$ECOSYSTEM" = "github_actions" ]; then
+            low_risk=true
+          elif [ "$ECOSYSTEM" = "nuget" ] &&
+               { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] ||
+                 [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; }; then
+            low_risk=true
+          fi
+
+          echo "low-risk=$low_risk" >> "$GITHUB_OUTPUT"
+
+          if [ "$low_risk" = true ]; then
+            echo "Arming auto-merge for $ECOSYSTEM update ($UPDATE_TYPE)."
+          else
+            echo "Leaving $ECOSYSTEM update ($UPDATE_TYPE) for a maintainer to merge by hand."
+          fi
+
+      # Auto-merge only schedules the merge: branch protection still gates it,
+      # so the PR merges once every required check passes.
+      - name: Enable auto-merge
+        if: steps.classify.outputs.low-risk == 'true'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "$PR_URL"
