@@ -488,6 +488,71 @@ public class CombinatorTests
         Assert.IsType<InvalidOperationException>(results[1].Error);
     }
 
+    // ── Lazy futures shared between combinators ──
+    //
+    // A lazy future holds the state machine's ValueTask, and every combinator it is handed to
+    // calls GetResult() again. SingleUseValueTaskSource enforces the ValueTask contract (one
+    // consumption only), so these fail unless the future preserved its ValueTask.
+
+    [Fact]
+    public async Task LazyRunFuture_InTwoCombinators_ResolvesInBoth()
+    {
+        var ctx = new BareContext();
+        var source = new SingleUseValueTaskSource<(TaskCompletionSource<CompletionResult> Tcs, int Result)>();
+        var future = new LazyRunFuture<int>(source.ValueTask);
+
+        var all = ctx.All<int>(future);
+        var race = ctx.Race<int>(future);
+
+        source.SetResult((new TaskCompletionSource<CompletionResult>(), 7));
+
+        var allResults = await all;
+        Assert.Equal([7], allResults);
+        Assert.Equal(7, await race);
+    }
+
+    [Fact]
+    public async Task LazyCallFuture_InTwoCombinators_ResolvesInBoth()
+    {
+        var ctx = new BareContext();
+        var tcs = new TaskCompletionSource<CompletionResult>();
+        var source = new SingleUseValueTaskSource<TaskCompletionSource<CompletionResult>>();
+        var future = new LazyCallFuture<int>(source.ValueTask, JsonSerializerOptions.Default);
+
+        var all = ctx.All<int>(future);
+        var settled = ctx.AllSettled<int>(future);
+
+        source.SetResult(tcs);
+        Complete(tcs, 11);
+
+        var allResults = await all;
+        Assert.Equal([11], allResults);
+        var settledResult = Assert.Single(await settled);
+        Assert.True(settledResult.IsSuccess);
+        Assert.Equal(11, settledResult.Value);
+    }
+
+    [Fact]
+    public async Task LazyTimerFuture_InTwoCombinators_ResolvesInBoth()
+    {
+        var ctx = new BareContext();
+        var tcs = new TaskCompletionSource<CompletionResult>();
+        var source = new SingleUseValueTaskSource<TaskCompletionSource<CompletionResult>>();
+        var future = new LazyTimerFuture(source.ValueTask);
+
+        source.SetResult(tcs);
+        tcs.SetResult(CompletionResult.Success(ReadOnlyMemory<byte>.Empty));
+
+        var first = new List<(IDurableFuture Future, Exception? Error)>();
+        await foreach (var item in ctx.WaitAll(future)) first.Add(item);
+
+        var second = new List<(IDurableFuture Future, Exception? Error)>();
+        await foreach (var item in ctx.WaitAll(future)) second.Add(item);
+
+        Assert.Null(Assert.Single(first).Error);
+        Assert.Null(Assert.Single(second).Error);
+    }
+
     /// <summary>
     ///     Minimal concrete <see cref="Context" /> that stubs all abstract members,
     ///     so tests exercise the real base-class combinator implementations.

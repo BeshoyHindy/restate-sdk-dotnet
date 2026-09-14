@@ -108,11 +108,15 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
 /// </summary>
 internal sealed class LazyRunFuture<T> : IDurableFuture<T>
 {
+    // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
+    // to two combinators or awaited again by the handler. Preserve() materialises the underlying
+    // Task when the operation is still in flight (the async state machine already allocated it,
+    // so this costs nothing extra) and is a no-op for one that completed synchronously.
     private readonly ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> _initTask;
 
     internal LazyRunFuture(ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> initTask)
     {
-        _initTask = initTask;
+        _initTask = initTask.Preserve();
     }
 
     public string? InvocationId => null;
@@ -134,11 +138,15 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>
 /// </summary>
 internal sealed class LazyTimerFuture : IDurableFuture
 {
+    // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
+    // to two combinators or awaited again by the handler. Preserve() materialises the underlying
+    // Task when the operation is still in flight (the async state machine already allocated it,
+    // so this costs nothing extra) and is a no-op for one that completed synchronously.
     private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
 
     internal LazyTimerFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask)
     {
-        _initTask = initTask;
+        _initTask = initTask.Preserve();
     }
 
     public async ValueTask<object?> GetResult()
@@ -159,13 +167,17 @@ internal sealed class LazyTimerFuture : IDurableFuture
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 internal sealed class LazyCallFuture<T> : IDurableFuture<T>
 {
+    // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
+    // to two combinators or awaited again by the handler. Preserve() materialises the underlying
+    // Task when the operation is still in flight (the async state machine already allocated it,
+    // so this costs nothing extra) and is a no-op for one that completed synchronously.
     private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
     private readonly JsonSerializerOptions _jsonOptions;
 
     internal LazyCallFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
         JsonSerializerOptions jsonOptions)
     {
-        _initTask = initTask;
+        _initTask = initTask.Preserve();
         _jsonOptions = jsonOptions;
     }
 

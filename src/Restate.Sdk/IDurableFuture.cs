@@ -6,7 +6,10 @@ namespace Restate.Sdk;
 /// </summary>
 public interface IDurableFuture
 {
-    /// <summary>Awaits the result of this future, returning it as an untyped object.</summary>
+    /// <summary>
+    ///     Awaits the result of this future, returning it as an untyped object.
+    ///     Safe to await more than once: every await observes the same outcome.
+    /// </summary>
     ValueTask<object?> GetResult();
 }
 
@@ -23,6 +26,9 @@ public interface IDurableFuture<T> : IDurableFuture
     /// </summary>
     string? InvocationId { get; }
 
-    /// <summary>Awaits the typed result of this future.</summary>
+    /// <summary>
+    ///     Awaits the typed result of this future.
+    ///     Safe to await more than once: every await observes the same outcome.
+    /// </summary>
     new ValueTask<T> GetResult();
 }
