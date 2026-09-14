@@ -421,6 +421,48 @@ public class EndpointManifestTests
     }
 
     [Fact]
+    public void NegotiateVersion_WildcardWithV4_ReturnsV4()
+    {
+        // Restate sends both the wildcard and the manifest versions it accepts.
+        var accept = "application/vnd.restate.endpointmanifest.v4+json, */*";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v4+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_WildcardWithV2_ReturnsV2()
+    {
+        var accept = "*/*, application/vnd.restate.endpointmanifest.v2+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v2+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_WildcardWithUnsupportedVersion_DefaultsToV1()
+    {
+        // No supported version is named, so the wildcard still decides.
+        var accept = "application/vnd.restate.endpointmanifest.v9+json, */*";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v1+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_OnlyV1Requested_ReturnsV1()
+    {
+        var accept = "application/vnd.restate.endpointmanifest.v1+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v1+json", result);
+    }
+
+    [Fact]
+    public void NegotiateVersion_OnlyV3Requested_ReturnsV3()
+    {
+        var accept = "application/vnd.restate.endpointmanifest.v3+json";
+        var result = RestateEndpointRouteBuilderExtensions.NegotiateVersion(accept);
+        Assert.Equal("application/vnd.restate.endpointmanifest.v3+json", result);
+    }
+
+    [Fact]
     public void NegotiateVersion_V3Requested_ReturnsV3()
     {
         var accept = "application/vnd.restate.endpointmanifest.v2+json, application/vnd.restate.endpointmanifest.v3+json";

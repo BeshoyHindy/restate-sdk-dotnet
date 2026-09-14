@@ -37,11 +37,9 @@ public static class RestateEndpointRouteBuilderExtensions
         if (string.IsNullOrEmpty(acceptHeader))
             return SupportedContentTypes[^1]; // Default to v1 when no Accept header (like Java)
 
-        // Accept: */* or no specific manifest type → default to v1
-        if (acceptHeader.Contains("*/*", StringComparison.Ordinal))
-            return SupportedContentTypes[^1];
-
-        // Check version-specific substrings directly (highest priority first)
+        // Check version-specific substrings directly (highest priority first). These run before
+        // the */* fallback: Restate sends */* alongside the manifest versions it accepts, so
+        // letting the wildcard decide first would silently downgrade discovery to v1.
         if (acceptHeader.Contains("endpointmanifest.v4", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[0];
         if (acceptHeader.Contains("endpointmanifest.v3", StringComparison.OrdinalIgnoreCase))
@@ -50,6 +48,10 @@ public static class RestateEndpointRouteBuilderExtensions
             return SupportedContentTypes[2];
         if (acceptHeader.Contains("endpointmanifest.v1", StringComparison.OrdinalIgnoreCase))
             return SupportedContentTypes[3];
+
+        // No supported manifest version named: */* accepts anything → default to v1
+        if (acceptHeader.Contains("*/*", StringComparison.Ordinal))
+            return SupportedContentTypes[^1];
 
         return null; // No mutually supported version → 415
     }
