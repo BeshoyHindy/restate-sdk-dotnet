@@ -38,11 +38,12 @@ internal struct RawMessage : IDisposable
     /// <summary>
     ///     Transfers ownership of the pooled payload buffer to the caller.
     ///     After this call, Dispose() becomes a no-op — the caller is responsible
-    ///     for returning the buffer to ArrayPool when done.
+    ///     for returning the buffer to ArrayPool when done. The buffer is null when the
+    ///     message has an empty payload — nothing was rented for it.
     /// </summary>
-    public (byte[] Buffer, ReadOnlyMemory<byte> Memory) DetachPayload()
+    public (byte[]? Buffer, ReadOnlyMemory<byte> Memory) DetachPayload()
     {
-        var buf = _rentedBuffer!;
+        var buf = _rentedBuffer;
         var mem = buf.AsMemory(0, _payloadLength);
         _rentedBuffer = null;
         _payloadLength = 0;

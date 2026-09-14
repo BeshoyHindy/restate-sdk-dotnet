@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
@@ -13,6 +14,9 @@ internal readonly record struct StartInfo(
 
 internal sealed partial class InvocationStateMachine
 {
+    /// <summary>Error code for a journal mismatch, matching the shared core's <c>JOURNAL_MISMATCH</c>.</summary>
+    private const ushort JournalMismatchCode = 570;
+
     public async Task<StartInfo> StartAsync(CancellationToken ct)
     {
         if (State != InvocationState.WaitingStart)
@@ -84,7 +88,9 @@ internal sealed partial class InvocationStateMachine
             if (msg.Header.Type.IsCommand())
             {
                 var (detachedBuf, detachedMem) = msg.DetachPayload();
-                _journal.TrackPooledBuffer(detachedBuf);
+                // A command with an empty payload (ClearAllStateCommand) rented no buffer.
+                if (detachedBuf is not null)
+                    _journal.TrackPooledBuffer(detachedBuf);
                 _journal.StageReplay(JournalEntry.Replayed(
                     MapMessageTypeToEntry(msg.Header.Type), msg.Header.Type, detachedMem));
                 commandCount++;
@@ -279,12 +285,20 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Consumes the next replayed command entry (staged during the StartAsync drain) and
-    ///     transitions to Processing when the replay boundary is reached.
+    ///     Consumes the next replayed command entry (staged during the StartAsync drain), checks
+    ///     it against the operation the handler is performing, and transitions to Processing when
+    ///     the replay boundary is reached. Fails the invocation with a journal-mismatch terminal
+    ///     error when the recorded command is of another kind, or when the replayed prefix ran out.
     /// </summary>
-    private JournalEntry TakeReplayEntry()
+    private JournalEntry TakeReplayEntry(JournalEntryType expected)
     {
-        var entry = _journal.TakeReplayEntry();
+        var index = _journal.Count;
+
+        if (!_journal.TryTakeReplayEntry(out var entry))
+            ThrowJournalMismatch(index, expected, "no command at that index");
+
+        if (entry.Type != expected)
+            ThrowJournalMismatch(index, expected, $"{entry.Type} ({entry.CommandType})");
 
         if (!_journal.IsReplaying)
         {
@@ -298,9 +312,25 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Skips over a replayed non-completable command (e.g. SetState) that produces no result.
     /// </summary>
-    private void AdvanceReplayIndex()
+    private void AdvanceReplayIndex(JournalEntryType expected)
     {
-        _ = TakeReplayEntry();
+        _ = TakeReplayEntry(expected);
+    }
+
+    /// <summary>
+    ///     Fails the invocation because the replayed journal does not match what the handler is
+    ///     doing. Code 570 is <c>JOURNAL_MISMATCH</c> in the shared core behind the Rust,
+    ///     TypeScript and Python SDKs; the server reports the same condition as <c>RT0016</c>.
+    ///     Terminal, because re-running the same handler code replays the same divergence.
+    /// </summary>
+    [DoesNotReturn]
+    private static void ThrowJournalMismatch(int index, JournalEntryType expected, string recorded)
+    {
+        throw new TerminalException(
+            $"journal mismatch (RT0016) at journal index {index}: the handler performed {expected} " +
+            $"but the journal recorded {recorded}. Either the handler code changed without deploying " +
+            "a new deployment version, or the handler is non-deterministic.",
+            JournalMismatchCode);
     }
 
     /// <summary>
