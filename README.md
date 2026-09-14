@@ -233,9 +233,17 @@ var count = await ctx.Call<int>("CounterObject", "my-key", "Add", 1);
 var txnId = await ctx.Call<string>("PaymentService", "Charge", request,
     CallOptions.WithIdempotencyKey("order-123"));
 
+// Calls in a concurrency scope, optionally narrowed by a limit key
+var quote = await ctx.Call<string>("PricingService", "Quote", request,
+    CallOptions.WithScope("tenant-a", "customer-7"));
+var pricing = ctx.CallFuture<string>("PricingService", "Quote", request,
+    CallOptions.WithScope("tenant-a"));
+
 // One-way sends (fire-and-forget, returns InvocationHandle for tracking)
 InvocationHandle handle = await ctx.Send("EmailService", "SendEmail", request);
 await ctx.Send("ReminderService", "Remind", data, delay: TimeSpan.FromHours(1));
+await ctx.Send("EmailService", "SendEmail", request,
+    SendOptions.WithScope("tenant-a", "customer-7"));
 
 // Cancel a running invocation
 await ctx.CancelInvocation("inv-id-to-cancel");
@@ -271,6 +279,26 @@ var now = await ctx.Now();
 var invocationId = ctx.InvocationId;    // unique ID for this invocation
 var headers = ctx.Headers;              // request headers
 CancellationToken ct = ctx.Aborted;     // fires when invocation is cancelled
+```
+
+#### Scope and limit key
+
+A **scope** is a named server-side concurrency limit: invocations sent into it run under the limit
+configured for that scope on the server. A **limit key** narrows that limit further, to the
+invocations inside the scope sharing the same key (one tenant, one customer, one device). Both are
+optional, both are set through `CallOptions` / `SendOptions`, and a limit key without a scope is
+rejected — the server only honours one inside a scope.
+
+They are available on calls, call futures, and sends, in both the untyped and typed forms, on the
+generated typed clients, and on the ingress client:
+
+```csharp
+// Generated typed clients take the same options
+var client = ctx.ServiceClient<IPricingServiceClient>();
+var quote = await client.QuoteAsync(request, CallOptions.WithScope("tenant-a", "customer-7"));
+
+var sender = ctx.ServiceSendClient<IEmailServiceSendClient>(SendOptions.WithScope("tenant-a"));
+await sender.SendEmailSend(request);
 ```
 
 ### Error Handling
@@ -440,6 +468,12 @@ await client.Workflow("SignupWorkflow", "user-1").Call<bool>("Run", "alice@examp
 // Fire-and-forget with delay (returns invocation ID)
 var invocationId = await client.Service("EmailService")
     .Send("SendEmail", request, delay: TimeSpan.FromHours(1));
+
+// Scope and limit key, as from a handler
+var quote = await client.Service("PricingService")
+    .Call<string>("Quote", request, CallOptions.WithScope("tenant-a", "customer-7"));
+await client.Service("EmailService")
+    .Send("SendEmail", request, SendOptions.WithScope("tenant-a"));
 ```
 
 Any non-success ingress response throws a `RestateIngressException`:

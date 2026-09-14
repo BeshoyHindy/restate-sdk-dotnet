@@ -86,6 +86,13 @@ public abstract class Context : IContext
         CallOptions options);
 
     /// <summary>
+    ///     Calls a handler with typed request/response serialization and call options
+    ///     (idempotency key, scope, limit key).
+    /// </summary>
+    public abstract ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
+        string? key, CallOptions options);
+
+    /// <summary>
     ///     Cancels a running invocation by sending a cancel signal.
     ///     The target invocation will be aborted with a cancellation error.
     /// </summary>
@@ -98,6 +105,19 @@ public abstract class Context : IContext
     /// <summary>Sends a one-way invocation to a keyed virtual object or workflow. Returns a handle to track the invocation.</summary>
     public abstract ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null);
+
+    /// <summary>
+    ///     Sends a one-way invocation to a stateless service with send options
+    ///     (delay, idempotency key, scope, limit key).
+    /// </summary>
+    public abstract ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options);
+
+    /// <summary>
+    ///     Sends a one-way invocation to a keyed virtual object or workflow with send options.
+    /// </summary>
+    public abstract ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options);
 
     /// <summary>Gets a source-generated typed call client for a stateless service.</summary>
     public abstract TClient ServiceClient<TClient>() where TClient : class;
@@ -177,6 +197,20 @@ public abstract class Context : IContext
     /// </summary>
     public abstract IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request = null);
+
+    /// <summary>
+    ///     Calls a handler with call options (idempotency key, scope, limit key) and returns a
+    ///     non-blocking future.
+    /// </summary>
+    public abstract IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
+        CallOptions options);
+
+    /// <summary>
+    ///     Calls a handler on a keyed virtual object or workflow with call options and returns a
+    ///     non-blocking future.
+    /// </summary>
+    public abstract IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
+        object? request, CallOptions options);
 
     /// <summary>
     ///     Awaits all futures and returns their results in order.

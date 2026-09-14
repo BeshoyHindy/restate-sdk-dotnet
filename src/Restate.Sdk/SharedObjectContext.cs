@@ -125,6 +125,13 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
+        string? key, CallOptions options)
+    {
+        return BaseContext.Call<TRequest, TResponse>(service, handler, request, key, options);
+    }
+
+    /// <inheritdoc />
     public override ValueTask CancelInvocation(string invocationId)
     {
         return BaseContext.CancelInvocation(invocationId);
@@ -142,6 +149,20 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
         return BaseContext.Send(service, key, handler, request, delay, idempotencyKey);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options)
+    {
+        return BaseContext.Send(service, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options)
+    {
+        return BaseContext.Send(service, key, handler, request, options);
     }
 
     /// <inheritdoc />
@@ -254,5 +275,19 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
         object? request = null)
     {
         return BaseContext.CallFuture<TResponse>(service, key, handler, request);
+    }
+
+    /// <inheritdoc />
+    public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
+        CallOptions options)
+    {
+        return BaseContext.CallFuture<TResponse>(service, handler, request, options);
+    }
+
+    /// <inheritdoc />
+    public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
+        object? request, CallOptions options)
+    {
+        return BaseContext.CallFuture<TResponse>(service, key, handler, request, options);
     }
 }

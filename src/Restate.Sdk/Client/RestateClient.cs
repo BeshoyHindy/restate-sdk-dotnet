@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using Restate.Sdk.Internal;
 
 namespace Restate.Sdk.Client;
 
@@ -23,6 +24,12 @@ public sealed class RestateClient : IDisposable
 
     /// <summary>Response header carrying the Restate error source (restate-server 1.7.4 and newer).</summary>
     private const string ErrorSourceHeader = "x-restate-error-source";
+
+    /// <summary>
+    ///     Request header carrying the flow-control limit key. Matches sdk-go's ingress client,
+    ///     which sends it as a header rather than the equivalent "limit-key" query parameter.
+    /// </summary>
+    private const string LimitKeyHeader = "x-restate-limit-key";
 
     private static JsonSerializerOptions? s_reflectionJsonOptions;
     private readonly HttpClient _http;
@@ -334,67 +341,80 @@ public sealed class RestateClient : IDisposable
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
-    internal async Task<TResponse> CallAsync<TResponse>(string path, object? request, CancellationToken ct)
+    internal async Task<TResponse> CallAsync<TResponse>(string path, object? request, string? idempotencyKey,
+        string? limitKey, CancellationToken ct)
     {
-        using var response = request is not null
-            ? await _http.PostAsJsonAsync(path, request, GetReflectionJsonOptions(), ct).ConfigureAwait(false)
-            : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var httpRequest = CreateInvocationRequest(path, null, idempotencyKey, limitKey);
+        if (request is not null)
+            httpRequest.Content = JsonContent.Create(request, options: GetReflectionJsonOptions());
 
+        using var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
 
     internal async Task<TResponse> CallAsync<TRequest, TResponse>(string path, TRequest? request,
-        JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo, CancellationToken ct)
+        JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo, string? idempotencyKey,
+        string? limitKey, CancellationToken ct)
     {
-        using var response = request is not null
-            ? await _http.PostAsJsonAsync(path, request, requestTypeInfo, ct).ConfigureAwait(false)
-            : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var httpRequest = CreateInvocationRequest(path, null, idempotencyKey, limitKey);
+        if (request is not null)
+            httpRequest.Content = JsonContent.Create(request, requestTypeInfo);
 
+        using var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
     internal async Task<TResponse> CallAsync<TResponse>(string path, JsonTypeInfo<TResponse> responseTypeInfo,
-        CancellationToken ct)
+        string? idempotencyKey, string? limitKey, CancellationToken ct)
     {
-        using var response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
+        using var httpRequest = CreateInvocationRequest(path, null, idempotencyKey, limitKey);
+        using var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
-    internal async Task<string> SendAsync(string path, object? request, TimeSpan? delay, string? idempotencyKey,
-        CancellationToken ct)
+    internal async Task<string> SendAsync(string sendPath, object? request, TimeSpan? delay, string? idempotencyKey,
+        string? limitKey, CancellationToken ct)
     {
-        using var httpRequest = CreateSendRequest(path, delay, idempotencyKey);
+        using var httpRequest = CreateInvocationRequest(sendPath, delay, idempotencyKey, limitKey);
         if (request is not null)
             httpRequest.Content = JsonContent.Create(request, options: GetReflectionJsonOptions());
 
         return await SendCoreAsync(httpRequest, ct).ConfigureAwait(false);
     }
 
-    internal async Task<string> SendAsync<TRequest>(string path, TRequest? request,
-        JsonTypeInfo<TRequest> requestTypeInfo, TimeSpan? delay, string? idempotencyKey, CancellationToken ct)
+    internal async Task<string> SendAsync<TRequest>(string sendPath, TRequest? request,
+        JsonTypeInfo<TRequest> requestTypeInfo, TimeSpan? delay, string? idempotencyKey, string? limitKey,
+        CancellationToken ct)
     {
-        using var httpRequest = CreateSendRequest(path, delay, idempotencyKey);
+        using var httpRequest = CreateInvocationRequest(sendPath, delay, idempotencyKey, limitKey);
         if (request is not null)
             httpRequest.Content = JsonContent.Create(request, requestTypeInfo);
 
         return await SendCoreAsync(httpRequest, ct).ConfigureAwait(false);
     }
 
-    private static HttpRequestMessage CreateSendRequest(string path, TimeSpan? delay, string? idempotencyKey)
+    /// <summary>
+    ///     Builds the POST for a call or send. <paramref name="path" /> is already complete — the
+    ///     scope, and for a send the "/send" suffix or "send" verb, are part of it (see
+    ///     <see cref="ServiceHandle" />).
+    /// </summary>
+    private static HttpRequestMessage CreateInvocationRequest(string path, TimeSpan? delay, string? idempotencyKey,
+        string? limitKey)
     {
-        var sendPath = $"{path}/send";
         var url = delay.HasValue
-            ? $"{sendPath}?delay={delay.Value.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)}ms"
-            : sendPath;
+            ? $"{path}?delay={delay.Value.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)}ms"
+            : path;
 
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
         if (idempotencyKey is not null)
             httpRequest.Headers.Add("idempotency-key", idempotencyKey);
+        if (limitKey is not null)
+            httpRequest.Headers.Add(LimitKeyHeader, limitKey);
 
         return httpRequest;
     }
@@ -439,7 +459,24 @@ public readonly record struct ServiceHandle
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<TResponse> Call<TResponse>(string handler, object? request = null, CancellationToken ct = default)
     {
-        return _client.CallAsync<TResponse>(BuildPath(handler), request, ct);
+        return _client.CallAsync<TResponse>(BuildPath(handler, null, false), request, null, null, ct);
+    }
+
+    /// <summary>
+    ///     Calls a handler with call options (idempotency key, scope, limit key) and returns the
+    ///     response.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="options" /> carries a limit key without a scope.
+    /// </exception>
+    [RequiresUnreferencedCode(ReflectionJsonMessage)]
+    [RequiresDynamicCode(ReflectionJsonMessage)]
+    public Task<TResponse> Call<TResponse>(string handler, object? request, CallOptions options,
+        CancellationToken ct = default)
+    {
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        return _client.CallAsync<TResponse>(BuildPath(handler, options.Scope, false), request,
+            options.IdempotencyKey, options.LimitKey, ct);
     }
 
     /// <summary>
@@ -456,7 +493,30 @@ public readonly record struct ServiceHandle
     {
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        return _client.CallAsync(BuildPath(handler), request, requestTypeInfo, responseTypeInfo, ct);
+        return _client.CallAsync(BuildPath(handler, null, false), request, requestTypeInfo, responseTypeInfo,
+            null, null, ct);
+    }
+
+    /// <summary>
+    ///     Calls a handler with call options (idempotency key, scope, limit key) and returns the
+    ///     response. AOT-safe: serializes the request and deserializes the response using the
+    ///     provided <see cref="JsonTypeInfo{T}" /> instances.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="requestTypeInfo" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="options" /> carries a limit key without a scope.
+    /// </exception>
+    public Task<TResponse> Call<TRequest, TResponse>(string handler, TRequest? request,
+        JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo, CallOptions options,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(requestTypeInfo);
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        return _client.CallAsync(BuildPath(handler, options.Scope, false), request, requestTypeInfo,
+            responseTypeInfo, options.IdempotencyKey, options.LimitKey, ct);
     }
 
     /// <summary>
@@ -468,7 +528,25 @@ public readonly record struct ServiceHandle
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        return _client.CallAsync(BuildPath(handler), responseTypeInfo, ct);
+        return _client.CallAsync(BuildPath(handler, null, false), responseTypeInfo, null, null, ct);
+    }
+
+    /// <summary>
+    ///     Calls a handler that takes no request payload, with call options (idempotency key,
+    ///     scope, limit key). AOT-safe: deserializes the response using the provided
+    ///     <see cref="JsonTypeInfo{T}" />.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="options" /> carries a limit key without a scope.
+    /// </exception>
+    public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
+        CallOptions options, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(responseTypeInfo);
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        return _client.CallAsync(BuildPath(handler, options.Scope, false), responseTypeInfo,
+            options.IdempotencyKey, options.LimitKey, ct);
     }
 
     /// <summary>Sends a one-way invocation and returns the invocation ID.</summary>
@@ -477,7 +555,23 @@ public readonly record struct ServiceHandle
     public Task<string> Send(string handler, object? request = null, TimeSpan? delay = null,
         string? idempotencyKey = null, CancellationToken ct = default)
     {
-        return _client.SendAsync(BuildPath(handler), request, delay, idempotencyKey, ct);
+        return _client.SendAsync(BuildPath(handler, null, true), request, delay, idempotencyKey, null, ct);
+    }
+
+    /// <summary>
+    ///     Sends a one-way invocation with send options (delay, idempotency key, scope, limit key)
+    ///     and returns the invocation ID.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="options" /> carries a limit key without a scope.
+    /// </exception>
+    [RequiresUnreferencedCode(ReflectionJsonMessage)]
+    [RequiresDynamicCode(ReflectionJsonMessage)]
+    public Task<string> Send(string handler, object? request, SendOptions options, CancellationToken ct = default)
+    {
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        return _client.SendAsync(BuildPath(handler, options.Scope, true), request, options.Delay,
+            options.IdempotencyKey, options.LimitKey, ct);
     }
 
     /// <summary>
@@ -489,12 +583,47 @@ public readonly record struct ServiceHandle
         TimeSpan? delay = null, string? idempotencyKey = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
-        return _client.SendAsync(BuildPath(handler), request, requestTypeInfo, delay, idempotencyKey, ct);
+        return _client.SendAsync(BuildPath(handler, null, true), request, requestTypeInfo, delay, idempotencyKey,
+            null, ct);
     }
 
-    private string BuildPath(string handler)
+    /// <summary>
+    ///     Sends a one-way invocation with send options (delay, idempotency key, scope, limit key)
+    ///     and returns the invocation ID. AOT-safe: serializes the request using the provided
+    ///     <see cref="JsonTypeInfo{T}" />.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="requestTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="options" /> carries a limit key without a scope.
+    /// </exception>
+    public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
+        SendOptions options, CancellationToken ct = default)
     {
-        return _key is not null ? $"/{_service}/{_key}/{handler}" : $"/{_service}/{handler}";
+        ArgumentNullException.ThrowIfNull(requestTypeInfo);
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        return _client.SendAsync(BuildPath(handler, options.Scope, true), request, requestTypeInfo, options.Delay,
+            options.IdempotencyKey, options.LimitKey, ct);
+    }
+
+    /// <summary>
+    ///     Builds the ingress path. A scoped invocation uses the versioned ingress API, which
+    ///     carries the scope and the verb in the path — the convention sdk-go's makeIngressUrl and
+    ///     the Java client both follow, and the only form the runtime accepts a scope in:
+    ///     <c>/restate/scope/{scope}/{call|send}/{service}[/{key}]/{handler}</c>.
+    ///     An unscoped invocation keeps the unversioned <c>/{service}[/{key}]/{handler}[/send]</c>.
+    /// </summary>
+    private string BuildPath(string handler, string? scope, bool send)
+    {
+        if (scope is not null)
+        {
+            var verb = send ? "send" : "call";
+            return _key is not null
+                ? $"/restate/scope/{scope}/{verb}/{_service}/{_key}/{handler}"
+                : $"/restate/scope/{scope}/{verb}/{_service}/{handler}";
+        }
+
+        var path = _key is not null ? $"/{_service}/{_key}/{handler}" : $"/{_service}/{handler}";
+        return send ? $"{path}/send" : path;
     }
 }
 

@@ -706,4 +706,61 @@ public class ClientGeneratorTests
 
         Assert.Contains(diagnostics, d => d.Id == "RESTATE009");
     }
+
+    [Fact]
+    public void GeneratesCallOptionsOverloadsForCallAndFuture()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [VirtualObject]
+                     public class CounterObject
+                     {
+                         [Handler]
+                         public Task<int> Add(ObjectContext ctx, int delta) => Task.FromResult(delta);
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var generated = GeneratorTestHelper.GetGeneratedSource(driver, "CounterObjectClient.g.cs");
+
+        Assert.NotNull(generated);
+        // The options overloads let a generated client set a scope and limit key without
+        // dropping to the untyped context API.
+        Assert.Contains("AddAsync(int request, global::Restate.Sdk.CallOptions options)", generated);
+        Assert.Contains("AddFuture(int request, global::Restate.Sdk.CallOptions options)", generated);
+        Assert.Contains("_context.Call<int>(\"CounterObject\", _key, \"Add\", (object?)request, options);", generated);
+        Assert.Contains("_context.CallFuture<int>(\"CounterObject\", _key, \"Add\", (object?)request, options);",
+            generated);
+    }
+
+    [Fact]
+    public void SendClientForwardsWholeSendOptions()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Service]
+                     public class GreeterService
+                     {
+                         [Handler]
+                         public Task<string> Greet(Context ctx, string name) => Task.FromResult("Hello");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
+
+        Assert.NotNull(generated);
+        // The whole SendOptions goes through, so the scope and limit key reach the wire rather
+        // than only the delay and idempotency key.
+        Assert.Contains("_context.Send(\"GreeterService\", \"Greet\", (object?)request, _options ?? default);",
+            generated);
+    }
 }

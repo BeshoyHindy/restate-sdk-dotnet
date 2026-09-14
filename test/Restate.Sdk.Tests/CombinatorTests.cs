@@ -743,6 +743,36 @@ public class CombinatorTests
         {
             throw new NotSupportedException();
         }
+
+        public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler,
+            object? request, CallOptions options)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
+            object? request, CallOptions options)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler,
+            TRequest request, string? key, CallOptions options)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+            SendOptions options)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+            SendOptions options)
+        {
+            throw new NotSupportedException();
+        }
     }
 
     /// <summary>

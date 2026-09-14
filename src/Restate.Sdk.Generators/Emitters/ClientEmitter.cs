@@ -5,6 +5,8 @@ namespace Restate.Sdk.Generators.Emitters;
 
 internal static class ClientEmitter
 {
+    private const string CallOptionsType = "global::Restate.Sdk.CallOptions";
+
     public static string Generate(ServiceInfo service)
     {
         var sb = new StringBuilder(2048);
@@ -32,13 +34,18 @@ internal static class ClientEmitter
             var inputParam = handler.InputTypeFullName is not null
                 ? $"{handler.InputTypeFullName} request"
                 : "";
+            var optionsParam = inputParam.Length > 0
+                ? $"{inputParam}, {CallOptionsType} options"
+                : $"{CallOptionsType} options";
             sb.AppendLine($"    {returnType} {handler.Name}Async({inputParam});");
+            sb.AppendLine($"    {returnType} {handler.Name}Async({optionsParam});");
 
             // Future method — non-blocking, for concurrent patterns
             if (handler.OutputTypeFullName is not null)
             {
                 var futureReturnType = $"global::Restate.Sdk.IDurableFuture<{handler.OutputTypeFullName}>";
                 sb.AppendLine($"    {futureReturnType} {handler.Name}Future({inputParam});");
+                sb.AppendLine($"    {futureReturnType} {handler.Name}Future({optionsParam});");
             }
         }
 
@@ -99,54 +106,66 @@ internal static class ClientEmitter
         foreach (var handler in service.Handlers)
         {
             sb.AppendLine();
-            var requestArg = handler.InputTypeFullName is not null ? "request" : "(object?)null";
+            // The request is always passed as object? so the call binds to the untyped overload
+            // even when the handler's input is a string, which would otherwise be ambiguous with
+            // the keyed overload.
+            var requestArg = handler.InputTypeFullName is not null ? "(object?)request" : "(object?)null";
             var inputParam = handler.InputTypeFullName is not null
                 ? $"{handler.InputTypeFullName} request"
                 : "";
+            var optionsParam = inputParam.Length > 0
+                ? $"{inputParam}, {CallOptionsType} options"
+                : $"{CallOptionsType} options";
+            var target = isKeyed
+                ? $"\"{service.ServiceName}\", _key, \"{handler.Name}\""
+                : $"\"{service.ServiceName}\", \"{handler.Name}\"";
 
             if (handler.OutputTypeFullName is not null)
             {
                 var returnType = $"global::System.Threading.Tasks.ValueTask<{handler.OutputTypeFullName}>";
                 sb.AppendLine($"    public {returnType} {handler.Name}Async({inputParam})");
+                sb.AppendLine(
+                    $"        => _context.Call<{handler.OutputTypeFullName}>({target}, {requestArg});");
 
-                if (isKeyed)
-                    sb.AppendLine(
-                        $"        => _context.Call<{handler.OutputTypeFullName}>(\"{service.ServiceName}\", _key, \"{handler.Name}\", {requestArg});");
-                else
-                    sb.AppendLine(
-                        $"        => _context.Call<{handler.OutputTypeFullName}>(\"{service.ServiceName}\", \"{handler.Name}\", {requestArg});");
+                sb.AppendLine();
+                sb.AppendLine($"    public {returnType} {handler.Name}Async({optionsParam})");
+                sb.AppendLine(
+                    $"        => _context.Call<{handler.OutputTypeFullName}>({target}, {requestArg}, options);");
 
-                // Future method
+                // Future methods
                 sb.AppendLine();
                 var futureReturnType = $"global::Restate.Sdk.IDurableFuture<{handler.OutputTypeFullName}>";
                 sb.AppendLine($"    public {futureReturnType} {handler.Name}Future({inputParam})");
+                sb.AppendLine(
+                    $"        => _context.CallFuture<{handler.OutputTypeFullName}>({target}, {requestArg});");
 
-                if (isKeyed)
-                    sb.AppendLine(
-                        $"        => _context.CallFuture<{handler.OutputTypeFullName}>(\"{service.ServiceName}\", _key, \"{handler.Name}\", {requestArg});");
-                else
-                    sb.AppendLine(
-                        $"        => _context.CallFuture<{handler.OutputTypeFullName}>(\"{service.ServiceName}\", \"{handler.Name}\", {requestArg});");
+                sb.AppendLine();
+                sb.AppendLine($"    public {futureReturnType} {handler.Name}Future({optionsParam})");
+                sb.AppendLine(
+                    $"        => _context.CallFuture<{handler.OutputTypeFullName}>({target}, {requestArg}, options);");
             }
             else
             {
-                sb.AppendLine($"    public global::System.Threading.Tasks.ValueTask {handler.Name}Async({inputParam})");
-                sb.AppendLine("    {");
-
-                if (isKeyed)
-                    sb.AppendLine(
-                        $"        var task = _context.Call<object?>(\"{service.ServiceName}\", _key, \"{handler.Name}\", (object?)null);");
-                else
-                    sb.AppendLine(
-                        $"        var task = _context.Call<object?>(\"{service.ServiceName}\", \"{handler.Name}\", (object?)null);");
-
-                sb.AppendLine(
-                    "        return task.IsCompletedSuccessfully ? default : new global::System.Threading.Tasks.ValueTask(task.AsTask());");
-                sb.AppendLine("    }");
+                EmitVoidCall(sb, handler.Name, inputParam, target, requestArg, null);
+                sb.AppendLine();
+                EmitVoidCall(sb, handler.Name, optionsParam, target, requestArg, "options");
             }
         }
 
         sb.AppendLine("}");
+    }
+
+    /// <summary>Emits a void-returning call method, optionally forwarding call options.</summary>
+    private static void EmitVoidCall(StringBuilder sb, string handlerName, string parameters, string target,
+        string requestArg, string? optionsArg)
+    {
+        var options = optionsArg is null ? "" : $", {optionsArg}";
+        sb.AppendLine($"    public global::System.Threading.Tasks.ValueTask {handlerName}Async({parameters})");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        var task = _context.Call<object?>({target}, {requestArg}{options});");
+        sb.AppendLine(
+            "        return task.IsCompletedSuccessfully ? default : new global::System.Threading.Tasks.ValueTask(task.AsTask());");
+        sb.AppendLine("    }");
     }
 
     private static void EmitSendClient(StringBuilder sb, ServiceInfo service, bool isKeyed)
@@ -182,7 +201,7 @@ internal static class ClientEmitter
         foreach (var handler in service.Handlers)
         {
             sb.AppendLine();
-            var requestArg = handler.InputTypeFullName is not null ? "request" : "(object?)null";
+            var requestArg = handler.InputTypeFullName is not null ? "(object?)request" : "(object?)null";
             var inputParam = handler.InputTypeFullName is not null
                 ? $"{handler.InputTypeFullName} request"
                 : "";
@@ -190,12 +209,14 @@ internal static class ClientEmitter
             sb.AppendLine(
                 $"    public global::System.Threading.Tasks.ValueTask<global::Restate.Sdk.InvocationHandle> {handler.Name}Send({inputParam})");
 
+            // Passing the SendOptions whole carries the scope and limit key too, not just the
+            // delay and idempotency key.
             if (isKeyed)
                 sb.AppendLine(
-                    $"        => _context.Send(\"{service.ServiceName}\", _key, \"{handler.Name}\", {requestArg}, _options?.Delay, _options?.IdempotencyKey);");
+                    $"        => _context.Send(\"{service.ServiceName}\", _key, \"{handler.Name}\", {requestArg}, _options ?? default);");
             else
                 sb.AppendLine(
-                    $"        => _context.Send(\"{service.ServiceName}\", \"{handler.Name}\", {requestArg}, _options?.Delay, _options?.IdempotencyKey);");
+                    $"        => _context.Send(\"{service.ServiceName}\", \"{handler.Name}\", {requestArg}, _options ?? default);");
         }
 
         sb.AppendLine("}");

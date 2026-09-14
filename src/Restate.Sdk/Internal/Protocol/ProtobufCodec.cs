@@ -272,9 +272,14 @@ internal static class ProtobufCodec
     /// <summary>
     ///     Creates a CallCommandMessage with all required fields including invocation_id_notification_idx.
     /// </summary>
+    /// <summary>
+    ///     Creates a CallCommandMessage. The optional idempotency key (field 6), scope (field 7)
+    ///     and limit key (field 8) are omitted entirely when null.
+    /// </summary>
     public static Gen.CallCommandMessage CreateCallCommand(
         string service, string handler, string? key,
-        ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx)
+        ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx,
+        string? idempotencyKey = null, string? scope = null, string? limitKey = null)
     {
         var msg = new Gen.CallCommandMessage
         {
@@ -285,12 +290,20 @@ internal static class ProtobufCodec
         };
         if (!parameter.IsEmpty) msg.Parameter = ByteString.CopyFrom(parameter);
         if (key is not null) msg.Key = key;
+        if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
+        if (scope is not null) msg.Scope = scope;
+        if (limitKey is not null) msg.LimitKey = limitKey;
         return msg;
     }
 
+    /// <summary>
+    ///     Creates a OneWayCallCommandMessage. The optional idempotency key (field 7), scope
+    ///     (field 8) and limit key (field 9) are omitted entirely when null.
+    /// </summary>
     public static Gen.OneWayCallCommandMessage CreateSendCommand(
         string service, string handler, string? key,
-        ReadOnlySpan<byte> parameter, ulong invokeTime, string? idempotencyKey, uint notificationIdx)
+        ReadOnlySpan<byte> parameter, ulong invokeTime, string? idempotencyKey, uint notificationIdx,
+        string? scope = null, string? limitKey = null)
     {
         var msg = new Gen.OneWayCallCommandMessage
         {
@@ -302,6 +315,8 @@ internal static class ProtobufCodec
         if (invokeTime > 0) msg.InvokeTime = invokeTime;
         if (key is not null) msg.Key = key;
         if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
+        if (scope is not null) msg.Scope = scope;
+        if (limitKey is not null) msg.LimitKey = limitKey;
         return msg;
     }
 
@@ -534,18 +549,5 @@ internal static class ProtobufCodec
             Idx = 1, // BuiltInSignal.CANCEL = 1
             Void = new Gen.Void()
         };
-    }
-
-    /// <summary>
-    ///     Creates a CallCommandMessage with an optional idempotency key.
-    /// </summary>
-    public static Gen.CallCommandMessage CreateCallCommandWithOptions(
-        string service, string handler, string? key,
-        ReadOnlySpan<byte> parameter, uint completionId, uint invocationIdNotificationIdx,
-        string? idempotencyKey)
-    {
-        var msg = CreateCallCommand(service, handler, key, parameter, completionId, invocationIdNotificationIdx);
-        if (idempotencyKey is not null) msg.IdempotencyKey = idempotencyKey;
-        return msg;
     }
 }
