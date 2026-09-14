@@ -6,3 +6,7 @@ Restate.Sdk.Client.RestateClientOptions
 Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
 Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.set -> void
 Restate.Sdk.Client.RestateClientOptions.RestateClientOptions() -> void
+Restate.Sdk.Client.RestateIngressException
+Restate.Sdk.Client.RestateIngressException.ErrorCode.get -> string?
+Restate.Sdk.Client.RestateIngressException.ErrorSource.get -> string?
+Restate.Sdk.Client.RestateIngressException.RestateIngressException(string! message, System.Net.HttpStatusCode statusCode, string? errorSource, string? errorCode) -> void
