@@ -110,6 +110,34 @@ public class RunGreeterService
 }
 
 /// <summary>
+///     A service whose durable side effect fails twice before succeeding, under a retry policy —
+///     used to verify that a Run re-executed after replay still retries.
+/// </summary>
+[Service(Name = "RetryingRunGreeter")]
+public class RetryingRunGreeterService
+{
+    private static readonly RetryPolicy ThreeAttempts = new()
+    {
+        MaxAttempts = 3,
+        InitialDelay = TimeSpan.FromMilliseconds(1),
+        MaxDelay = TimeSpan.FromMilliseconds(1)
+    };
+
+    public int Attempts { get; private set; }
+
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Run("effect", () =>
+        {
+            if (++Attempts < 3)
+                throw new InvalidOperationException("transient");
+            return Task.FromResult($"retried-{name}");
+        }, ThreeAttempts);
+    }
+}
+
+/// <summary>
 ///     A service that fans out two calls and settles them with <c>ctx.AllSettled</c> — used to
 ///     verify that input EOF suspends the invocation instead of settling the journaled calls
 ///     as fabricated failures.
@@ -755,6 +783,62 @@ public class ProtocolIntegrationTests
         var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
         Assert.Equal("\"fresh-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    /// <summary>Run re-execution after a lost ProposeRunCompletion honours RetryPolicy.</summary>
+    [Fact]
+    public async Task HandleAsync_ReplayedRunWithoutCompletion_ReExecutesWithRetryPolicy()
+    {
+        // Same crash window as above, but the Run carries a retry policy: the re-executed closure
+        // must retry its transient failures instead of failing the invocation on the first throw.
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var startPayload = BuildStartMessagePayload("resume-run-retry-1", 2, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestStream, MessageType.RunCommand, runCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(RetryingRunGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+        var service = new RetryingRunGreeterService();
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => service),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        Assert.Equal(3, service.Attempts);
+
+        var (proposalHeader, proposalPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.ProposeRunCompletion, proposalHeader.Type);
+        var proposal = Gen.ProposeRunCompletionMessage.Parser.ParseFrom(proposalPayload);
+        Assert.Equal(1u, proposal.ResultCompletionId);
+        Assert.Equal("\"retried-World\"", proposal.Value.ToStringUtf8());
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"retried-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);

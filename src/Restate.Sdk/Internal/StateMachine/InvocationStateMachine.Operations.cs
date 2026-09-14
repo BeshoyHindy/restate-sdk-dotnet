@@ -89,11 +89,13 @@ internal sealed partial class InvocationStateMachine
     ///     re-sent — it is already part of the journal.
     /// </summary>
     private async ValueTask<T> ReExecuteRunAsync<T>(string name, Func<Task<T>> action, uint completionId,
-        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct)
+        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct, RetryPolicy? retryPolicy = null)
     {
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
-        var result = await action().ConfigureAwait(false);
+        var result = retryPolicy is not null
+            ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false)
+            : await action().ConfigureAwait(false);
         var serialized = Serialize(result);
         WriteRunProposal(completionId, serialized.Span);
         await FlushAsync(ct).ConfigureAwait(false);
@@ -107,11 +109,15 @@ internal sealed partial class InvocationStateMachine
 
     /// <summary>Re-executes a replayed void Run closure (see <see cref="ReExecuteRunAsync{T}" />).</summary>
     private async ValueTask ReExecuteRunAsync(string name, Func<Task> action, uint completionId,
-        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct)
+        TaskCompletionSource<CompletionResult> tcs, CancellationToken ct, RetryPolicy? retryPolicy = null)
     {
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
-        await action().ConfigureAwait(false);
+        if (retryPolicy is not null)
+            await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
+        else
+            await action().ConfigureAwait(false);
+
         WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
         await FlushAsync(ct).ConfigureAwait(false);
 
@@ -212,7 +218,7 @@ internal sealed partial class InvocationStateMachine
         {
             return TryTakeReplayedRunResult(out var replayTcs, out var replayId)
                 ? await AwaitRunResultAsync<T>(replayTcs).ConfigureAwait(false)
-                : await ReExecuteRunAsync(name, action, replayId, replayTcs, ct).ConfigureAwait(false);
+                : await ReExecuteRunAsync(name, action, replayId, replayTcs, ct, retryPolicy).ConfigureAwait(false);
         }
 
         using var activity = StartOperationActivity("restate.run");
@@ -247,7 +253,7 @@ internal sealed partial class InvocationStateMachine
             if (TryTakeReplayedRunResult(out var replayTcs, out var replayId))
                 _ = await replayTcs.Task.ConfigureAwait(false);
             else
-                await ReExecuteRunAsync(name, action, replayId, replayTcs, ct).ConfigureAwait(false);
+                await ReExecuteRunAsync(name, action, replayId, replayTcs, ct, retryPolicy).ConfigureAwait(false);
             return;
         }
 

@@ -9,6 +9,14 @@ namespace Restate.Sdk.Tests.StateMachine;
 
 public class InvocationStateMachineTests : IDisposable
 {
+    /// <summary>Allows three attempts with negligible backoff, so retry tests stay fast.</summary>
+    private static readonly RetryPolicy ThreeAttempts = new()
+    {
+        MaxAttempts = 3,
+        InitialDelay = TimeSpan.FromMilliseconds(1),
+        MaxDelay = TimeSpan.FromMilliseconds(1)
+    };
+
     private readonly Pipe _inbound = new();
     private readonly Pipe _outbound = new();
     private readonly ProtocolReader _reader;
@@ -143,6 +151,69 @@ public class InvocationStateMachineTests : IDisposable
         }, CancellationToken.None);
 
         Assert.True(executed);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReExecutedAfterReplay_AppliesRetryPolicy()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+
+        var attempts = 0;
+        var result = await sm.RunAsync("effect", () =>
+        {
+            if (++attempts < 3)
+                throw new InvalidOperationException("transient");
+            return Task.FromResult(42);
+        }, CancellationToken.None, ThreeAttempts);
+
+        Assert.Equal(3, attempts);
+        Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public async Task RunAsync_Void_ReExecutedAfterReplay_AppliesRetryPolicy()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+
+        var attempts = 0;
+        await sm.RunAsync("effect", () =>
+        {
+            if (++attempts < 3)
+                throw new InvalidOperationException("transient");
+            return Task.CompletedTask;
+        }, CancellationToken.None, ThreeAttempts);
+
+        Assert.Equal(3, attempts);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.ProposeRunCompletion, frames[0].Type);
+    }
+
+    /// <summary>
+    ///     Starts the state machine on a resumed journal whose RunCommand was persisted but whose
+    ///     ProposeRunCompletion never landed, so the replayed Run has to be re-executed.
+    /// </summary>
+    private async Task StartReplayedRunWithoutCompletionAsync(InvocationStateMachine sm)
+    {
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-run-retry"),
+            DebugId = "inv-run-retry",
+            KnownEntries = 2,
+            Key = "",
+            RandomSeed = 7
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(MessageType.RunCommand, ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray());
+
+        await sm.StartAsync(CancellationToken.None);
+        Assert.Equal(InvocationState.Replaying, sm.State);
     }
 
     // ------- Calls -------
