@@ -270,9 +270,6 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
-    ///     Creates a CallCommandMessage with all required fields including invocation_id_notification_idx.
-    /// </summary>
-    /// <summary>
     ///     Creates a CallCommandMessage. The optional idempotency key (field 6), scope (field 7)
     ///     and limit key (field 8) are omitted entirely when null.
     /// </summary>
