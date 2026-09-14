@@ -179,7 +179,9 @@ public static class RestateEndpointRouteBuilderExtensions
 
     /// <summary>
     ///     Verifies the request identity headers against the configured keys.
-    ///     The token audience must equal the request path (for example <c>/invoke/Greeter/Greet</c>).
+    ///     The token audience must equal the full request path — the path base the endpoints are
+    ///     mapped under plus the path itself (for example <c>/restate/invoke/Greeter/Greet</c>),
+    ///     because that is the path Restate dialled and signed.
     /// </summary>
     private static bool VerifyRequestIdentity(RequestIdentityVerifier verifier, HttpContext context)
     {
@@ -190,9 +192,12 @@ public static class RestateEndpointRouteBuilderExtensions
         if (scheme.Count > 1 || token.Count > 1)
             return false;
 
+        // PathString.Add joins the two without doubling the separator.
+        var audience = context.Request.PathBase.Add(context.Request.Path);
+
         return verifier.Verify(
             scheme.Count == 1 ? scheme[0] : null,
             token.Count == 1 ? token[0] : null,
-            context.Request.Path.Value ?? "");
+            audience.Value ?? "");
     }
 }
