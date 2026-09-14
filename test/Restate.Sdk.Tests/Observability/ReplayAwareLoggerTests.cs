@@ -1,8 +1,10 @@
 using System.IO.Pipelines;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Tests.Observability;
 
@@ -27,6 +29,42 @@ public class ReplayAwareLoggerTests
         return sm;
     }
 
+    /// <summary>
+    ///     Creates a state machine resumed on a journal of input + one SetState command, so that
+    ///     re-traversing that command completes the replay.
+    /// </summary>
+    private static async Task<InvocationStateMachine> CreateResumedSmAsync()
+    {
+        var inbound = new Pipe();
+        var outbound = new Pipe();
+        var sm = new InvocationStateMachine(
+            new ProtocolReader(inbound.Reader), new ProtocolWriter(outbound.Writer));
+
+        await WriteFrameAsync(inbound.Writer, MessageType.Start, new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-1"),
+            DebugId = "inv-1",
+            KnownEntries = 2
+        }.ToByteArray());
+        await WriteFrameAsync(inbound.Writer, MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.Empty }
+        }.ToByteArray());
+        await WriteFrameAsync(inbound.Writer, MessageType.SetStateCommand,
+            ProtobufCodec.CreateSetStateCommand("key", ReadOnlySpan<byte>.Empty).ToByteArray());
+
+        await sm.StartAsync(CancellationToken.None);
+        return sm;
+    }
+
+    private static async Task WriteFrameAsync(PipeWriter writer, MessageType type, byte[] payload)
+    {
+        var header = new byte[MessageHeader.Size];
+        MessageHeader.Create(type, MessageFlags.None, (uint)payload.Length).Write(header);
+        await writer.WriteAsync(header);
+        await writer.WriteAsync(payload);
+    }
+
     [Fact]
     public void IsEnabled_ReturnsFalse_WhileReplaying()
     {
@@ -41,10 +79,10 @@ public class ReplayAwareLoggerTests
     }
 
     [Fact]
-    public void Log_FlowsToInner_AfterReplayCompletes()
+    public async Task Log_FlowsToInner_AfterReplayCompletes()
     {
         var inner = new CapturingLogger();
-        using var sm = CreateSm(knownEntries: 1);
+        using var sm = await CreateResumedSmAsync();
         var logger = new ReplayAwareLogger(inner, sm);
 
         LogInfo(logger, "suppressed");

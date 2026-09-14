@@ -152,7 +152,7 @@ public class InvocationJournalTests
     }
 
     [Fact]
-    public void StageReplay_TakeReplayEntry_ConsumesInOrder()
+    public void StageReplay_TryTakeReplayEntry_ConsumesInOrder()
     {
         using var journal = new InvocationJournal();
         journal.Initialize(3);
@@ -164,14 +164,14 @@ public class InvocationJournalTests
             JournalEntryType.Run, MessageType.RunCommand, new byte[] { 2 }));
         journal.SetReplayBoundary(3);
 
-        var first = journal.TakeReplayEntry();
+        Assert.True(journal.TryTakeReplayEntry(out var first));
         Assert.Equal(JournalEntryType.Sleep, first.Type);
         Assert.Equal(MessageType.SleepCommand, first.CommandType);
         Assert.Equal(1, first.Result.Span[0]);
         Assert.Equal(2, journal.Count);
         Assert.True(journal.IsReplaying);
 
-        var second = journal.TakeReplayEntry();
+        Assert.True(journal.TryTakeReplayEntry(out var second));
         Assert.Equal(JournalEntryType.Run, second.Type);
         Assert.Equal(MessageType.RunCommand, second.CommandType);
         Assert.Equal(3, journal.Count);
@@ -179,27 +179,27 @@ public class InvocationJournalTests
     }
 
     [Fact]
-    public void TakeReplayEntry_WhenNotReplaying_Throws()
+    public void TryTakeReplayEntry_WhenNotReplaying_Throws()
     {
         using var journal = new InvocationJournal();
         journal.Initialize(0);
 
-        Assert.Throws<InvalidOperationException>(() => journal.TakeReplayEntry());
+        Assert.Throws<InvalidOperationException>(() => journal.TryTakeReplayEntry(out _));
     }
 
     [Fact]
-    public void TakeReplayEntry_WithoutStagedEntry_ReturnsDefaultAndAdvances()
+    public void TryTakeReplayEntry_WithoutStagedEntry_ReturnsFalseWithoutAdvancing()
     {
         using var journal = new InvocationJournal();
         journal.Initialize(1);
 
-        // Journal initialized without a start-up drain (no staged entries) — legacy/test path.
-        var entry = journal.TakeReplayEntry();
+        // The replay boundary claims one command but nothing was staged for it: the journal is
+        // exhausted, which the state machine reports as a journal mismatch.
+        Assert.False(journal.TryTakeReplayEntry(out var entry));
 
         Assert.False(entry.IsCompleted);
-        Assert.True(entry.Result.IsEmpty);
-        Assert.Equal(1, journal.Count);
-        Assert.False(journal.IsReplaying);
+        Assert.Equal(0, journal.Count);
+        Assert.True(journal.IsReplaying);
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class InvocationJournalTests
 
         for (var i = 0; i < 64; i++)
         {
-            var entry = journal.TakeReplayEntry();
+            Assert.True(journal.TryTakeReplayEntry(out var entry));
             Assert.Equal((byte)i, entry.Result.Span[0]);
         }
 
@@ -235,7 +235,7 @@ public class InvocationJournalTests
             JournalEntryType.Sleep, MessageType.SleepCommand, ReadOnlyMemory<byte>.Empty));
         journal.SetReplayBoundary(2);
 
-        journal.TakeReplayEntry();
+        Assert.True(journal.TryTakeReplayEntry(out _));
         Assert.False(journal.IsReplaying);
 
         var index = journal.Append(JournalEntry.Pending(JournalEntryType.Call));

@@ -618,6 +618,66 @@ public class ProtocolIntegrationTests
     }
 
     [Fact]
+    public async Task HandleAsync_ReplayedCommandTypeMismatch_FailsWithJournalMismatch()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        // Resumed journal: Input + a RunCommand. The handler deployed now sleeps instead of
+        // running a side effect, so the replayed prefix no longer matches what it does.
+        var startPayload = BuildStartMessagePayload("mismatch-inv-1", 2, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+        var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
+
+        // A pipe rather than a MemoryStream: the request stream stays open, so no EOF can
+        // unpark the handler. Before the mismatch check, replaying the wrong command made the
+        // handler await a completion id the runtime will never send — an indefinite hang.
+        var request = new Pipe();
+        var requestBuffer = new MemoryStream();
+        WriteFramedMessage(requestBuffer, MessageType.Start, startPayload);
+        WriteFramedMessage(requestBuffer, MessageType.InputCommand, inputCommandPayload);
+        WriteFramedMessage(requestBuffer, MessageType.RunCommand, runCommandPayload);
+        await request.Writer.WriteAsync(requestBuffer.ToArray());
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(SleepyGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        var handleTask = handler.HandleAsync(
+            request.Reader,
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new SleepyGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        await handleTask.WaitAsync(TimeSpan.FromSeconds(30));
+        await request.Writer.CompleteAsync();
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        // The mismatch reaches the runtime as a terminal failure, not a retryable error.
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+
+        var msg = Gen.OutputCommandMessage.Parser.ParseFrom(outputPayload);
+        Assert.Equal(Gen.OutputCommandMessage.ResultOneofCase.Failure, msg.ResultCase);
+        Assert.Equal(570u, msg.Failure.Code);
+        Assert.Contains("journal mismatch", msg.Failure.Message);
+        Assert.Contains("journal index 1", msg.Failure.Message);
+        Assert.Contains("Sleep", msg.Failure.Message);
+        Assert.Contains("Run (RunCommand)", msg.Failure.Message);
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
     public async Task HandleAsync_ResumedJournalWithCall_UsesFreshCompletionIdsAfterReplay()
     {
         var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");

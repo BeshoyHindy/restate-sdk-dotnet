@@ -10,7 +10,7 @@ internal sealed class InvocationJournal : IDisposable
     private List<byte[]>? _pooledBuffers;
 
     // Number of physically populated slots in _entries. During replay this can exceed Count:
-    // StageReplay fills slots ahead of the handler's progress, and TakeReplayEntry consumes them.
+    // StageReplay fills slots ahead of the handler's progress, and TryTakeReplayEntry consumes them.
     private int _staged;
 
     public InvocationJournal()
@@ -97,7 +97,7 @@ internal sealed class InvocationJournal : IDisposable
 
     /// <summary>
     ///     Stages a replayed command entry ahead of the handler's progress without advancing
-    ///     <see cref="Count" />. Staged entries are consumed in order by <see cref="TakeReplayEntry" />.
+    ///     <see cref="Count" />. Staged entries are consumed in order by <see cref="TryTakeReplayEntry" />.
     /// </summary>
     public void StageReplay(JournalEntry entry)
     {
@@ -110,19 +110,24 @@ internal sealed class InvocationJournal : IDisposable
 
     /// <summary>
     ///     Consumes the next replayed command entry and advances <see cref="Count" />.
-    ///     Returns a default entry when nothing was staged at the current position
-    ///     (only possible when the journal was initialized without a start-up drain, e.g. in tests).
+    ///     Returns <see langword="false" /> without advancing when nothing was staged at the
+    ///     current position: the replayed prefix is exhausted while the handler is still
+    ///     replaying, which the caller reports as a journal mismatch.
     /// </summary>
-    public JournalEntry TakeReplayEntry()
+    public bool TryTakeReplayEntry(out JournalEntry entry)
     {
         if (!IsReplaying)
             throw new InvalidOperationException("No replay entries left to take");
 
-        var entry = Count < _staged ? _entries[Count] : default;
+        if (Count >= _staged)
+        {
+            entry = default;
+            return false;
+        }
+
+        entry = _entries[Count];
         Count++;
-        if (_staged < Count)
-            _staged = Count;
-        return entry;
+        return true;
     }
 
     public int Append(JournalEntry entry)

@@ -16,9 +16,9 @@ internal sealed partial class InvocationStateMachine
     // replayed notification was already stored (or a live one will land).
 
     /// <summary>Replays a completable command whose result is required (Run, Call, Attach, GetPromise).</summary>
-    private async ValueTask<T> ReplayResultAsync<T>()
+    private async ValueTask<T> ReplayResultAsync<T>(JournalEntryType expected)
     {
-        var replay = TakeReplayEntry();
+        var replay = TakeReplayEntry(expected);
         var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<T>(completion.Value);
@@ -27,7 +27,7 @@ internal sealed partial class InvocationStateMachine
     /// <summary>Replays a one-way call; the result is the target invocation id notification.</summary>
     private async ValueTask<InvocationHandle> ReplaySendAsync()
     {
-        var replay = TakeReplayEntry();
+        var replay = TakeReplayEntry(JournalEntryType.OneWayCall);
         var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
         var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
         return new InvocationHandle(invocationId);
@@ -47,7 +47,7 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     private bool TryTakeReplayedRunResult(out TaskCompletionSource<CompletionResult> tcs, out uint completionId)
     {
-        var replay = TakeReplayEntry();
+        var replay = TakeReplayEntry(JournalEntryType.Run);
         completionId = ProtobufCodec.ParseCommandCompletionId(replay.CommandType, replay.Result.Span);
         Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         tcs = _completions.GetOrRegister((int)completionId);
@@ -447,7 +447,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
+            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
 
         using var activity = StartCallActivity(service, handler);
 
@@ -522,7 +522,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.Call);
             return RegisterReplayCompletion(in replay);
         }
 
@@ -555,7 +555,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.Sleep);
             return RegisterReplayCompletion(in replay);
         }
 
@@ -580,7 +580,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
+            return await ReplayResultAsync<TResponse>(JournalEntryType.AttachInvocation).ConfigureAwait(false);
 
         var completionId = NextCompletionId();
 
@@ -605,7 +605,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.GetInvocationOutput);
             var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             replayCompletion.ThrowIfFailure();
             return replayCompletion.Value.IsEmpty ? default : Deserialize<TResponse>(replayCompletion.Value);
@@ -638,7 +638,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.GetState);
             if (replay.CommandType == MessageType.GetEagerStateCommand)
             {
                 // Eager-state commands embed the result in the command payload itself.
@@ -697,7 +697,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.SetState);
             return;
         }
 
@@ -717,7 +717,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.ClearState);
             return;
         }
 
@@ -734,7 +734,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.ClearAllState);
             return;
         }
 
@@ -753,7 +753,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.GetStateKeys);
             if (replay.CommandType == MessageType.GetEagerStateKeysCommand)
             {
                 // Eager-state-keys commands embed the result in the command payload itself.
@@ -810,7 +810,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.Sleep);
             _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return;
         }
@@ -876,7 +876,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
             return;
         }
 
@@ -892,7 +892,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
             return;
         }
 
@@ -909,7 +909,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<T>().ConfigureAwait(false);
+            return await ReplayResultAsync<T>(JournalEntryType.GetPromise).ConfigureAwait(false);
 
         var completionId = NextCompletionId();
 
@@ -933,7 +933,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry();
+            var replay = TakeReplayEntry(JournalEntryType.PeekPromise);
             var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return replayCompletion.Value.IsEmpty ? default : Deserialize<T>(replayCompletion.Value);
         }
@@ -959,7 +959,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.CompletePromise);
             return;
         }
 
@@ -978,7 +978,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.CompletePromise);
             return;
         }
 
@@ -998,7 +998,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
+            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
 
         using var activity = StartCallActivity(service, handler);
 
@@ -1060,7 +1060,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
             return;
         }
 
@@ -1091,7 +1091,7 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>().ConfigureAwait(false);
+            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
 
         using var activity = StartCallActivity(service, handler);
 

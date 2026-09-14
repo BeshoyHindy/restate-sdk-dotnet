@@ -622,74 +622,153 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal(InvocationState.Replaying, sm.State);
     }
 
-    [Fact]
-    public void SetState_InReplayMode_AdvancesIndex()
+    /// <summary>
+    ///     Starts the state machine on a resumed journal holding the input command plus a single
+    ///     replayed command, so the matching handler operation re-traverses it.
+    /// </summary>
+    private async Task<InvocationStateMachine> StartReplayingAsync(MessageType commandType, byte[] commandPayload)
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
+        var sm = CreateSm();
+
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-replay"),
+            DebugId = "inv-replay",
+            KnownEntries = 2,
+            Key = "key",
+            RandomSeed = 0
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(commandType, commandPayload);
+
+        await sm.StartAsync(CancellationToken.None);
+        Assert.Equal(InvocationState.Replaying, sm.State);
+        return sm;
+    }
+
+    [Fact]
+    public async Task SetState_InReplayMode_AdvancesIndex()
+    {
+        using var sm = await StartReplayingAsync(MessageType.SetStateCommand,
+            ProtobufCodec.CreateSetStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(1)).ToByteArray());
 
         sm.SetState("count", 1);
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void ClearState_InReplayMode_AdvancesIndex()
+    public async Task ClearState_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.ClearStateCommand,
+            ProtobufCodec.CreateClearStateCommand("count").ToByteArray());
 
         sm.ClearState("count");
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void ClearAllState_InReplayMode_AdvancesIndex()
+    public async Task ClearAllState_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.ClearAllStateCommand,
+            ProtobufCodec.CreateClearAllStateCommand().ToByteArray());
 
         sm.ClearAllState();
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void ResolveAwakeable_InReplayMode_AdvancesIndex()
+    public async Task ResolveAwakeable_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.CompleteAwakeableCommand,
+            ProtobufCodec.CreateCompleteAwakeableSuccess("id", ReadOnlySpan<byte>.Empty).ToByteArray());
 
         sm.ResolveAwakeable("id", ReadOnlyMemory<byte>.Empty);
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void RejectAwakeable_InReplayMode_AdvancesIndex()
+    public async Task RejectAwakeable_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.CompleteAwakeableCommand,
+            ProtobufCodec.CreateCompleteAwakeableFailure("id", 500, "reason").ToByteArray());
 
         sm.RejectAwakeable("id", "reason");
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void ResolvePromise_InReplayMode_AdvancesIndex()
+    public async Task ResolvePromise_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.CompletePromiseCommand,
+            ProtobufCodec.CreateCompletePromiseSuccess("name", JsonSerializer.SerializeToUtf8Bytes("value"), 1)
+                .ToByteArray());
 
         sm.ResolvePromise("name", "value");
         Assert.Equal(InvocationState.Processing, sm.State);
     }
 
     [Fact]
-    public void RejectPromise_InReplayMode_AdvancesIndex()
+    public async Task RejectPromise_InReplayMode_AdvancesIndex()
     {
-        using var sm = CreateSm();
-        sm.Initialize("inv-1", "key", 0, 1);
+        using var sm = await StartReplayingAsync(MessageType.CompletePromiseCommand,
+            ProtobufCodec.CreateCompletePromiseFailure("name", 500, "reason", 1).ToByteArray());
 
         sm.RejectPromise("name", "reason");
         Assert.Equal(InvocationState.Processing, sm.State);
+    }
+
+    // ------- Journal mismatch -------
+
+    [Fact]
+    public async Task ReplayedCommandOfMatchingType_ReplaysUnchanged()
+    {
+        using var sm = await StartReplayingAsync(MessageType.SleepCommand,
+            ProtobufCodec.CreateSleepCommand(123_456UL, 1).ToByteArray());
+
+        // The replayed sleep resolves through the completion manager instead of re-sending the
+        // command, so replay ends without anything being written outbound.
+        var tcs = await sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        Assert.Equal(InvocationState.Processing, sm.State);
+        Assert.False(tcs.Task.IsCompleted);
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task ReplayedCommandOfWrongType_FailsWithJournalMismatch()
+    {
+        // The journal recorded a sleep; this attempt's handler writes state instead.
+        using var sm = await StartReplayingAsync(MessageType.SleepCommand,
+            ProtobufCodec.CreateSleepCommand(123_456UL, 1).ToByteArray());
+
+        var ex = Assert.Throws<TerminalException>(() => sm.SetState("count", 1));
+
+        Assert.Equal(570, ex.Code);
+        Assert.Contains("journal mismatch", ex.Message);
+        Assert.Contains("journal index 1", ex.Message);
+        Assert.Contains("SetState", ex.Message);
+        Assert.Contains("Sleep (SleepCommand)", ex.Message);
+    }
+
+    [Fact]
+    public void ReplayPastStagedEntries_FailsWithJournalMismatch()
+    {
+        using var sm = CreateSm();
+        // A replay boundary of one command with nothing staged for it: the handler's first
+        // operation runs past the end of the replayed journal.
+        sm.Initialize("inv-1", "key", 0, 1);
+
+        var ex = Assert.Throws<TerminalException>(() => sm.SetState("count", 1));
+
+        Assert.Equal(570, ex.Code);
+        Assert.Contains("journal mismatch", ex.Message);
+        Assert.Contains("journal index 0", ex.Message);
+        Assert.Contains("no command at that index", ex.Message);
+        Assert.Equal(InvocationState.Replaying, sm.State);
     }
 
     // ------- Suspension -------
