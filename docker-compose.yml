@@ -1,5 +1,7 @@
 services:
   restate:
+    # `docker compose up` reads this file on its own, so the pin is spelled out here.
+    # It must match RestateBuilder.RestateImage — RestateImagePinTests fails if it drifts.
     image: docker.io/restatedev/restate:1.7
     container_name: restate-server
     ports:

@@ -110,7 +110,6 @@ internal static class ProtobufCodec
                 invocationId = n.InvocationId;
                 break;
             case Gen.NotificationTemplate.ResultOneofCase.StateKeys:
-                // BUG 4 FIX: Handle field 17 (StateKeys) — previously only field 5 (Value) was checked.
                 // Convert protobuf StateKeys (repeated bytes) to JSON string[] for SDK consumption.
                 var keys = new string[n.StateKeys.Keys.Count];
                 for (var i = 0; i < keys.Length; i++)
@@ -272,7 +271,6 @@ internal static class ProtobufCodec
 
     /// <summary>
     ///     Creates a CallCommandMessage with all required fields including invocation_id_notification_idx.
-    ///     BUG 1 FIX: Previously this field was missing, defaulting to 0.
     /// </summary>
     public static Gen.CallCommandMessage CreateCallCommand(
         string service, string handler, string? key,
@@ -309,7 +307,6 @@ internal static class ProtobufCodec
 
     /// <summary>
     ///     Creates an OutputCommandMessage. Always sets the Value oneof even when content is empty.
-    ///     BUG 2 FIX: Previously, empty content caused the result oneof to be absent entirely.
     /// </summary>
     public static Gen.OutputCommandMessage CreateOutputCommand(ReadOnlySpan<byte> content)
     {
