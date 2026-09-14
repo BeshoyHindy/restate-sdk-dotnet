@@ -66,6 +66,9 @@ The repository uses trunk-based development (GitHub Flow):
   follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `docs:`, `perf:`, `refactor:`, `test:`, `build:`, `ci:`, `chore:`.
   A lint check on the PR title enforces this.
+- Dependabot pull requests for GitHub Actions bumps and for NuGet minor and patch
+  updates arm auto-merge and land on their own once the required checks pass;
+  NuGet major updates are merged by hand.
 - Releases are cut by release-please: it collects merged commits into a release PR
   that updates `CHANGELOG.md` and the version in `Directory.Build.props`; merging that
   PR tags the release and CI publishes the packages to NuGet. See `RELEASING.md`.
