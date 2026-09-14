@@ -263,6 +263,11 @@ var payload = await awakeable.Value;
 var approval = ctx.Signal<string>("approval");
 var decision = await approval.GetResult();
 
+// Resolve or reject a signal on another invocation through its handle
+InvocationHandle target = await ctx.Send("ReviewService", "Review", request);
+await target.ResolveSignal(ctx, "approval", "granted");
+await target.RejectSignal(ctx, "approval", "not approved");
+
 // Non-blocking futures and combinators
 var f1 = ctx.RunAsync<int>("a", () => Task.FromResult(1));
 var f2 = ctx.RunAsync<int>("b", () => Task.FromResult(2));

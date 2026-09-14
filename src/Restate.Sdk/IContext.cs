@@ -151,6 +151,25 @@ public interface IContext
     /// </summary>
     IDurableFuture<T> Signal<T>() => throw new NotSupportedException(SignalsNotSupported);
 
+    /// <summary>
+    ///     Resolves a named signal on another invocation. Defaulted so that adding it does not
+    ///     break external implementations of this interface (mirroring <see cref="Logger" />).
+    /// </summary>
+    ValueTask ResolveSignal<T>(string invocationId, string name, T value) =>
+        throw new NotSupportedException(SignalsNotSupported);
+
+    /// <summary>Resolves an unnamed signal on another invocation, addressed by its index.</summary>
+    ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value) =>
+        throw new NotSupportedException(SignalsNotSupported);
+
+    /// <summary>Rejects a named signal on another invocation.</summary>
+    ValueTask RejectSignal(string invocationId, string name, string reason) =>
+        throw new NotSupportedException(SignalsNotSupported);
+
+    /// <summary>Rejects an unnamed signal on another invocation, addressed by its index.</summary>
+    ValueTask RejectSignal(string invocationId, int signalIndex, string reason) =>
+        throw new NotSupportedException(SignalsNotSupported);
+
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);
 

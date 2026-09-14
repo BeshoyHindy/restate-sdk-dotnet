@@ -14,6 +14,7 @@ public sealed class MockContext : Context
     private readonly Dictionary<string, object?> _signalResults = [];
     private readonly Dictionary<string, TerminalException> _signalFailures = [];
     private readonly List<string?> _awaitedSignals = [];
+    private readonly List<RecordedSignalCompletion> _signalCompletions = [];
     private readonly Dictionary<string, TerminalException> _callFailures = [];
     private readonly Dictionary<string, object?> _callResults = [];
     private readonly List<RecordedCall> _calls = [];
@@ -57,6 +58,9 @@ public sealed class MockContext : Context
     ///     Signals the handler awaited, in order. Null entries are unnamed signals.
     /// </summary>
     public IReadOnlyList<string?> AwaitedSignals => _awaitedSignals;
+
+    /// <summary>Signals the handler resolved or rejected on other invocations, in order.</summary>
+    public IReadOnlyList<RecordedSignalCompletion> SignalCompletions => _signalCompletions;
 
     /// <summary>All recorded Send invocations.</summary>
     public IReadOnlyList<RecordedSend> Sends => _sends;
@@ -430,6 +434,40 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
+    public override ValueTask ResolveSignal<T>(string invocationId, string name, T value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        _signalCompletions.Add(new RecordedSignalCompletion(invocationId, name, null, value, null));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public override ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        _signalCompletions.Add(new RecordedSignalCompletion(invocationId, null, signalIndex, value, null));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public override ValueTask RejectSignal(string invocationId, string name, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        _signalCompletions.Add(new RecordedSignalCompletion(invocationId, name, null, null, reason));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public override ValueTask RejectSignal(string invocationId, int signalIndex, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        _signalCompletions.Add(new RecordedSignalCompletion(invocationId, null, signalIndex, null, reason));
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public override void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null)
     {
     }
@@ -703,6 +741,18 @@ public sealed record RecordedSend(
     /// <summary>Flow-control limit key the send was made with, when the caller set one.</summary>
     public string? LimitKey { get; init; }
 }
+
+/// <summary>
+///     A recorded signal resolution or rejection on another invocation. Exactly one of
+///     <paramref name="Name" /> and <paramref name="SignalIndex" /> is set, and exactly one of
+///     <paramref name="Value" /> and <paramref name="RejectionReason" />.
+/// </summary>
+public sealed record RecordedSignalCompletion(
+    string InvocationId,
+    string? Name,
+    int? SignalIndex,
+    object? Value,
+    string? RejectionReason);
 
 /// <summary>A recorded Sleep invocation.</summary>
 public sealed record RecordedSleep(TimeSpan Duration);

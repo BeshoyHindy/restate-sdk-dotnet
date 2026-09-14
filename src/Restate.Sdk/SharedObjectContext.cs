@@ -226,6 +226,30 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override ValueTask ResolveSignal<T>(string invocationId, string name, T value)
+    {
+        return BaseContext.ResolveSignal(invocationId, name, value);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value)
+    {
+        return BaseContext.ResolveSignal(invocationId, signalIndex, value);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask RejectSignal(string invocationId, string name, string reason)
+    {
+        return BaseContext.RejectSignal(invocationId, name, reason);
+    }
+
+    /// <inheritdoc />
+    public override ValueTask RejectSignal(string invocationId, int signalIndex, string reason)
+    {
+        return BaseContext.RejectSignal(invocationId, signalIndex, reason);
+    }
+
+    /// <inheritdoc />
     public override void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null)
     {
         BaseContext.ResolveAwakeable(id, payload, serde);

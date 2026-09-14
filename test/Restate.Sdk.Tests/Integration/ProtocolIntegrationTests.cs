@@ -93,6 +93,28 @@ public class UnnamedSignalGreeterService
 }
 
 /// <summary>
+///     A service that resolves or rejects a signal on another invocation through its handle —
+///     the sending half of the end-to-end signal tests.
+/// </summary>
+[Service(Name = "SignalResolver")]
+public class SignalResolverService
+{
+    [Handler]
+    public async Task<string> Resolve(Context ctx, string targetInvocationId)
+    {
+        await new InvocationHandle(targetInvocationId).ResolveSignal(ctx, "approval", "granted");
+        return "sent";
+    }
+
+    [Handler]
+    public async Task<string> Reject(Context ctx, string targetInvocationId)
+    {
+        await new InvocationHandle(targetInvocationId).RejectSignal(ctx, "approval", "not approved");
+        return "sent";
+    }
+}
+
+/// <summary>
 ///     A service that calls a downstream service and then sleeps — used to verify that
 ///     completion ids allocated after a resumed replay do not collide with replayed ids.
 /// </summary>
@@ -1208,6 +1230,95 @@ public class ProtocolIntegrationTests
             CancellationToken.None);
 
         return responseStream.ToArray();
+    }
+
+    /// <summary>
+    ///     Runs an invocation whose request stream carries Start + Input and then the given live
+    ///     frames (notifications the runtime would deliver), and returns the raw response bytes.
+    /// </summary>
+    private static async Task<byte[]> RunWithFramesAsync<TService>(
+        string handlerName, object input, Func<TService> factory,
+        params (MessageType Type, byte[] Payload)[] frames)
+        where TService : class
+    {
+        var startPayload = BuildStartMessagePayload("signal-e2e", 1, "", 42);
+        var inputCommandPayload = BuildInputCommandPayload(JsonSerializer.SerializeToUtf8Bytes(input));
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        foreach (var (type, payload) in frames)
+            WriteFramedMessage(requestStream, type, payload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == handlerName);
+
+        await new InvocationHandler().HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => factory()),
+            ServiceProtocolVersion.V7,
+            CancellationToken.None);
+
+        return responseStream.ToArray();
+    }
+
+    [Fact]
+    public async Task HandleAsync_SignalResolvedThroughHandle_ReachesTheAwaitingHandler()
+    {
+        // 1. The resolving handler addresses the target invocation through its handle.
+        var resolverResponse = await RunWithFramesAsync<SignalResolverService>(
+            "Resolve", "inv-awaiter", () => new SignalResolverService());
+
+        var offset = 0;
+        var (commandHeader, commandPayload) = ReadFramedMessage(resolverResponse, ref offset);
+        Assert.Equal(MessageType.SendSignalCommand, commandHeader.Type);
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(commandPayload);
+        Assert.Equal("inv-awaiter", command.TargetInvocationId);
+        Assert.Equal("approval", command.Name);
+        Assert.Equal("\"granted\"", command.Value.Content.ToStringUtf8());
+
+        // 2. The runtime turns that command into a notification for the awaiting invocation.
+        var notification = new Gen.SignalNotificationMessage { Name = command.Name, Value = command.Value };
+        var awaitingResponse = await RunWithFramesAsync<SignalGreeterService>(
+            "Greet", "World", () => new SignalGreeterService(),
+            (MessageType.SignalNotification, notification.ToByteArray()));
+
+        offset = 0;
+        var (outputHeader, outputPayload) = ReadFramedMessage(awaitingResponse, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal("\"granted, World!\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+    }
+
+    [Fact]
+    public async Task HandleAsync_SignalRejectedThroughHandle_FailsTheAwaitingHandler()
+    {
+        var resolverResponse = await RunWithFramesAsync<SignalResolverService>(
+            "Reject", "inv-awaiter", () => new SignalResolverService());
+
+        var offset = 0;
+        var (commandHeader, commandPayload) = ReadFramedMessage(resolverResponse, ref offset);
+        Assert.Equal(MessageType.SendSignalCommand, commandHeader.Type);
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(commandPayload);
+        Assert.Equal(Gen.SendSignalCommandMessage.ResultOneofCase.Failure, command.ResultCase);
+        Assert.Equal("not approved", command.Failure.Message);
+
+        // The awaiting handler sees the rejection as a terminal failure, not a value.
+        var notification = new Gen.SignalNotificationMessage { Name = command.Name, Failure = command.Failure };
+        var awaitingResponse = await RunWithFramesAsync<SignalGreeterService>(
+            "Greet", "World", () => new SignalGreeterService(),
+            (MessageType.SignalNotification, notification.ToByteArray()));
+
+        offset = 0;
+        var (outputHeader, outputPayload) = ReadFramedMessage(awaitingResponse, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        var output = Gen.OutputCommandMessage.Parser.ParseFrom(outputPayload);
+        Assert.Equal(Gen.OutputCommandMessage.ResultOneofCase.Failure, output.ResultCase);
+        Assert.Equal("not approved", output.Failure.Message);
     }
 
     [Fact]

@@ -1022,6 +1022,106 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal(InvocationState.Replaying, sm.State);
     }
 
+    // ------- Resolving signals on other invocations -------
+
+    [Fact]
+    public async Task ResolveSignal_ByName_WritesTheSendSignalCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        await sm.ResolveSignalAsync("inv-target", "approval", null,
+            JsonSerializer.SerializeToUtf8Bytes("granted"), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.SendSignalCommand, frames[0].Type);
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("inv-target", command.TargetInvocationId);
+        Assert.Equal(Gen.SendSignalCommandMessage.SignalIdOneofCase.Name, command.SignalIdCase);
+        Assert.Equal("approval", command.Name);
+        Assert.Equal("\"granted\"", command.Value.Content.ToStringUtf8());
+    }
+
+    [Fact]
+    public async Task ResolveSignal_ByIndex_WritesTheSendSignalCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        await sm.ResolveSignalAsync("inv-target", null, 17,
+            JsonSerializer.SerializeToUtf8Bytes(42), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal(Gen.SendSignalCommandMessage.SignalIdOneofCase.Idx, command.SignalIdCase);
+        Assert.Equal(17u, command.Idx);
+        Assert.Equal("42", command.Value.Content.ToStringUtf8());
+    }
+
+    [Fact]
+    public async Task RejectSignal_ByName_WritesTheFailureOnTheCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        await sm.RejectSignalAsync("inv-target", "approval", null, "denied", 500, CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("approval", command.Name);
+        Assert.Equal(Gen.SendSignalCommandMessage.ResultOneofCase.Failure, command.ResultCase);
+        Assert.Equal(500u, command.Failure.Code);
+        Assert.Equal("denied", command.Failure.Message);
+    }
+
+    [Fact]
+    public async Task RejectSignal_ByIndex_WritesTheFailureOnTheCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        await sm.RejectSignalAsync("inv-target", null, 17, "denied", 500, CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var command = Gen.SendSignalCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal(17u, command.Idx);
+        Assert.Equal("denied", command.Failure.Message);
+    }
+
+    [Fact]
+    public async Task ResolveSignal_DuringReplay_ConsumesTheJournalEntryWithoutResending()
+    {
+        using var sm = CreateSm();
+
+        // The signal was already sent on a previous attempt: replaying must re-traverse the
+        // journaled SendSignalCommand, not send the signal a second time.
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-replay-send-signal"),
+            DebugId = "inv-replay-send-signal",
+            KnownEntries = 2,
+            Key = "",
+            RandomSeed = 0
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(MessageType.SendSignalCommand,
+            ProtobufCodec.CreateResolveSignalCommand("inv-target", "approval", null,
+                JsonSerializer.SerializeToUtf8Bytes("granted")).ToByteArray());
+
+        await sm.StartAsync(CancellationToken.None);
+        Assert.Equal(InvocationState.Replaying, sm.State);
+
+        await sm.ResolveSignalAsync("inv-target", "approval", null,
+            JsonSerializer.SerializeToUtf8Bytes("granted"), CancellationToken.None);
+
+        Assert.Equal(InvocationState.Processing, sm.State);
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
     // ------- Suspension -------
 
     /// <summary>Completes the outbound writer and reads back every frame the SM flushed.</summary>

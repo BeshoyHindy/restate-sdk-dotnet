@@ -12,6 +12,7 @@ internal sealed record GreetResponse(string Message);
 
 [JsonSerializable(typeof(GreetRequest))]
 [JsonSerializable(typeof(GreetResponse))]
+[JsonSerializable(typeof(string))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class ClientTestJsonContext : JsonSerializerContext;
 
@@ -615,6 +616,68 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
             new SendOptions { LimitKey = "customer-7" }));
         Assert.Equal("options", send.ParamName);
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    // ── Signals ──
+
+    [Fact]
+    public async Task ResolveSignal_TypeInfo_PostsTheValueToTheSignalRoute()
+    {
+        var (client, handler) = CreateClient();
+
+        await client.ResolveSignal("sign_1abc", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
+
+        // The ingress completes a signal by id under /restate/awakeables, which serves both
+        // signal ids and legacy awakeable ids.
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal("/restate/awakeables/sign_1abc/resolve", handler.LastRequest.RequestUri!.AbsolutePath);
+        Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task ResolveSignal_Reflection_PostsCamelCasedValue()
+    {
+        var (client, handler) = CreateClient();
+
+        await client.ResolveSignal("sign_1abc", new GreetRequest("Ada"));
+
+        Assert.Equal("/restate/awakeables/sign_1abc/resolve", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task RejectSignal_PostsTheReasonAsTheRawBody()
+    {
+        var (client, handler) = CreateClient();
+
+        await client.RejectSignal("sign_1abc", "not approved");
+
+        Assert.Equal("/restate/awakeables/sign_1abc/reject", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("not approved", handler.LastRequestBody);
+        Assert.Equal("text/plain", handler.LastRequest.Content!.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
+    public async Task SignalCompletion_ErrorStatus_Throws()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.NotFound;
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.ResolveSignal("sign_1abc", "value", ClientTestJsonContext.Default.String));
+    }
+
+    [Fact]
+    public async Task SignalCompletion_NullOrEmptyArguments_ThrowWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.ResolveSignal(null!, "v"));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.ResolveSignal("", "v"));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.RejectSignal("", "reason"));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.RejectSignal("sign_1abc", null!));
 
         Assert.Null(handler.LastRequest);
     }

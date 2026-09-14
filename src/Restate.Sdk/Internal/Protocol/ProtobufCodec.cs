@@ -551,4 +551,42 @@ internal static class ProtobufCodec
             Void = new Gen.Void()
         };
     }
+
+    /// <summary>
+    ///     Creates a SendSignalCommandMessage resolving a signal on another invocation. The signal
+    ///     is addressed by name (field 3) or by index (field 2) — exactly one of them.
+    /// </summary>
+    public static Gen.SendSignalCommandMessage CreateResolveSignalCommand(
+        string targetInvocationId, string? name, uint? index, ReadOnlySpan<byte> value)
+    {
+        var msg = CreateSignalTarget(targetInvocationId, name, index);
+        msg.Value = new Gen.Value { Content = ByteString.CopyFrom(value) };
+        return msg;
+    }
+
+    /// <summary>
+    ///     Creates a SendSignalCommandMessage rejecting a signal on another invocation: the
+    ///     awaiting handler sees the failure (field 6) as a terminal error.
+    /// </summary>
+    public static Gen.SendSignalCommandMessage CreateRejectSignalCommand(
+        string targetInvocationId, string? name, uint? index, uint code, string reason)
+    {
+        var msg = CreateSignalTarget(targetInvocationId, name, index);
+        msg.Failure = new Gen.Failure { Code = code, Message = reason };
+        return msg;
+    }
+
+    private static Gen.SendSignalCommandMessage CreateSignalTarget(
+        string targetInvocationId, string? name, uint? index)
+    {
+        var msg = new Gen.SendSignalCommandMessage { TargetInvocationId = targetInvocationId };
+        if (name is not null)
+            msg.Name = name;
+        else if (index is not null)
+            msg.Idx = index.Value;
+        else
+            throw new ArgumentException("A signal must be addressed by name or by index.", nameof(name));
+
+        return msg;
+    }
 }

@@ -783,6 +783,26 @@ public class CombinatorTests
         {
             throw new NotSupportedException();
         }
+
+        public override ValueTask ResolveSignal<T>(string invocationId, string name, T value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask RejectSignal(string invocationId, string name, string reason)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override ValueTask RejectSignal(string invocationId, int signalIndex, string reason)
+        {
+            throw new NotSupportedException();
+        }
     }
 
     /// <summary>

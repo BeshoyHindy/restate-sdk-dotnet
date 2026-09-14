@@ -3,6 +3,7 @@ Restate.Sdk.Testing.MockContext.AwaitedSignals.get -> System.Collections.Generic
 Restate.Sdk.Testing.MockContext.SetupSignal<T>(T result) -> void
 Restate.Sdk.Testing.MockContext.SetupSignal<T>(string! name, T result) -> void
 Restate.Sdk.Testing.MockContext.SetupSignalFailure(string! name, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockContext.SignalCompletions.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSignalCompletion!>!
 Restate.Sdk.Testing.RecordedCall.LimitKey.get -> string?
 Restate.Sdk.Testing.RecordedCall.LimitKey.init -> void
 Restate.Sdk.Testing.RecordedCall.Scope.get -> string?
@@ -11,10 +12,34 @@ Restate.Sdk.Testing.RecordedSend.LimitKey.get -> string?
 Restate.Sdk.Testing.RecordedSend.LimitKey.init -> void
 Restate.Sdk.Testing.RecordedSend.Scope.get -> string?
 Restate.Sdk.Testing.RecordedSend.Scope.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion
+Restate.Sdk.Testing.RecordedSignalCompletion.<Clone>$() -> Restate.Sdk.Testing.RecordedSignalCompletion!
+Restate.Sdk.Testing.RecordedSignalCompletion.Deconstruct(out string! InvocationId, out string? Name, out int? SignalIndex, out object? Value, out string? RejectionReason) -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Equals(Restate.Sdk.Testing.RecordedSignalCompletion? other) -> bool
+Restate.Sdk.Testing.RecordedSignalCompletion.InvocationId.get -> string!
+Restate.Sdk.Testing.RecordedSignalCompletion.InvocationId.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Name.get -> string?
+Restate.Sdk.Testing.RecordedSignalCompletion.Name.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.RecordedSignalCompletion(string! InvocationId, string? Name, int? SignalIndex, object? Value, string? RejectionReason) -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.RejectionReason.get -> string?
+Restate.Sdk.Testing.RecordedSignalCompletion.RejectionReason.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.SignalIndex.get -> int?
+Restate.Sdk.Testing.RecordedSignalCompletion.SignalIndex.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Value.get -> object?
+Restate.Sdk.Testing.RecordedSignalCompletion.Value.init -> void
 override Restate.Sdk.Testing.MockContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.RejectSignal(string! invocationId, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.RejectSignal(string! invocationId, string! name, string! reason) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.ResolveSignal<T>(string! invocationId, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.ResolveSignal<T>(string! invocationId, string! name, T value) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.Testing.MockContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.Testing.RecordedSignalCompletion.Equals(object? obj) -> bool
+override Restate.Sdk.Testing.RecordedSignalCompletion.GetHashCode() -> int
+override Restate.Sdk.Testing.RecordedSignalCompletion.ToString() -> string!
+static Restate.Sdk.Testing.RecordedSignalCompletion.operator !=(Restate.Sdk.Testing.RecordedSignalCompletion? left, Restate.Sdk.Testing.RecordedSignalCompletion? right) -> bool
+static Restate.Sdk.Testing.RecordedSignalCompletion.operator ==(Restate.Sdk.Testing.RecordedSignalCompletion? left, Restate.Sdk.Testing.RecordedSignalCompletion? right) -> bool
