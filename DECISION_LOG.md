@@ -166,3 +166,14 @@ The v7 `awaiting_on` future is emitted as a flat FIRST_COMPLETED leaf: a spuriou
 **Alternatives:**
 - Classic GitFlow: rejected — ceremony without benefit for a single-maintainer pre-1.0 library
 - Required reviews: deferred until a second maintainer exists (would block the solo maintainer's own PRs)
+
+## 16. NuGet Audit Scoped to Direct Dependencies
+
+**Decision:** `NuGetAuditMode` is `direct`. Advisories against packages the repo references directly still fail the build under `TreatWarningsAsErrors`; advisories that arrive through transitive dependencies do not. Transitive advisories are surfaced by GitHub's Dependabot alerts and resolved by the weekly Dependabot bumps.
+
+**Context:** With the default `all` mode, an advisory on a package nobody in the repo references (SSH.NET via Testcontainers, Microsoft.Build.Tasks.Git via SourceLink) turned every build red until the intermediate package shipped a fix, including CodeQL's scheduled runs and clean local checkouts.
+
+**Alternatives:**
+- Keep `all` and demote NU1901-NU1904 to warnings: rejected — direct-dependency advisories would stop failing the build too
+- Keep `all` as errors and bump promptly: rejected — a fix may not exist upstream for days or weeks, and main is red meanwhile
+
