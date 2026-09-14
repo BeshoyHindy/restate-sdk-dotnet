@@ -19,6 +19,11 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
      `x-release-please-version`)
    - adds the pending changes to `CHANGELOG.md`
    - updates `.release-please-manifest.json`
+   - moves every `PublicAPI.Unshipped.txt` entry into the `PublicAPI.Shipped.txt`
+     beside it, for each project that has those files — the API the release
+     publishes stops being unshipped. The step runs
+     `.github/scripts/roll-public-api.sh` and commits onto the release branch, so
+     the roll is reviewed and merged with the rest of the release PR.
 3. Merge the release PR. release-please creates the `vX.Y.Z` tag and the
    tag triggers `publish.yml`.
 
