@@ -21,6 +21,9 @@ public sealed class RestateClient : IDisposable
     private const string ReflectionJsonMessage =
         "This overload uses reflection-based JSON serialization. Use the JsonTypeInfo overload for Native AOT.";
 
+    /// <summary>Response header carrying the Restate error source (restate-server 1.7.4 and newer).</summary>
+    private const string ErrorSourceHeader = "x-restate-error-source";
+
     private static JsonSerializerOptions? s_reflectionJsonOptions;
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
@@ -111,6 +114,84 @@ public sealed class RestateClient : IDisposable
         _reflectionJsonOptions = options.JsonSerializerOptions;
     }
 
+    /// <summary>
+    ///     Throws a <see cref="RestateIngressException" /> when the ingress returned a non-success
+    ///     status, carrying everything the server reported about it: the
+    ///     <c>x-restate-error-source</c> header and the <c>source</c>, <c>code</c> and
+    ///     <c>message</c> fields of the JSON error body (restate-server 1.7.4 and newer).
+    ///     Servers that report none of it still produce the exception, with nulls.
+    ///     Nothing on this path throws on its own — a body that cannot be read or parsed must
+    ///     never mask the failure it describes.
+    /// </summary>
+    private static async Task EnsureIngressSuccessAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var headerSource = response.Headers.TryGetValues(ErrorSourceHeader, out var values)
+            ? values.FirstOrDefault()
+            : null;
+
+        string? body = null;
+        try
+        {
+            body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // Unreadable body (transport failure, bad encoding): report the status alone.
+        }
+
+        var (bodyMessage, bodySource, code) = ParseErrorBody(body);
+
+        var message = bodyMessage
+                      ?? (string.IsNullOrWhiteSpace(body)
+                          ? $"The Restate ingress request failed with status {(int)response.StatusCode} ({response.StatusCode})."
+                          : body);
+
+        throw new RestateIngressException(message, response.StatusCode, headerSource ?? bodySource, code);
+    }
+
+    /// <summary>
+    ///     Reads <c>message</c>, <c>source</c> and <c>code</c> out of a JSON error body. Returns
+    ///     nulls for anything absent, and for a body that is not JSON at all or is truncated.
+    ///     Uses <see cref="JsonDocument" /> rather than a deserialized shape: it needs no
+    ///     reflection (AOT-safe), and it reads <c>code</c> whether the server sends it as a JSON
+    ///     string or a number instead of failing the whole parse.
+    /// </summary>
+    private static (string? Message, string? Source, string? Code) ParseErrorBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return (null, null, null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return (null, null, null);
+
+            return (ReadText(document.RootElement, "message"),
+                ReadText(document.RootElement, "source"),
+                ReadText(document.RootElement, "code"));
+        }
+        catch (JsonException)
+        {
+            return (null, null, null);
+        }
+
+        static string? ReadText(JsonElement root, string name)
+        {
+            if (!root.TryGetProperty(name, out var value))
+                return null;
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                _ => null
+            };
+        }
+    }
     private static Uri CreateBaseUri(string baseUrl)
     {
         ArgumentException.ThrowIfNullOrEmpty(baseUrl);
@@ -180,7 +261,7 @@ public sealed class RestateClient : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
 
@@ -199,7 +280,7 @@ public sealed class RestateClient : IDisposable
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
@@ -215,7 +296,7 @@ public sealed class RestateClient : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
 
@@ -234,7 +315,7 @@ public sealed class RestateClient : IDisposable
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
@@ -248,7 +329,7 @@ public sealed class RestateClient : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         using var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
@@ -259,7 +340,7 @@ public sealed class RestateClient : IDisposable
             ? await _http.PostAsJsonAsync(path, request, GetReflectionJsonOptions(), ct).ConfigureAwait(false)
             : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
 
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
     }
 
@@ -270,7 +351,7 @@ public sealed class RestateClient : IDisposable
             ? await _http.PostAsJsonAsync(path, request, requestTypeInfo, ct).ConfigureAwait(false)
             : await _http.PostAsync(path, null, ct).ConfigureAwait(false);
 
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
@@ -278,7 +359,7 @@ public sealed class RestateClient : IDisposable
         CancellationToken ct)
     {
         using var response = await _http.PostAsync(path, null, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
     }
 
@@ -321,7 +402,7 @@ public sealed class RestateClient : IDisposable
     private async Task<string> SendCoreAsync(HttpRequestMessage httpRequest, CancellationToken ct)
     {
         using var response = await _http.SendAsync(httpRequest, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
 
         // The ingress returns the invocation ID in the response body
         var body = await response.Content

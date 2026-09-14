@@ -169,14 +169,18 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task Call_TypeInfo_ErrorStatus_ThrowsHttpRequestException()
+    public async Task Call_TypeInfo_ErrorStatus_StaysCatchableAsHttpRequestException()
     {
         var (client, handler) = CreateClient();
         handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
         handler.ResponseBody = """{"message":"boom"}""";
 
-        await Assert.ThrowsAsync<HttpRequestException>(
+        // The typed exception derives from HttpRequestException, so callers that caught what
+        // EnsureSuccessStatusCode threw keep working.
+        var ex = await Assert.ThrowsAnyAsync<HttpRequestException>(
             () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.IsType<RestateIngressException>(ex);
     }
 
     [Theory]
@@ -377,13 +381,160 @@ public class RestateClientTests
         Assert.Null(handler.LastRequest);
     }
 
+    // ── Ingress error responses ──
+
+    [Fact]
+    public async Task ErrorResponse_WithSourceHeaderAndJsonFields_PopulatesEveryProperty()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        handler.ResponseHeaders["x-restate-error-source"] = "ingress";
+        handler.ResponseBody = """{"message":"service not found","source":"ingress","code":"RT0003"}""";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.Equal("ingress", ex.ErrorSource);
+        Assert.Equal("RT0003", ex.ErrorCode);
+        Assert.Equal("service not found", ex.Message);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_SourceOnlyInBody_IsStillReported()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        handler.ResponseBody = """{"message":"handler failed","source":"invocation","code":500}""";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal("invocation", ex.ErrorSource);
+        // A code sent as a JSON number is carried as its text rather than losing the whole body.
+        Assert.Equal("500", ex.ErrorCode);
+        Assert.Equal("handler failed", ex.Message);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_PreSourceServer_HasNullSourceAndCode()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        // restate-server before 1.7.4: no header, no source/code fields.
+        handler.ResponseBody = """{"message":"boom"}""";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.Null(ex.ErrorSource);
+        Assert.Null(ex.ErrorCode);
+        Assert.Equal("boom", ex.Message);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_NonJsonBody_UsesBodyAsMessage()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        handler.ResponseContentType = "text/plain";
+        handler.ResponseBody = "upstream exploded";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal("upstream exploded", ex.Message);
+        Assert.Null(ex.ErrorSource);
+        Assert.Null(ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_TruncatedJsonBody_UsesBodyAsMessage()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.InternalServerError;
+        handler.ResponseBody = """{"message":"boom","sou""";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        // The parse failure must not surface: the raw body is the best message available.
+        Assert.Equal("""{"message":"boom","sou""", ex.Message);
+        Assert.Null(ex.ErrorSource);
+        Assert.Null(ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_EmptyBody_DescribesTheStatusCode()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.ServiceUnavailable;
+        handler.ResponseBody = "";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+        Assert.Contains("503", ex.Message);
+    }
+
+    [Fact]
+    public async Task SuccessResponse_ReturnsResultWithoutThrowing()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseHeaders["x-restate-error-source"] = "ingress";
+        handler.ResponseBody = """{"message":"hello Ada"}""";
+
+        var response = await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+
+        Assert.Equal("hello Ada", response.Message);
+    }
+
+    [Fact]
+    public async Task ErrorResponse_EveryIngressEntryPoint_ThrowsTypedException()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.ServiceUnavailable;
+        handler.ResponseHeaders["x-restate-error-source"] = "ingress";
+        handler.ResponseBody = """{"message":"unavailable","code":"RT0002"}""";
+
+        var calls = new Func<Task>[]
+        {
+            () => client.Attach<GreetResponse>("inv-1"),
+            () => client.Attach("inv-1", ClientTestJsonContext.Default.GreetResponse),
+            () => client.GetOutput<GreetResponse>("inv-1"),
+            () => client.GetOutput("inv-1", ClientTestJsonContext.Default.GreetResponse),
+            () => client.Cancel("inv-1"),
+            () => client.Service("Greeter").Call<GreetResponse>("Greet", new GreetRequest("Ada")),
+            () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse),
+            () => client.Service("Greeter").Call("Greet", new GreetRequest("Ada"),
+                ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse),
+            () => client.VirtualObject("Counter", "k").Call<GreetResponse>("Add", new GreetRequest("Ada")),
+            () => client.Service("Greeter").Send("Greet", new GreetRequest("Ada")),
+            () => client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+                ClientTestJsonContext.Default.GreetRequest)
+        };
+
+        foreach (var call in calls)
+        {
+            var ex = await Assert.ThrowsAsync<RestateIngressException>(call);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+            Assert.Equal("ingress", ex.ErrorSource);
+            Assert.Equal("RT0002", ex.ErrorCode);
+            Assert.Equal("unavailable", ex.Message);
+        }
+    }
+
     internal sealed class StubHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastRequestBody { get; private set; }
         public TrackingStringContent? LastResponseContent { get; private set; }
         public string ResponseBody { get; set; } = "{}";
+        public string ResponseContentType { get; set; } = "application/json";
         public HttpStatusCode ResponseStatusCode { get; set; } = HttpStatusCode.OK;
+        public Dictionary<string, string> ResponseHeaders { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -392,16 +543,16 @@ public class RestateClientTests
             LastRequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            LastResponseContent = new TrackingStringContent(ResponseBody);
-            return new HttpResponseMessage(ResponseStatusCode)
-            {
-                Content = LastResponseContent
-            };
+            LastResponseContent = new TrackingStringContent(ResponseBody, ResponseContentType);
+            var response = new HttpResponseMessage(ResponseStatusCode) { Content = LastResponseContent };
+            foreach (var (name, value) in ResponseHeaders)
+                response.Headers.Add(name, value);
+            return response;
         }
     }
 
-    internal sealed class TrackingStringContent(string content)
-        : StringContent(content, Encoding.UTF8, "application/json")
+    internal sealed class TrackingStringContent(string content, string mediaType = "application/json")
+        : StringContent(content, Encoding.UTF8, mediaType)
     {
         public bool IsDisposed { get; private set; }
 

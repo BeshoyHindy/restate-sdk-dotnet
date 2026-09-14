@@ -442,6 +442,28 @@ var invocationId = await client.Service("EmailService")
     .Send("SendEmail", request, delay: TimeSpan.FromHours(1));
 ```
 
+Any non-success ingress response throws a `RestateIngressException`:
+
+```csharp
+try
+{
+    var greeting = await client.Service("GreeterService").Call<string>("Greet", "World");
+}
+catch (RestateIngressException ex)
+{
+    // ex.StatusCode  — the HTTP status of the ingress response
+    // ex.ErrorSource — "ingress" when the ingress itself rejected the request (unknown service,
+    //                  bad payload, overload); the invocation when the failure came back from
+    //                  the handler. Null on restate-server before 1.7.4, which does not report it.
+    // ex.ErrorCode   — the Restate error code, or null when the server did not report one
+    // ex.Message     — the server's error message, or the raw response body
+    logger.LogError(ex, "Ingress call failed from {Source}", ex.ErrorSource ?? "unknown");
+}
+```
+
+It derives from `HttpRequestException`, so existing `catch (HttpRequestException)` blocks keep
+working.
+
 Reflection-based overloads use camelCase JSON by default. To match an endpoint with different
 JSON conventions, configure the client explicitly:
 
