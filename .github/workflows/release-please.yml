@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v5
+        id: release
         with:
           # Tags created with the default GITHUB_TOKEN do not trigger other
           # workflows (publish.yml). Configure a RELEASE_PLEASE_TOKEN PAT
@@ -20,3 +21,28 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # The release PR already carries the version and changelog change, so the public API
+      # roll belongs in the same reviewable commit — and lands with the same merge.
+      - uses: actions/checkout@v7
+        if: steps.release.outputs.pr
+        with:
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+      - name: Roll public API entries to shipped
+        if: steps.release.outputs.pr
+        env:
+          BRANCH: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+        run: |
+          .github/scripts/roll-public-api.sh
+
+          if git diff --quiet; then
+            echo "The release pull request already has every entry rolled."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: roll public API entries to shipped"
+          git push origin "HEAD:$BRANCH"
