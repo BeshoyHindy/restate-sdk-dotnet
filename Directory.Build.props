@@ -4,6 +4,10 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <!-- Audit direct package references only. Transitive advisories are tracked by
+             Dependabot alerts and bumps; failing every build on them made main red until
+             an upstream package released a fix. -->
+        <NuGetAuditMode>direct</NuGetAuditMode>
         <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
         <AnalysisLevel>latest-Recommended</AnalysisLevel>
     </PropertyGroup>
