@@ -8,7 +8,7 @@ public class CompletionManagerTests
     [Fact]
     public void Register_CreatesCompletionSource()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
 
         Assert.NotNull(tcs);
@@ -18,7 +18,7 @@ public class CompletionManagerTests
     [Fact]
     public void Register_ThrowsOnDuplicate()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.Register(0);
 
         Assert.Throws<InvalidOperationException>(() => manager.Register(0));
@@ -27,7 +27,7 @@ public class CompletionManagerTests
     [Fact]
     public void GetOrRegister_ReturnsSameForDuplicate()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs1 = manager.GetOrRegister(0);
         var tcs2 = manager.GetOrRegister(0);
 
@@ -37,7 +37,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task TryComplete_ResolvesTask()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
 
         var result = CompletionResult.Success(new byte[] { 1, 2, 3 });
@@ -51,7 +51,7 @@ public class CompletionManagerTests
     [Fact]
     public void TryComplete_StoresEarlyCompletion()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         // Completion arrives before any registration — should store it for later.
         Assert.True(manager.TryComplete(99, CompletionResult.Success(new byte[] { 42 })));
     }
@@ -59,7 +59,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task TryComplete_EarlyCompletionDeliveredOnRegister()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         // Completion arrives before registration.
         manager.TryComplete(0, CompletionResult.Success(new byte[] { 7, 8 }));
 
@@ -74,7 +74,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task TryComplete_EarlyCompletionDeliveredOnGetOrRegister()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         // Completion arrives before registration.
         manager.TryComplete(0, CompletionResult.Success(new byte[] { 9 }));
 
@@ -89,7 +89,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task TryFail_EarlyFailureDeliveredOnRegister()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         // Failure arrives before registration.
         manager.TryFail(0, 409, "Conflict");
 
@@ -103,7 +103,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task TryFail_SetsTerminalException()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
 
         Assert.True(manager.TryFail(0, 409, "Conflict"));
@@ -116,7 +116,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task CancelAll_CancelsAllPending()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs1 = manager.Register(0);
         var tcs2 = manager.Register(1);
 
@@ -129,7 +129,7 @@ public class CompletionManagerTests
     [Fact]
     public void CancelAll_IsIdempotent()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.Register(0);
         manager.CancelAll();
         manager.CancelAll();
@@ -140,7 +140,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task Poison_FailsPendingWithSuspensionException()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
 
         manager.Poison();
@@ -151,7 +151,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task Poison_EarlyResultSurvives()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         // A completion delivered before EOF must stay consumable after poisoning.
         manager.TryComplete(0, CompletionResult.Success(new byte[] { 7 }));
 
@@ -166,7 +166,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task Poison_EarlyFailureSurvives()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.TryFail(0, 409, "Conflict");
 
         manager.Poison();
@@ -179,7 +179,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task Register_AfterPoison_FailsImmediately()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.Poison();
 
         var tcs = manager.Register(0);
@@ -191,7 +191,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task GetOrRegister_AfterPoison_FailsImmediately()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.Poison();
 
         var tcs = manager.GetOrRegister(0);
@@ -203,7 +203,7 @@ public class CompletionManagerTests
     [Fact]
     public async Task Poison_IsIdempotent()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
 
         manager.Poison();
@@ -216,7 +216,7 @@ public class CompletionManagerTests
     [Fact]
     public void CollectPendingIds_ReturnsPendingAndPoisonedIdsSorted()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         manager.Register(3);
         manager.Register(1);
         // Early result delivered before registration — not pending.
@@ -237,7 +237,7 @@ public class CompletionManagerTests
     [Fact]
     public void CollectPendingIds_ExcludesResolvedWaits()
     {
-        var manager = new CompletionManager();
+        var manager = new CompletionManager<int>();
         var tcs = manager.Register(0);
         manager.TryComplete(0, CompletionResult.Success(new byte[] { 1 }));
         Assert.True(tcs.Task.IsCompletedSuccessfully);

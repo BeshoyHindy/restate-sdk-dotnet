@@ -451,4 +451,67 @@ public class MockContextFeatureTests
     }
 
     #endregion
+
+    #region Signals
+
+    /// <summary>A handler whose only durable dependency is a signal, for the mock-context tests.</summary>
+    private static async Task<string> ApprovalHandler(MockContext ctx)
+    {
+        var approval = await ctx.Signal<string>("approval").GetResult();
+        return $"approved:{approval}";
+    }
+
+    [Fact]
+    public async Task MockContext_SetupSignal_ResolvesTheNamedSignal()
+    {
+        var ctx = new MockContext();
+        ctx.SetupSignal("approval", "by-alice");
+
+        Assert.Equal("approved:by-alice", await ApprovalHandler(ctx));
+        Assert.Equal("approval", Assert.Single(ctx.AwaitedSignals));
+    }
+
+    [Fact]
+    public async Task MockContext_SignalWithoutSetup_ResolvesWithDefault()
+    {
+        var ctx = new MockContext();
+
+        Assert.Equal("approved:", await ApprovalHandler(ctx));
+    }
+
+    [Fact]
+    public async Task MockContext_SetupSignalFailure_RejectsTheNamedSignal()
+    {
+        var ctx = new MockContext();
+        ctx.SetupSignalFailure("approval", new TerminalException("denied", 403));
+
+        var ex = await Assert.ThrowsAsync<TerminalException>(() => ApprovalHandler(ctx));
+        Assert.Equal(403, ex.Code);
+    }
+
+    [Fact]
+    public async Task MockContext_UnnamedSignals_ResolveInOrder()
+    {
+        var ctx = new MockContext();
+        ctx.SetupSignal(1);
+        ctx.SetupSignal(2);
+
+        Assert.Equal(1, await ctx.Signal<int>().GetResult());
+        Assert.Equal(2, await ctx.Signal<int>().GetResult());
+        Assert.Equal([null, null], ctx.AwaitedSignals);
+    }
+
+    [Fact]
+    public async Task MockContext_Signals_ComposeWithCombinators()
+    {
+        var ctx = new MockContext();
+        ctx.SetupSignal("first", "a");
+        ctx.SetupSignal("second", "b");
+
+        var results = await ctx.All(ctx.Signal<string>("first"), ctx.Signal<string>("second"));
+
+        Assert.Equal(["a", "b"], results);
+    }
+
+    #endregion
 }

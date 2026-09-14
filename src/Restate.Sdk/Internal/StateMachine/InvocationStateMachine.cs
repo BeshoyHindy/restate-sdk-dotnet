@@ -25,8 +25,13 @@ internal sealed partial class InvocationStateMachine : IDisposable
 {
     private static readonly IReadOnlyDictionary<string, string> EmptyHeaders = FrozenDictionary<string, string>.Empty;
     private static readonly JsonWriterOptions WriterOptions = new() { SkipValidation = true };
-    private readonly CompletionManager _completions = new();
-    private readonly CompletionManager _signalCompletions = new();
+    private readonly CompletionManager<int> _completions = new();
+    private readonly CompletionManager<int> _signalCompletions = new();
+
+    // Signals the handler awaits by name rather than by index. Keyed by the name the runtime
+    // echoes back in SignalNotification, so a named signal resolves the same way an indexed one
+    // does — including notifications replayed ahead of the handler.
+    private readonly CompletionManager<string> _namedSignals = new();
     private readonly InvocationJournal _journal = new();
     private readonly ProtocolReader _reader;
 
@@ -144,6 +149,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
     {
         _completions.CancelAll();
         _signalCompletions.CancelAll();
+        _namedSignals.CancelAll();
         _journal.Dispose();
         _jsonWriter?.Dispose();
 

@@ -19,6 +19,10 @@ public interface IContext
     private const string OptionsNotSupported =
         "This IContext implementation does not support call or send options; override the overload that takes them.";
 
+    /// <summary>Reported by the default implementations of the signal overloads below.</summary>
+    private const string SignalsNotSupported =
+        "This IContext implementation does not support signals; override the Signal overloads.";
+
     /// <summary>Unique identifier of the current invocation.</summary>
     string InvocationId { get; }
 
@@ -133,6 +137,19 @@ public interface IContext
 
     /// <summary>Creates a durable promise that can be resolved from outside the current invocation.</summary>
     Awakeable<T> Awakeable<T>(ISerde<T>? serde = null);
+
+    /// <summary>
+    ///     Awaits a signal by name, resolved or rejected by whoever holds this invocation handle.
+    ///     Defaulted so that adding it does not break external implementations of this interface
+    ///     (mirroring <see cref="Logger" />).
+    /// </summary>
+    IDurableFuture<T> Signal<T>(string name) => throw new NotSupportedException(SignalsNotSupported);
+
+    /// <summary>
+    ///     Awaits an unnamed signal, addressed by the index this call allocates.
+    ///     Defaulted for the same reason as <see cref="Signal{T}(string)" />.
+    /// </summary>
+    IDurableFuture<T> Signal<T>() => throw new NotSupportedException(SignalsNotSupported);
 
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);

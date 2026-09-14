@@ -773,6 +773,16 @@ public class CombinatorTests
         {
             throw new NotSupportedException();
         }
+
+        public override IDurableFuture<T> Signal<T>(string name)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override IDurableFuture<T> Signal<T>()
+        {
+            throw new NotSupportedException();
+        }
     }
 
     /// <summary>

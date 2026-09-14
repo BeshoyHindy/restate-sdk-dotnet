@@ -1,4 +1,5 @@
 using System.IO.Pipelines;
+using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
 using Restate.Sdk.Internal.Protocol;
@@ -833,6 +834,142 @@ public class InvocationStateMachineTests : IDisposable
 
         sm.RejectPromise("name", "reason");
         Assert.Equal(InvocationState.Processing, sm.State);
+    }
+
+    // ------- Signals -------
+
+    [Fact]
+    public async Task NamedSignal_ResolvesFromNotification()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        var tcs = sm.RegisterSignal("approval");
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        await WriteInboundAsync(MessageType.SignalNotification, new Gen.SignalNotificationMessage
+        {
+            Name = "approval",
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("ok")) }
+        }.ToByteArray());
+
+        var result = await tcs.Task;
+        Assert.Equal("\"ok\"", Encoding.UTF8.GetString(result.Value.Span));
+        _ = incoming;
+    }
+
+    [Fact]
+    public async Task NamedSignal_RejectionFailsTheWaitTerminally()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        var tcs = sm.RegisterSignal("approval");
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        await WriteInboundAsync(MessageType.SignalNotification, new Gen.SignalNotificationMessage
+        {
+            Name = "approval",
+            Failure = new Gen.Failure { Code = 403, Message = "denied" }
+        }.ToByteArray());
+
+        var ex = await Assert.ThrowsAsync<TerminalException>(() => tcs.Task);
+        Assert.Equal(403, ex.Code);
+        Assert.Equal("denied", ex.Message);
+        _ = incoming;
+    }
+
+    [Fact]
+    public void UnnamedSignals_AndAwakeables_ShareOneIndexAllocator()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        // Signal indices 0-16 are reserved for built-ins, so user signals start at 17 whichever
+        // API allocates them.
+        var (first, _) = sm.RegisterSignal();
+        var (second, _) = sm.RegisterSignal();
+        var (awakeableId, _) = sm.Awakeable();
+
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex, first);
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex + 1, second);
+        // The awakeable took the third index rather than colliding with the signals.
+        Assert.StartsWith("sign_1", awakeableId);
+        var (fourth, _) = sm.RegisterSignal();
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex + 3, fourth);
+    }
+
+    [Fact]
+    public async Task UnnamedSignal_ResolvesFromNotification()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        var (index, tcs) = sm.RegisterSignal();
+        var incoming = sm.ProcessIncomingMessagesAsync(CancellationToken.None);
+
+        await WriteInboundAsync(MessageType.SignalNotification, new Gen.SignalNotificationMessage
+        {
+            Idx = (uint)index,
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(7)) }
+        }.ToByteArray());
+
+        var result = await tcs.Task;
+        Assert.Equal("7", Encoding.UTF8.GetString(result.Value.Span));
+        _ = incoming;
+    }
+
+    [Fact]
+    public async Task ReplayedSignalNotification_ResolvesTheWaitRegisteredAfterwards()
+    {
+        using var sm = CreateSm();
+
+        // A resumed journal whose signal was already resolved: the notification is replayed ahead
+        // of the handler, so awaiting it must resolve from the journal instead of waiting again.
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-replay-signal"),
+            DebugId = "inv-replay-signal",
+            KnownEntries = 2,
+            Key = "",
+            RandomSeed = 0
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(MessageType.SignalNotification, new Gen.SignalNotificationMessage
+        {
+            Name = "approval",
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("granted")) }
+        }.ToByteArray());
+
+        await sm.StartAsync(CancellationToken.None);
+
+        var tcs = sm.RegisterSignal("approval");
+
+        // Already resolved: the wait completes without another notification.
+        Assert.True(tcs.Task.IsCompletedSuccessfully);
+        var replayed = await tcs.Task;
+        Assert.Equal("\"granted\"", Encoding.UTF8.GetString(replayed.Value.Span));
+    }
+
+    [Fact]
+    public async Task Suspend_WithPendingNamedSignal_AdvertisesItOnTheWire()
+    {
+        using var sm = new InvocationStateMachine(_reader, _writer,
+            negotiatedVersion: ServiceProtocolVersion.V7);
+        sm.Initialize("inv-1", [0xAB], "", 0, 0);
+
+        _ = sm.RegisterSignal("approval");
+        await sm.SuspendAsync(CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("approval", Assert.Single(suspension.AwaitingOn.WaitingNamedSignals));
+        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
     }
 
     // ------- Journal mismatch -------

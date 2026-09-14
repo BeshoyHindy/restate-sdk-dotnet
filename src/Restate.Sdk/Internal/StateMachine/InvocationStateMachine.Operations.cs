@@ -888,21 +888,46 @@ internal sealed partial class InvocationStateMachine
         await tcs.Task.ConfigureAwait(false);
     }
 
-    // ------- Awakeable -------
+    // ------- Signals and awakeables -------
+    //
+    // Both wait for a SignalNotification (type 0xFBFF) and neither writes a command: awaiting is
+    // a local registration. An unnamed signal is addressed by an index allocated from
+    // FirstUserSignalIndex, which is the same allocator awakeables use — an awakeable is an
+    // unnamed signal plus the opaque id that addresses it. A named signal is addressed by name,
+    // so it needs no id and no index.
 
     /// <summary>
-    ///     Creates an awakeable. This is purely a local operation —
-    ///     no command is sent to the server. The SDK registers a signal handle and
-    ///     waits for a <c>SignalNotification</c> (type 0xFBFF) from the server.
+    ///     Registers a wait on the next unnamed signal index. The index is allocated from the
+    ///     single user-signal counter shared with awakeables, so the two never collide.
     /// </summary>
-    public (string Id, TaskCompletionSource<CompletionResult> Tcs) Awakeable()
+    public (int Index, TaskCompletionSource<CompletionResult> Tcs) RegisterSignal()
     {
         EnsureActive();
 
         // Allocate the next signal index (separate from journal indices)
         var signalIndex = _nextSignalIndex++;
-        var tcs = _signalCompletions.GetOrRegister(signalIndex);
+        return (signalIndex, _signalCompletions.GetOrRegister(signalIndex));
+    }
 
+    /// <summary>
+    ///     Registers a wait on the named signal. Awaiting the same name twice returns the same
+    ///     wait, and a notification replayed ahead of the handler resolves it immediately.
+    /// </summary>
+    public TaskCompletionSource<CompletionResult> RegisterSignal(string name)
+    {
+        EnsureActive();
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        return _namedSignals.GetOrRegister(name);
+    }
+
+    /// <summary>
+    ///     Creates an awakeable: an unnamed signal plus the id an external system uses to
+    ///     resolve it. This is purely a local operation — no command is sent to the server.
+    /// </summary>
+    public (string Id, TaskCompletionSource<CompletionResult> Tcs) Awakeable()
+    {
+        var (signalIndex, tcs) = RegisterSignal();
         return (BuildAwakeableId(signalIndex), tcs);
     }
 
@@ -1150,8 +1175,9 @@ internal sealed partial class InvocationStateMachine
 
         var completionIds = _completions.CollectPendingIds();
         var signalIds = _signalCompletions.CollectPendingIds();
+        var namedSignals = _namedSignals.CollectPendingIds();
 
-        if (completionIds.Count == 0 && signalIds.Count == 0)
+        if (completionIds.Count == 0 && signalIds.Count == 0 && namedSignals.Count == 0)
         {
             await FailAsync(500,
                 "Input stream closed but no durable operation is pending — nothing to suspend on",
@@ -1162,9 +1188,9 @@ internal sealed partial class InvocationStateMachine
         // Set Suspended BEFORE flushing to prevent re-entry if FlushAsync throws.
         State = InvocationState.Suspended;
 
-        Log.InvocationSuspended(Logger, InvocationId, completionIds.Count, signalIds.Count);
+        Log.InvocationSuspended(Logger, InvocationId, completionIds.Count, signalIds.Count + namedSignals.Count);
         WriteCommand(MessageType.Suspension,
-            ProtobufCodec.CreateSuspensionMessage(NegotiatedVersion, completionIds, signalIds));
+            ProtobufCodec.CreateSuspensionMessage(NegotiatedVersion, completionIds, signalIds, namedSignals));
         await FlushAsync(ct).ConfigureAwait(false);
     }
 }

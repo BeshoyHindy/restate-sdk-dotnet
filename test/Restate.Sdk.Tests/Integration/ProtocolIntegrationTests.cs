@@ -66,6 +66,33 @@ public class AwakeableGreeterService
 }
 
 /// <summary>
+///     A service whose only outstanding work is a named signal — used by the suspension test that
+///     checks a v7 stream advertises pending signal ids and releases the connection.
+/// </summary>
+[Service(Name = "SignalGreeter")]
+public class SignalGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        var approval = await ctx.Signal<string>("approval").GetResult();
+        return $"{approval}, {name}!";
+    }
+}
+
+/// <summary>A service awaiting an unnamed signal, addressed by the index the SDK allocates.</summary>
+[Service(Name = "UnnamedSignalGreeter")]
+public class UnnamedSignalGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        var approval = await ctx.Signal<string>().GetResult();
+        return $"{approval}, {name}!";
+    }
+}
+
+/// <summary>
 ///     A service that calls a downstream service and then sleeps — used to verify that
 ///     completion ids allocated after a resumed replay do not collide with replayed ids.
 /// </summary>
@@ -1228,6 +1255,46 @@ public class ProtocolIntegrationTests
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
         // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
         Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringNamedSignal_ProducesSuspensionWithSignalName()
+    {
+        var responseData = await RunUntilInputClosedAsync<SignalGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new SignalGreeterService());
+
+        var offset = 0;
+
+        // Awaiting a signal writes no command — the suspension frame is the only output.
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.NotNull(suspension.AwaitingOn);
+        Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
+        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        // A named signal is advertised by name, so the runtime knows what to resume on.
+        Assert.Equal("approval", Assert.Single(suspension.AwaitingOn.WaitingNamedSignals));
+
+        // SuspensionMessage is terminal on its own: the connection is released with nothing after it.
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InputClosesDuringUnnamedSignal_ProducesSuspensionWithSignalIndex()
+    {
+        var responseData = await RunUntilInputClosedAsync<UnnamedSignalGreeterService>(
+            "Greet", ServiceProtocolVersion.V7, () => new UnnamedSignalGreeterService());
+
+        var offset = 0;
+
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        // The first user signal index is 17 (0-16 are reserved built-ins).
+        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Empty(suspension.AwaitingOn.WaitingNamedSignals);
 
         Assert.Equal(responseData.Length, offset);
     }

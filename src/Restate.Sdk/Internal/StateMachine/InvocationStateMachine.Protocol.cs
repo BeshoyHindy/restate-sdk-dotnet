@@ -155,6 +155,7 @@ internal sealed partial class InvocationStateMachine
                         InputClosed = true;
                         _completions.Poison();
                         _signalCompletions.Poison();
+                        _namedSignals.Poison();
                     }
 
                     break;
@@ -173,6 +174,7 @@ internal sealed partial class InvocationStateMachine
             // parked on an un-cancellable `await tcs.Task` always unwinds instead of leaking.
             _completions.CancelAll();
             _signalCompletions.CancelAll();
+            _namedSignals.CancelAll();
             throw;
         }
         catch
@@ -183,6 +185,7 @@ internal sealed partial class InvocationStateMachine
             InputClosed = true;
             _completions.Poison();
             _signalCompletions.Poison();
+            _namedSignals.Poison();
             throw;
         }
     }
@@ -227,6 +230,22 @@ internal sealed partial class InvocationStateMachine
                 }
 
                 Log.CompletionReceived(Logger, InvocationId, signalIndex);
+            }
+            else if (signal.Name is not null)
+            {
+                // Named signals carry the name instead of an index, so they resolve through the
+                // name-keyed manager. Replayed ones land here too and are stored as early results.
+                if (signal.IsFailure)
+                {
+                    _namedSignals.TryFail(signal.Name, signal.FailureCode!.Value, signal.FailureMessage!);
+                }
+                else
+                {
+                    var result = signal.Value is not null
+                        ? CompletionResult.Success(signal.Value.Value)
+                        : CompletionResult.Success(ReadOnlyMemory<byte>.Empty);
+                    _namedSignals.TryComplete(signal.Name, result);
+                }
             }
 
             return;
@@ -282,6 +301,7 @@ internal sealed partial class InvocationStateMachine
         var cancellation = new TerminalException("The invocation was cancelled.", 409);
         _completions.FailAllWith(cancellation);
         _signalCompletions.FailAllWith(cancellation);
+        _namedSignals.FailAllWith(cancellation);
     }
 
     /// <summary>

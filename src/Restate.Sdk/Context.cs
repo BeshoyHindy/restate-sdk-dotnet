@@ -143,6 +143,25 @@ public abstract class Context : IContext
     /// <summary>Creates a durable promise that can be resolved from outside the current invocation.</summary>
     public abstract Awakeable<T> Awakeable<T>(ISerde<T>? serde = null);
 
+    /// <summary>
+    ///     Awaits a signal by name. Anything holding this invocation handle — another handler or
+    ///     an ingress caller — resolves or rejects the signal by that name, and the returned
+    ///     future composes with <see cref="All{T}" />, <see cref="Race{T}" />, <see cref="Any{T}" />
+    ///     and <see cref="AllSettled{T}" /> like any other durable future.
+    ///     A signal resolved before this attempt started resolves from the journal on replay.
+    /// </summary>
+    /// <param name="name">The signal name the resolver addresses. Must not be empty.</param>
+    public abstract IDurableFuture<T> Signal<T>(string name);
+
+    /// <summary>
+    ///     Awaits an unnamed signal, addressed by the index this call allocates (the first is 17;
+    ///     0-16 are reserved for built-in signals). The index comes from the same allocator
+    ///     <see cref="Awakeable{T}" /> uses: an awakeable is an unnamed signal plus the opaque id
+    ///     that addresses it, so use <see cref="Awakeable{T}" /> when the resolver needs an id to
+    ///     carry around, and this when the resolver addresses the invocation handle and index.
+    /// </summary>
+    public abstract IDurableFuture<T> Signal<T>();
+
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     public abstract void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);
 

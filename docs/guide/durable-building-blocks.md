@@ -63,6 +63,31 @@ var awakeable = ctx.Awakeable<string>();
 var payload = await awakeable.Value;
 ```
 
+## Signals
+
+A **signal** is a durable value delivered to a running invocation from outside it. The handler
+awaits it; anything holding the **invocation handle** — another handler or an ingress caller —
+resolves or rejects it. Unlike an awakeable, a named signal needs no id to be passed around: the
+name is the rendezvous point.
+
+```csharp
+// Named signal: the resolver addresses this invocation and the name "approval"
+var approval = ctx.Signal<string>("approval");
+var decision = await approval.GetResult();
+
+// Signals are durable futures, so they compose like any other
+var first = await ctx.Race(ctx.Signal<string>("approved"), ctx.Signal<string>("rejected"));
+
+// Unnamed signal: addressed by the index this call allocates (the first is 17)
+var unnamed = await ctx.Signal<string>().GetResult();
+```
+
+A signal resolved before the current attempt started resolves from the journal on replay, without
+waiting again. Signals and awakeables share one index allocator and one notification path: an
+awakeable is an unnamed signal plus the opaque id that addresses it, so use `ctx.Awakeable<T>()`
+when an external system needs an id to carry around, and `ctx.Signal<T>(name)` when the resolver
+already knows the invocation and a name. Awakeables are unchanged and remain supported.
+
 ## Futures and Combinators
 
 ```csharp

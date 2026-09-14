@@ -461,4 +461,51 @@ public class ProtobufCodecTests
         Assert.Equal(500u, msg.Code);
         Assert.Equal("Internal error", msg.Message);
     }
+
+    [Fact]
+    public void ParseSignalNotification_NamedSignal_ReadsTheNameOneof()
+    {
+        var payload = new Gen.SignalNotificationMessage
+        {
+            Name = "approval",
+            Value = new Gen.Value { Content = ByteString.CopyFromUtf8("\"granted\"") }
+        }.ToByteArray();
+
+        var signal = ProtobufCodec.ParseSignalNotification(payload);
+
+        // signal_id is a oneof: a named signal carries field 3 and no index.
+        Assert.Null(signal.Idx);
+        Assert.Equal("approval", signal.Name);
+        Assert.Equal("\"granted\"", Encoding.UTF8.GetString(signal.Value!.Value.Span));
+        Assert.False(signal.IsFailure);
+    }
+
+    [Fact]
+    public void ParseSignalNotification_NamedFailure_ReadsCodeAndMessage()
+    {
+        var payload = new Gen.SignalNotificationMessage
+        {
+            Name = "approval",
+            Failure = new Gen.Failure { Code = 403, Message = "denied" }
+        }.ToByteArray();
+
+        var signal = ProtobufCodec.ParseSignalNotification(payload);
+
+        Assert.Equal("approval", signal.Name);
+        Assert.True(signal.IsFailure);
+        Assert.Equal((ushort)403, signal.FailureCode);
+        Assert.Equal("denied", signal.FailureMessage);
+    }
+
+    [Fact]
+    public void ParseSignalNotification_IndexedVoidSignal_ReadsTheIdxOneof()
+    {
+        var payload = new Gen.SignalNotificationMessage { Idx = 17, Void = new Gen.Void() }.ToByteArray();
+
+        var signal = ProtobufCodec.ParseSignalNotification(payload);
+
+        Assert.Equal(17u, signal.Idx);
+        Assert.Null(signal.Name);
+        Assert.True(signal.IsVoid);
+    }
 }

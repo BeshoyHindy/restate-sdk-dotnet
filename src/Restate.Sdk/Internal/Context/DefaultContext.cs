@@ -259,6 +259,38 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         };
     }
 
+    public override IDurableFuture<T> Signal<T>(string name)
+    {
+        return SignalFuture<T>(_stateMachine.RegisterSignal(name));
+    }
+
+    public override IDurableFuture<T> Signal<T>()
+    {
+        var (_, tcs) = _stateMachine.RegisterSignal();
+        return SignalFuture<T>(tcs);
+    }
+
+    /// <summary>
+    ///     Wraps a registered signal wait as a durable future. Buffered commands are flushed
+    ///     first, as awakeables do: the server may need them before anything can resolve the
+    ///     signal, and the handler parks on the future rather than returning here.
+    /// </summary>
+    private IDurableFuture<T> SignalFuture<T>(TaskCompletionSource<CompletionResult> tcs)
+    {
+        var flushTask = _stateMachine.FlushAsync(Aborted);
+        if (flushTask.IsCompletedSuccessfully)
+            return new DurableFuture<T>(tcs, _stateMachine.JsonOptions);
+
+        return new LazyCallFuture<T>(AwaitFlush(flushTask, tcs), _stateMachine.JsonOptions);
+    }
+
+    private static async ValueTask<TaskCompletionSource<CompletionResult>> AwaitFlush(
+        ValueTask flushTask, TaskCompletionSource<CompletionResult> tcs)
+    {
+        await flushTask.ConfigureAwait(false);
+        return tcs;
+    }
+
     private async ValueTask<T> FlushThenAwaitAwakeable<T>(
         ValueTask flushTask, TaskCompletionSource<CompletionResult> tcs, ISerde<T>? serde = null)
     {
