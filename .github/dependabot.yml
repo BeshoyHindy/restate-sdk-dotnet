@@ -30,7 +30,7 @@ updates:
 
   # The Restate server image referenced by docker-compose.yml at the repository root.
   # RestateBuilder.RestateImage holds the same pin and has to move with it.
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
