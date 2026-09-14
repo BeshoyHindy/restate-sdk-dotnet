@@ -383,6 +383,183 @@ public class ClientGeneratorTests
     }
 
     [Fact]
+    public void Service_InterfaceContextParameter_MatchesClassEquivalent()
+    {
+        var withInterface = """
+                            using Restate.Sdk;
+                            using System.Threading.Tasks;
+
+                            namespace TestApp;
+
+                            [Service]
+                            public class GreeterService
+                            {
+                                [Handler]
+                                public Task<string> Greet(IContext ctx, string name) => Task.FromResult("Hello");
+                            }
+                            """;
+
+        var withClass = withInterface.Replace("IContext ctx", "Context ctx", StringComparison.Ordinal);
+
+        var (interfaceDriver, _, _) = GeneratorTestHelper.RunGenerator(withInterface);
+        var (classDriver, _, _) = GeneratorTestHelper.RunGenerator(withClass);
+
+        Assert.Empty(GeneratorTestHelper.GetGeneratorDiagnostics(interfaceDriver));
+
+        var interfaceClient = GeneratorTestHelper.GetGeneratedSource(interfaceDriver, "GreeterServiceClient.g.cs");
+        var classClient = GeneratorTestHelper.GetGeneratedSource(classDriver, "GreeterServiceClient.g.cs");
+        Assert.Equal(classClient, interfaceClient);
+
+        // The invoker casts the context to the declared parameter type; everything else matches.
+        var interfaceInvoker = GeneratorTestHelper.GetGeneratedSource(interfaceDriver, "GreeterServiceInvokers.g.cs");
+        var classInvoker = GeneratorTestHelper.GetGeneratedSource(classDriver, "GreeterServiceInvokers.g.cs");
+        Assert.NotNull(interfaceInvoker);
+        Assert.Contains("(global::Restate.Sdk.IContext)context", interfaceInvoker);
+        Assert.Equal(
+            classInvoker,
+            interfaceInvoker.Replace("global::Restate.Sdk.IContext", "global::Restate.Sdk.Context",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void VirtualObject_InterfaceContextParameters_MatchClassEquivalent()
+    {
+        var withInterfaces = """
+                             using Restate.Sdk;
+                             using System.Threading.Tasks;
+
+                             namespace TestApp;
+
+                             [VirtualObject]
+                             public class CounterObject
+                             {
+                                 [Handler]
+                                 public Task<int> Add(IObjectContext ctx, int delta) => Task.FromResult(delta);
+
+                                 [SharedHandler]
+                                 public Task<int> Get(ISharedObjectContext ctx) => Task.FromResult(0);
+                             }
+                             """;
+
+        var withClasses = withInterfaces
+            .Replace("IObjectContext ctx", "ObjectContext ctx", StringComparison.Ordinal)
+            .Replace("ISharedObjectContext ctx", "SharedObjectContext ctx", StringComparison.Ordinal);
+
+        var (interfaceDriver, _, _) = GeneratorTestHelper.RunGenerator(withInterfaces);
+        var (classDriver, _, _) = GeneratorTestHelper.RunGenerator(withClasses);
+
+        Assert.Empty(GeneratorTestHelper.GetGeneratorDiagnostics(interfaceDriver));
+
+        Assert.Equal(
+            GeneratorTestHelper.GetGeneratedSource(classDriver, "CounterObjectClient.g.cs"),
+            GeneratorTestHelper.GetGeneratedSource(interfaceDriver, "CounterObjectClient.g.cs"));
+
+        var interfaceInvoker = GeneratorTestHelper.GetGeneratedSource(interfaceDriver, "CounterObjectInvokers.g.cs");
+        Assert.NotNull(interfaceInvoker);
+        Assert.Contains("(global::Restate.Sdk.IObjectContext)context", interfaceInvoker);
+        Assert.Contains("(global::Restate.Sdk.ISharedObjectContext)context", interfaceInvoker);
+    }
+
+    [Fact]
+    public void Handler_UnrelatedInterfaceParameter_EmitsRESTATE002()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     public interface INotAContext;
+
+                     [Service]
+                     public class BadService
+                     {
+                         [Handler]
+                         public Task<string> Greet(INotAContext ctx) => Task.FromResult("Hello");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        Assert.Contains(diagnostics, d => d.Id == "RESTATE002");
+    }
+
+    [Fact]
+    public void Workflow_LowercaseRunHandler_NoRESTATE004()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Workflow]
+                     public class OrderWorkflow
+                     {
+                         [Handler(Name = "run")]
+                         public Task<string> Execute(WorkflowContext ctx) => Task.FromResult("done");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE004");
+
+        // The declared casing is the wire name and must survive untouched.
+        var generated = GeneratorTestHelper.GetGeneratedSource(driver, "OrderWorkflowClient.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("\"run\"", generated);
+    }
+
+    [Fact]
+    public void Workflow_RunHandler_NoRESTATE004()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Workflow]
+                     public class OrderWorkflow
+                     {
+                         [Handler]
+                         public Task<string> Run(WorkflowContext ctx) => Task.FromResult("done");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE004");
+    }
+
+    [Fact]
+    public void Workflow_NoRunHandler_EmitsRESTATE004()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Workflow]
+                     public class OrderWorkflow
+                     {
+                         [SharedHandler]
+                         public Task<string> GetStatus(SharedWorkflowContext ctx) => Task.FromResult("pending");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        Assert.Contains(diagnostics, d => d.Id == "RESTATE004");
+    }
+
+    [Fact]
     public void Service_GeneratesFutureMethods()
     {
         var source = """

@@ -209,7 +209,9 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     break;
                 }
 
-            if (handlerName == "Run")
+            // Case-insensitive: the Restate-conventional "run" satisfies the requirement too.
+            // Only the check is relaxed — the declared name is what goes on the wire.
+            if (string.Equals(handlerName, "Run", StringComparison.OrdinalIgnoreCase))
                 hasRunHandler = true;
 
             var isShared = handlerAttrName == "Restate.Sdk.SharedHandlerAttribute";
@@ -308,18 +310,51 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
         return false;
     }
 
+    /// <summary>The Restate context interfaces a handler may declare instead of a context class.</summary>
+    private static readonly string[] ContextInterfaceNames =
+    {
+        "IContext", "ISharedObjectContext", "IObjectContext",
+        "ISharedWorkflowContext", "IWorkflowContext", "IRunContext"
+    };
+
     private static bool IsContextType(ITypeSymbol type)
     {
         // Walk the base class chain looking for Context
         var current = type;
         while (current is not null)
         {
-            if (current.Name == "Context" && current.ContainingNamespace?.ToDisplayString() == "Restate.Sdk")
+            if (current.Name == "Context" && IsRestateSdkType(current))
                 return true;
             current = current.BaseType;
         }
 
+        // A handler may take a context interface instead of a context class. AllInterfaces
+        // covers inherited interfaces, so IWorkflowContext is matched through IContext too.
+        if (IsContextInterface(type))
+            return true;
+
+        foreach (var implemented in type.AllInterfaces)
+            if (IsContextInterface(implemented))
+                return true;
+
         return false;
+    }
+
+    private static bool IsContextInterface(ITypeSymbol type)
+    {
+        if (type.TypeKind != TypeKind.Interface || !IsRestateSdkType(type))
+            return false;
+
+        foreach (var name in ContextInterfaceNames)
+            if (type.Name == name)
+                return true;
+
+        return false;
+    }
+
+    private static bool IsRestateSdkType(ITypeSymbol type)
+    {
+        return type.ContainingNamespace?.ToDisplayString() == "Restate.Sdk";
     }
 
     private static string? UnwrapReturnType(ITypeSymbol type)
