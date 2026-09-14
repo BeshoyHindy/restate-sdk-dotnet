@@ -418,7 +418,7 @@ internal sealed partial class InvocationStateMachine
     // ------- Calls -------
 
     /// <summary>
-    ///     BUG 1 FIX: CallCommand now includes invocation_id_notification_idx (field 10).
+    ///     CallCommand includes invocation_id_notification_idx (field 10).
     ///     The invocation-id notification gets its own completion id, which the SDK ignores for
     ///     request/response calls.
     /// </summary>
@@ -836,7 +836,7 @@ internal sealed partial class InvocationStateMachine
     // ------- Awakeable -------
 
     /// <summary>
-    ///     Creates an awakeable. In V4 protocol, this is purely a local operation —
+    ///     Creates an awakeable. This is purely a local operation —
     ///     no command is sent to the server. The SDK registers a signal handle and
     ///     waits for a <c>SignalNotification</c> (type 0xFBFF) from the server.
     /// </summary>
@@ -852,7 +852,7 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Builds an awakeable ID in the V4 signal format:
+    ///     Builds an awakeable ID in the signal format:
     ///     "sign_1" + Base64UrlSafe(rawInvocationId + BigEndian32(signalIndex))
     ///     Uses System.Buffers.Text.Base64Url for single-allocation encoding (no intermediate strings).
     /// </summary>
@@ -1122,7 +1122,8 @@ internal sealed partial class InvocationStateMachine
     // ------- Output / Error -------
 
     /// <summary>
-    ///     BUG 2 FIX: OutputCommand always sets the Value oneof, even for empty content (void handlers).
+    ///     Completes the invocation. OutputCommand always sets the Value oneof, even for empty
+    ///     content (void handlers).
     /// </summary>
     public async ValueTask CompleteAsync(ReadOnlyMemory<byte> output, CancellationToken ct)
     {

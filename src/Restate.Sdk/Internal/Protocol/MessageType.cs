@@ -28,7 +28,7 @@ internal enum MessageType : ushort
     SleepCommand = 0x040C,
     CallCommand = 0x040D,
     OneWayCallCommand = 0x040E,
-    // Note: 0x040F is unassigned in the V4 protocol (awakeables use signals, not a command)
+    // Note: 0x040F is unassigned (awakeables use signals, not a command)
     SendSignalCommand = 0x0410,
     RunCommand = 0x0411,
     AttachInvocationCommand = 0x0412,

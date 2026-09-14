@@ -27,3 +27,14 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci(deps)"
+
+  # The Restate server image referenced by docker-compose.yml at the repository root.
+  # RestateBuilder.RestateImage holds the same pin and has to move with it.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"

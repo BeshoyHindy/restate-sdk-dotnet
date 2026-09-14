@@ -14,7 +14,14 @@ PIDS=()
 AOT_DIR=""
 KEY_DIR=""
 LOG_DIR=""
-RESTATE_IMAGE="docker.io/restatedev/restate:1.7"
+# The Restate server image is pinned once, in RestateBuilder.RestateImage. Read it from
+# there instead of repeating it, so CI and the Testcontainers harness cannot drift apart.
+RESTATE_BUILDER="$ROOT_DIR/src/Restate.Sdk.Testing.Containers/RestateBuilder.cs"
+RESTATE_IMAGE="$(grep -oE 'docker\.io/restatedev/restate:[^"[:space:]]+' "$RESTATE_BUILDER" | head -1 || true)"
+if [ -z "$RESTATE_IMAGE" ]; then
+    echo "Could not read the Restate server image pin from $RESTATE_BUILDER" >&2
+    exit 1
+fi
 RESTATE_CONTAINER="restate-ci"
 SUSPEND_CONTAINER="restate-ci-suspend"
 IDENTITY_CONTAINER="restate-ci-identity"
