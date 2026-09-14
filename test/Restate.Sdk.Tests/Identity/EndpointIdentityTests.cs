@@ -21,11 +21,16 @@ public class EndpointIdentityTests : IAsyncLifetime
 
     private WebApplication? _securedApp;
     private WebApplication? _openApp;
+    private WebApplication? _mountedApp;
     private HttpClient? _securedClient;
     private HttpClient? _openClient;
+    private HttpClient? _mountedClient;
 
     private HttpClient Secured => _securedClient!;
     private HttpClient Open => _openClient!;
+
+    /// <summary>A secured endpoint mapped under the <c>/restate</c> path base.</summary>
+    private HttpClient Mounted => _mountedClient!;
 
     public EndpointIdentityTests()
     {
@@ -36,17 +41,21 @@ public class EndpointIdentityTests : IAsyncLifetime
     {
         (_securedApp, _securedClient) = await StartAppAsync(_serializedKey);
         (_openApp, _openClient) = await StartAppAsync(identityKey: null);
+        (_mountedApp, _mountedClient) = await StartAppAsync(_serializedKey, pathBase: "/restate");
     }
 
     public async Task DisposeAsync()
     {
         _securedClient?.Dispose();
         _openClient?.Dispose();
+        _mountedClient?.Dispose();
         if (_securedApp is not null) await _securedApp.DisposeAsync();
         if (_openApp is not null) await _openApp.DisposeAsync();
+        if (_mountedApp is not null) await _mountedApp.DisposeAsync();
     }
 
-    private static async Task<(WebApplication App, HttpClient Client)> StartAppAsync(string? identityKey)
+    private static async Task<(WebApplication App, HttpClient Client)> StartAppAsync(
+        string? identityKey, string? pathBase = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseTestServer();
@@ -58,6 +67,13 @@ public class EndpointIdentityTests : IAsyncLifetime
         });
 
         var app = builder.Build();
+        if (pathBase is not null)
+        {
+            // Routing is placed explicitly so the path base is stripped before endpoints match.
+            app.UsePathBase(pathBase);
+            app.UseRouting();
+        }
+
         app.MapRestate();
         await app.StartAsync();
 
@@ -164,6 +180,33 @@ public class EndpointIdentityTests : IAsyncLifetime
     {
         var response = await Secured.SendAsync(
             CreateRequest(HttpMethod.Post, "/invoke/Unknown/Handler", signed: true, audience: "/invoke/Other/Path"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Discover_MappedUnderPathBase_SignedWithFullPathSucceeds()
+    {
+        // Restate dials — and signs — the full path, path base included.
+        var response = await Mounted.SendAsync(CreateRequest(HttpMethod.Get, "/restate/discover", signed: true));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Invoke_MappedUnderPathBase_SignedWithFullPathPassesIdentityGate()
+    {
+        var response = await Mounted.SendAsync(
+            CreateRequest(HttpMethod.Post, "/restate/invoke/Unknown/Handler", signed: true));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Discover_MappedUnderPathBase_SignedWithoutPathBaseRejected()
+    {
+        var response = await Mounted.SendAsync(
+            CreateRequest(HttpMethod.Get, "/restate/discover", signed: true, audience: "/discover"));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
