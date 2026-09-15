@@ -25,12 +25,18 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
      `.github/scripts/roll-public-api.sh` and commits onto the release branch, so
      the roll is reviewed and merged with the rest of the release PR.
 3. Merge the release PR. release-please creates the `vX.Y.Z` tag and the
-   tag triggers `publish.yml`.
+   GitHub Release, and the same workflow run then dispatches `publish.yml`
+   on that tag.
 
-> **Note:** tags created with the default `GITHUB_TOKEN` do not trigger other
-> workflows. Configure a `RELEASE_PLEASE_TOKEN` PAT secret (contents: write,
-> pull-requests: write) so the tag triggers `publish.yml`. Without it,
-> dispatch the publish workflow on the tag after release-please creates it:
+> **Note:** tags created with the default `GITHUB_TOKEN` do not trigger
+> `on: push: tags` workflows, which is why `release-please.yml` dispatches
+> `publish.yml` explicitly (`workflow_dispatch` is allowed for that token).
+> A `RELEASE_PLEASE_TOKEN` PAT secret (contents: write, pull-requests: write)
+> is optional; with one the tag push also triggers `publish.yml`, and the
+> `--skip-duplicate` push keeps the two runs from conflicting.
+>
+> If a release ever lands without a Publish run (check the Actions tab),
+> dispatch it by hand on the tag:
 >
 > ```bash
 > gh workflow run publish.yml --ref vX.Y.Z
