@@ -61,7 +61,8 @@ samples/                       Working sample applications
 The repository uses trunk-based development (GitHub Flow):
 
 - `main` is protected; every change lands through a pull request that passes the
-  required checks (`Build & Test`, `Format Check`, CodeQL).
+  required checks: `Build & Test`, `Format Check` and `Integration Test` (`ci.yml`),
+  `analyze` (CodeQL, `codeql.yml`) and `Validate PR title` (`pr-title.yml`).
 - PRs are squash-merged, so the PR title becomes the commit subject. Titles must
   follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `docs:`, `perf:`, `refactor:`, `test:`, `build:`, `ci:`, `chore:`.
