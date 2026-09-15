@@ -510,7 +510,7 @@ internal static class ProtobufCodec
     ///     FIRST_COMPLETED semantics, so any resolvable id wakes the invocation.
     /// </summary>
     public static Gen.SuspensionMessage CreateSuspensionMessage(
-        ServiceProtocolVersion version, List<int> completionIds, List<int> signalIds)
+        ServiceProtocolVersion version, List<int> completionIds, List<int> signalIds, List<string> namedSignals)
     {
         var msg = new Gen.SuspensionMessage();
 
@@ -521,6 +521,8 @@ internal static class ProtobufCodec
                 future.WaitingCompletions.Add((uint)completionIds[i]);
             for (var i = 0; i < signalIds.Count; i++)
                 future.WaitingSignals.Add((uint)signalIds[i]);
+            for (var i = 0; i < namedSignals.Count; i++)
+                future.WaitingNamedSignals.Add(namedSignals[i]);
             msg.AwaitingOn = future;
         }
         else
@@ -529,6 +531,8 @@ internal static class ProtobufCodec
                 msg.WaitingCompletions.Add((uint)completionIds[i]);
             for (var i = 0; i < signalIds.Count; i++)
                 msg.WaitingSignals.Add((uint)signalIds[i]);
+            for (var i = 0; i < namedSignals.Count; i++)
+                msg.WaitingNamedSignals.Add(namedSignals[i]);
         }
 
         return msg;

@@ -259,6 +259,10 @@ var awakeable = ctx.Awakeable<string>();
 // pass awakeable.Id to external system, then:
 var payload = await awakeable.Value;
 
+// Signals (resolved by name against this invocation handle, compose with combinators)
+var approval = ctx.Signal<string>("approval");
+var decision = await approval.GetResult();
+
 // Non-blocking futures and combinators
 var f1 = ctx.RunAsync<int>("a", () => Task.FromResult(1));
 var f2 = ctx.RunAsync<int>("b", () => Task.FromResult(2));

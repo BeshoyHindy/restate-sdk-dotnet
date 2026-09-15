@@ -24,6 +24,8 @@ Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! handler, obj
 Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 Restate.Sdk.IContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 Restate.Sdk.IContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+Restate.Sdk.IContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 Restate.Sdk.SendOptions.LimitKey.get -> string?
 Restate.Sdk.SendOptions.LimitKey.init -> void
 Restate.Sdk.SendOptions.Scope.get -> string?
@@ -33,11 +35,15 @@ abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! hand
 abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 abstract Restate.Sdk.Context.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 abstract Restate.Sdk.Context.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+abstract Restate.Sdk.Context.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.SharedObjectContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.SharedObjectContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.SharedObjectContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.SharedObjectContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 static Restate.Sdk.CallOptions.WithScope(string! scope) -> Restate.Sdk.CallOptions
 static Restate.Sdk.CallOptions.WithScope(string! scope, string! limitKey) -> Restate.Sdk.CallOptions
 static Restate.Sdk.SendOptions.WithScope(string! scope) -> Restate.Sdk.SendOptions

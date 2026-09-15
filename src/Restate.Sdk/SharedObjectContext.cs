@@ -214,6 +214,18 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
+    public override IDurableFuture<T> Signal<T>(string name)
+    {
+        return BaseContext.Signal<T>(name);
+    }
+
+    /// <inheritdoc />
+    public override IDurableFuture<T> Signal<T>()
+    {
+        return BaseContext.Signal<T>();
+    }
+
+    /// <inheritdoc />
     public override void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null)
     {
         BaseContext.ResolveAwakeable(id, payload, serde);

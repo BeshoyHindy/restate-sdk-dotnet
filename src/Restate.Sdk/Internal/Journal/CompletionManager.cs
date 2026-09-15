@@ -44,9 +44,12 @@ internal readonly struct CompletionSlot
 // ConcurrentDictionary is required here: the handler thread calls GetOrRegister while
 // ProcessIncomingMessagesAsync (running on a separate Task) calls TryComplete/TryFail.
 // Early completions are stored so notifications arriving before registration are not lost.
-internal sealed class CompletionManager
+/// <typeparam name="TKey">
+///     The key the runtime addresses a wait by: a completion id, a signal index, or a signal name.
+/// </typeparam>
+internal sealed class CompletionManager<TKey> where TKey : notnull
 {
-    private readonly ConcurrentDictionary<int, CompletionSlot> _slots = new();
+    private readonly ConcurrentDictionary<TKey, CompletionSlot> _slots = new();
 
     // Set once when the input stream closes. After that point no completion can ever
     // arrive, so every pending wait — and every wait registered afterwards — is
@@ -59,7 +62,7 @@ internal sealed class CompletionManager
     // invocation must fail terminally, not suspend into a wake-up loop.
     private volatile TerminalException? _terminalFault;
 
-    public TaskCompletionSource<CompletionResult> Register(int entryIndex)
+    public TaskCompletionSource<CompletionResult> Register(TKey entryIndex)
     {
         var tcs = new TaskCompletionSource<CompletionResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_slots.TryAdd(entryIndex, new CompletionSlot(tcs)))
@@ -96,7 +99,7 @@ internal sealed class CompletionManager
         return tcs;
     }
 
-    public TaskCompletionSource<CompletionResult> GetOrRegister(int entryIndex)
+    public TaskCompletionSource<CompletionResult> GetOrRegister(TKey entryIndex)
     {
         var slot = _slots.GetOrAdd(entryIndex,
             static _ => new CompletionSlot(
@@ -125,7 +128,7 @@ internal sealed class CompletionManager
         return earlyTcs;
     }
 
-    public bool TryComplete(int entryIndex, CompletionResult result)
+    public bool TryComplete(TKey entryIndex, CompletionResult result)
     {
         if (_slots.TryRemove(entryIndex, out var slot))
         {
@@ -138,7 +141,7 @@ internal sealed class CompletionManager
         return true;
     }
 
-    public bool TryFail(int entryIndex, ushort code, string message)
+    public bool TryFail(TKey entryIndex, ushort code, string message)
     {
         if (_slots.TryRemove(entryIndex, out var slot))
         {
@@ -200,9 +203,9 @@ internal sealed class CompletionManager
     ///     ids / signal indices the runtime must observe to resume the invocation. Sorted for
     ///     deterministic wire output.
     /// </summary>
-    public List<int> CollectPendingIds()
+    public List<TKey> CollectPendingIds()
     {
-        var ids = new List<int>(_slots.Count);
+        var ids = new List<TKey>(_slots.Count);
         foreach (var pair in _slots)
         {
             if (pair.Value.Kind != CompletionSlot.SlotKind.Tcs)

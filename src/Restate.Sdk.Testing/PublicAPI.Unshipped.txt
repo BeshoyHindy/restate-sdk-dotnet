@@ -1,4 +1,8 @@
 #nullable enable
+Restate.Sdk.Testing.MockContext.AwaitedSignals.get -> System.Collections.Generic.IReadOnlyList<string?>!
+Restate.Sdk.Testing.MockContext.SetupSignal<T>(T result) -> void
+Restate.Sdk.Testing.MockContext.SetupSignal<T>(string! name, T result) -> void
+Restate.Sdk.Testing.MockContext.SetupSignalFailure(string! name, Restate.Sdk.TerminalException! exception) -> void
 Restate.Sdk.Testing.RecordedCall.LimitKey.get -> string?
 Restate.Sdk.Testing.RecordedCall.LimitKey.init -> void
 Restate.Sdk.Testing.RecordedCall.Scope.get -> string?
@@ -12,3 +16,5 @@ override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, 
 override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.Testing.MockContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!

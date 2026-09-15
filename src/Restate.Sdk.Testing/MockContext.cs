@@ -10,6 +10,10 @@ namespace Restate.Sdk.Testing;
 public sealed class MockContext : Context
 {
     private readonly Queue<object?> _awakeableResults = new();
+    private readonly Queue<object?> _unnamedSignalResults = new();
+    private readonly Dictionary<string, object?> _signalResults = [];
+    private readonly Dictionary<string, TerminalException> _signalFailures = [];
+    private readonly List<string?> _awaitedSignals = [];
     private readonly Dictionary<string, TerminalException> _callFailures = [];
     private readonly Dictionary<string, object?> _callResults = [];
     private readonly List<RecordedCall> _calls = [];
@@ -48,6 +52,11 @@ public sealed class MockContext : Context
 
     /// <summary>All recorded Call invocations.</summary>
     public IReadOnlyList<RecordedCall> Calls => _calls;
+
+    /// <summary>
+    ///     Signals the handler awaited, in order. Null entries are unnamed signals.
+    /// </summary>
+    public IReadOnlyList<string?> AwaitedSignals => _awaitedSignals;
 
     /// <summary>All recorded Send invocations.</summary>
     public IReadOnlyList<RecordedSend> Sends => _sends;
@@ -88,6 +97,32 @@ public sealed class MockContext : Context
     public void SetupAwakeable<T>(T result)
     {
         _awakeableResults.Enqueue(result);
+    }
+
+    /// <summary>
+    ///     Sets the value the named signal resolves with. Without one, the signal resolves with
+    ///     <c>default(T)</c> so a handler awaiting it still completes in a unit test.
+    /// </summary>
+    public void SetupSignal<T>(string name, T result)
+    {
+        _signalResults[name] = result;
+    }
+
+    /// <summary>
+    ///     Configures the named signal to be rejected with a <see cref="TerminalException" />.
+    /// </summary>
+    public void SetupSignalFailure(string name, TerminalException exception)
+    {
+        _signalFailures[name] = exception;
+    }
+
+    /// <summary>
+    ///     Enqueues a value for the next unnamed signal. Values are consumed in the order the
+    ///     handler awaits signals, like <see cref="SetupAwakeable{T}" />.
+    /// </summary>
+    public void SetupSignal<T>(T result)
+    {
+        _unnamedSignalResults.Enqueue(result);
     }
 
     /// <summary>
@@ -370,6 +405,28 @@ public sealed class MockContext : Context
             Id = id,
             Value = new ValueTask<T>(value)
         };
+    }
+
+    /// <inheritdoc />
+    public override IDurableFuture<T> Signal<T>(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        _awaitedSignals.Add(name);
+
+        if (_signalFailures.TryGetValue(name, out var failure))
+            return new EagerFuture<T>(Task.FromException<T>(failure));
+
+        return new CompletedFuture<T>(_signalResults.TryGetValue(name, out var result) ? (T)result! : default!);
+    }
+
+    /// <inheritdoc />
+    public override IDurableFuture<T> Signal<T>()
+    {
+        _awaitedSignals.Add(null);
+
+        return new CompletedFuture<T>(_unnamedSignalResults.Count > 0
+            ? (T)_unnamedSignalResults.Dequeue()!
+            : default!);
     }
 
     /// <inheritdoc />
