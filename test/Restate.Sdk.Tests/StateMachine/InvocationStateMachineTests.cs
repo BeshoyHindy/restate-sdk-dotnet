@@ -1,7 +1,9 @@
 using System.IO.Pipelines;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
+using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
@@ -17,6 +19,20 @@ public class InvocationStateMachineTests : IDisposable
         InitialDelay = TimeSpan.FromMilliseconds(1),
         MaxDelay = TimeSpan.FromMilliseconds(1)
     };
+
+    /// <summary>Allows two attempts, for tests that must exhaust the policy.</summary>
+    private static readonly RetryPolicy TwoAttempts = new()
+    {
+        MaxAttempts = 2,
+        InitialDelay = TimeSpan.FromMilliseconds(1),
+        MaxDelay = TimeSpan.FromMilliseconds(1)
+    };
+
+    /// <summary>
+    ///     The completion id carried by the replayed RunCommand that
+    ///     <see cref="StartReplayedRunWithoutCompletionAsync" /> stages.
+    /// </summary>
+    private const uint ReplayedRunCompletionId = 1;
 
     private readonly Pipe _inbound = new();
     private readonly Pipe _outbound = new();
@@ -189,7 +205,93 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal(3, attempts);
 
         var frames = await DrainOutboundAsync();
-        Assert.Equal(MessageType.ProposeRunCompletion, frames[0].Type);
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.ProposeRunCompletion, frame.Type);
+        var proposal = Gen.ProposeRunCompletionMessage.Parser.ParseFrom(frame.Payload);
+        Assert.Equal(ReplayedRunCompletionId, proposal.ResultCompletionId);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReExecutedAfterReplay_ExhaustedRetriesFailTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        var attempts = 0;
+        var alwaysFails = new Func<Task<int>>(() =>
+        {
+            attempts++;
+            throw new InvalidOperationException("permanent");
+        });
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", alwaysFails, CancellationToken.None, TwoAttempts));
+
+        Assert.Equal(2, attempts);
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    [Fact]
+    public async Task RunAsync_Void_ReExecutedAfterReplay_ExhaustedRetriesFailTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        var attempts = 0;
+        var alwaysFails = new Func<Task>(() =>
+        {
+            attempts++;
+            throw new InvalidOperationException("permanent");
+        });
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", alwaysFails, CancellationToken.None, TwoAttempts));
+
+        Assert.Equal(2, attempts);
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    /// <summary>
+    ///     Asserts the re-executed run wrote nothing but a failure proposal for the replayed
+    ///     completion id. A second RunCommand would duplicate the journaled entry, and a proposal
+    ///     under a fresh id would leave the replayed one uncompletable.
+    /// </summary>
+    private static void AssertFailureProposalForReplayedRun(List<(MessageType Type, byte[] Payload)> frames)
+    {
+        var frame = Assert.Single(frames);
+        Assert.Equal(MessageType.ProposeRunCompletion, frame.Type);
+
+        var proposal = Gen.ProposeRunCompletionMessage.Parser.ParseFrom(frame.Payload);
+        Assert.Equal(ReplayedRunCompletionId, proposal.ResultCompletionId);
+        Assert.Equal(Gen.ProposeRunCompletionMessage.ResultOneofCase.Failure, proposal.ResultCase);
+    }
+
+    /// <summary>
+    ///     Asserts the replayed run's wait already carries the terminal failure. Checking
+    ///     completion first keeps an unresolved wait — the bug this guards — a failed assertion
+    ///     rather than a test that hangs.
+    /// </summary>
+    private static async Task AssertWaitFailedTerminallyAsync(Task<CompletionResult> wait)
+    {
+        Assert.True(wait.IsCompleted);
+        await Assert.ThrowsAsync<TerminalException>(async () => await wait);
+    }
+
+    /// <summary>
+    ///     The wait the state machine registered for the replayed run's completion id — the same
+    ///     source a combinator awaiting that run's future observes. It is held in a private field
+    ///     with no accessor, so the test reads it directly.
+    /// </summary>
+    private static Task<CompletionResult> ReplayedRunWait(InvocationStateMachine sm)
+    {
+        var field = typeof(InvocationStateMachine)
+            .GetField("_completions", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var completions = (CompletionManager<int>)field.GetValue(sm)!;
+        return completions.GetOrRegister((int)ReplayedRunCompletionId).Task;
     }
 
     /// <summary>

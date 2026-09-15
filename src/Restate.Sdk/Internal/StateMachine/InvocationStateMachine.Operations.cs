@@ -94,7 +94,8 @@ internal sealed partial class InvocationStateMachine
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
         var result = retryPolicy is not null
-            ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false)
+            ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct, new ReplayedRun(completionId, tcs))
+                .ConfigureAwait(false)
             : await action().ConfigureAwait(false);
         var serialized = Serialize(result);
         WriteRunProposal(completionId, serialized.Span);
@@ -114,7 +115,8 @@ internal sealed partial class InvocationStateMachine
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
         if (retryPolicy is not null)
-            await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
+            await ExecuteWithRetryAsync(name, action, retryPolicy, ct, new ReplayedRun(completionId, tcs))
+                .ConfigureAwait(false);
         else
             await action().ConfigureAwait(false);
 
@@ -277,8 +279,14 @@ internal sealed partial class InvocationStateMachine
 
     // ------- Retry logic -------
 
+    /// <summary>
+    ///     The already-journaled RunCommand a re-executed closure belongs to: the completion id
+    ///     parsed from the replayed command, and the wait replay registered for it.
+    /// </summary>
+    private readonly record struct ReplayedRun(uint CompletionId, TaskCompletionSource<CompletionResult> Wait);
+
     private async Task<T> ExecuteWithRetryAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
-        CancellationToken ct)
+        CancellationToken ct, ReplayedRun? replayed = null)
     {
         var startTime = DateTimeOffset.UtcNow;
         var attempt = 0;
@@ -297,22 +305,7 @@ internal sealed partial class InvocationStateMachine
             {
                 var elapsed = DateTimeOffset.UtcNow - startTime;
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
-                {
-                    // Exhausted retries — propose failure and record journal entry
-                    var completionId = NextCompletionId();
-                    var failureMsg = ProtobufCodec.CreateRunProposalFailure(
-                        completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
-                    WriteRunCommand(name, completionId);
-                    WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
-                    await FlushAsync(ct).ConfigureAwait(false);
-
-                    // Append journal entry so _journal.Count advances — subsequent operations
-                    // (e.g. saga compensations catching this TerminalException) use correct indices.
-                    _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
-
-                    throw new TerminalException(
-                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
-                }
+                    throw await ExhaustRetriesAsync(name, attempt + 1, ex, replayed, ct).ConfigureAwait(false);
 
                 var delay = policy.GetDelay(attempt);
                 Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
@@ -323,7 +316,7 @@ internal sealed partial class InvocationStateMachine
     }
 
     private async Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
-        CancellationToken ct)
+        CancellationToken ct, ReplayedRun? replayed = null)
     {
         var startTime = DateTimeOffset.UtcNow;
         var attempt = 0;
@@ -343,19 +336,7 @@ internal sealed partial class InvocationStateMachine
             {
                 var elapsed = DateTimeOffset.UtcNow - startTime;
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
-                {
-                    var completionId = NextCompletionId();
-                    var failureMsg = ProtobufCodec.CreateRunProposalFailure(
-                        completionId, 500, $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}");
-                    WriteRunCommand(name, completionId);
-                    WriteCommand(MessageType.ProposeRunCompletion, failureMsg);
-                    await FlushAsync(ct).ConfigureAwait(false);
-
-                    _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
-
-                    throw new TerminalException(
-                        $"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
-                }
+                    throw await ExhaustRetriesAsync(name, attempt + 1, ex, replayed, ct).ConfigureAwait(false);
 
                 var delay = policy.GetDelay(attempt);
                 Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
@@ -363,6 +344,46 @@ internal sealed partial class InvocationStateMachine
                 attempt++;
             }
         }
+    }
+
+    /// <summary>
+    ///     Records a Run whose retries ran out as a terminal failure and returns the exception the
+    ///     caller throws. On the live path the RunCommand has not been written yet, so a fresh
+    ///     completion id, its command and a journal entry are added. On the re-execution path the
+    ///     command is already journaled under the replayed id: only the proposal is written, and the
+    ///     replayed wait is failed so anything observing that run's future sees the terminal error
+    ///     instead of waiting for a completion the runtime can never deliver.
+    /// </summary>
+    private async Task<TerminalException> ExhaustRetriesAsync(string name, int attempts, Exception cause,
+        ReplayedRun? replayed, CancellationToken ct)
+    {
+        var message = $"Run '{name}' failed after {attempts} attempt(s): {cause.Message}";
+        var completionId = replayed?.CompletionId ?? NextCompletionId();
+
+        if (replayed is null)
+            WriteRunCommand(name, completionId);
+
+        WriteCommand(MessageType.ProposeRunCompletion,
+            ProtobufCodec.CreateRunProposalFailure(completionId, 500, message));
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        var terminal = new TerminalException(message, 500);
+
+        if (replayed is { } run)
+        {
+            // Mark the fault observed: the wait belongs to a replayed command that nothing else
+            // has to await, and an unobserved faulted task raises UnobservedTaskException.
+            if (run.Wait.TrySetException(terminal))
+                _ = run.Wait.Task.Exception;
+        }
+        else
+        {
+            // Append journal entry so _journal.Count advances — subsequent operations
+            // (e.g. saga compensations catching this TerminalException) use correct indices.
+            _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
+        }
+
+        return terminal;
     }
 
     private void WriteRunCommand(string name, uint completionId)
