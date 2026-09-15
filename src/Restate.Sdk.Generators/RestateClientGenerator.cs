@@ -224,6 +224,7 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     method.Name));
 
             var hasContext = false;
+            var hasRunContext = false;
             var inputParamCount = 0;
             string? firstInputName = null;
 
@@ -235,13 +236,24 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     continue;
                 }
 
+                // RESTATE002: IRunContext belongs to a Run block, so the invoker cannot supply it.
+                if (IsRunContextInterface(param.Type))
+                {
+                    hasRunContext = true;
+                    diagnostics.Add(Diagnostic.Create(
+                        Diagnostics.RunContextParameter,
+                        method.Locations.FirstOrDefault() ?? classDecl.GetLocation(),
+                        method.Name));
+                    continue;
+                }
+
                 if (param.Type.Name == "CancellationToken") continue;
                 inputParamCount++;
                 firstInputName ??= param.Name;
             }
 
             // RESTATE002: Missing context parameter
-            if (!hasContext)
+            if (!hasContext && !hasRunContext)
                 diagnostics.Add(Diagnostic.Create(
                     Diagnostics.MissingContextParameter,
                     method.Locations.FirstOrDefault() ?? classDecl.GetLocation(),
@@ -314,7 +326,7 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
     private static readonly string[] ContextInterfaceNames =
     {
         "IContext", "ISharedObjectContext", "IObjectContext",
-        "ISharedWorkflowContext", "IWorkflowContext", "IRunContext"
+        "ISharedWorkflowContext", "IWorkflowContext"
     };
 
     private static bool IsContextType(ITypeSymbol type)
@@ -328,16 +340,10 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
             current = current.BaseType;
         }
 
-        // A handler may take a context interface instead of a context class. AllInterfaces
-        // covers inherited interfaces, so IWorkflowContext is matched through IContext too.
-        if (IsContextInterface(type))
-            return true;
-
-        foreach (var implemented in type.AllInterfaces)
-            if (IsContextInterface(implemented))
-                return true;
-
-        return false;
+        // A handler may take one of the SDK context interfaces instead of a context class.
+        // Nothing else qualifies: the invoker casts the runtime Context to the declared type, so a
+        // type that merely implements or extends a context interface can never be supplied.
+        return IsContextInterface(type);
     }
 
     private static bool IsContextInterface(ITypeSymbol type)
@@ -350,6 +356,12 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                 return true;
 
         return false;
+    }
+
+    /// <summary>IRunContext is handed out by Run, never by the invoker, so it is not a handler context.</summary>
+    private static bool IsRunContextInterface(ITypeSymbol type)
+    {
+        return type.TypeKind == TypeKind.Interface && type.Name == "IRunContext" && IsRestateSdkType(type);
     }
 
     private static bool IsRestateSdkType(ITypeSymbol type)

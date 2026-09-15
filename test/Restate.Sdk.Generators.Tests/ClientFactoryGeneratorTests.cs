@@ -19,7 +19,8 @@ public class ClientFactoryGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "RestateClientFactory.g.cs");
 
         Assert.NotNull(generated);
@@ -55,7 +56,8 @@ public class ClientFactoryGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "RestateClientFactory.g.cs");
 
         Assert.NotNull(generated);
