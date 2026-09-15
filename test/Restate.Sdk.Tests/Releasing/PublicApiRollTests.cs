@@ -102,10 +102,46 @@ public sealed class PublicApiRollTests : IDisposable
     [Fact]
     public void ReleaseWorkflow_runs_the_roll_script()
     {
-        var workflow = File.ReadAllText(
-            Path.Combine(RepoRoot(), ".github", "workflows", "release-please.yml"));
+        Assert.Contains("roll-public-api.sh", ReleaseWorkflow(), StringComparison.Ordinal);
+    }
 
-        Assert.Contains("roll-public-api.sh", workflow, StringComparison.Ordinal);
+    /// <summary>
+    ///     GitHub evaluates a step's <c>env:</c> and <c>with:</c> even when its <c>if:</c> is
+    ///     false, and the release action leaves its <c>pr</c> output empty whenever it leaves the
+    ///     release pull request unchanged. Parsing that output in an expression therefore fails
+    ///     the whole workflow rather than skipping the step, so the workflow hands the raw output
+    ///     to <c>run:</c> and parses it there.
+    /// </summary>
+    [Fact]
+    public void ReleaseWorkflow_never_parses_the_release_output_in_an_expression()
+    {
+        var workflow = ReleaseWorkflow();
+
+        Assert.DoesNotMatch(@"fromJson\(\s*steps\.release\.outputs\.", workflow);
+        Assert.Contains("PR_JSON: ${{ steps.release.outputs.pr }}", workflow, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The release action reports a pull request only when it creates or updates one, so
+    ///     gating the roll on that output skips it whenever the release pull request stayed the
+    ///     same — and the release would then be tagged with entries still unshipped. The workflow
+    ///     looks the open release pull request up instead.
+    /// </summary>
+    [Fact]
+    public void ReleaseWorkflow_rolls_onto_any_open_release_pull_request()
+    {
+        var workflow = ReleaseWorkflow();
+
+        Assert.DoesNotMatch(@"if:\s*steps\.release\.outputs\.pr", workflow);
+        Assert.Contains("gh pr list", workflow, StringComparison.Ordinal);
+        Assert.Contains("release-please--branches--main", workflow, StringComparison.Ordinal);
+        Assert.Contains("--state open", workflow, StringComparison.Ordinal);
+    }
+
+    private static string ReleaseWorkflow()
+    {
+        return File.ReadAllText(
+            Path.Combine(RepoRoot(), ".github", "workflows", "release-please.yml"));
     }
 
     /// <summary>Builds a throwaway src tree: one directory per project, each with both API files.</summary>
