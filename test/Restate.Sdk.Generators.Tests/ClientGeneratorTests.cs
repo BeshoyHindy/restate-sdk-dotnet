@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.CodeAnalysis;
 
 namespace Restate.Sdk.Generators.Tests;
@@ -21,7 +22,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -51,7 +53,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "CounterObjectClient.g.cs");
 
         Assert.NotNull(generated);
@@ -84,7 +87,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "OrderWorkflowClient.g.cs");
 
         Assert.NotNull(generated);
@@ -110,7 +114,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -136,7 +141,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "MyServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -178,7 +184,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (_, _, diagnostics) = GeneratorTestHelper.RunGenerator(source);
+        var (_, output, diagnostics) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
 
         var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToArray();
         Assert.Empty(errors);
@@ -201,7 +208,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -227,7 +235,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -376,7 +385,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
         Assert.Empty(diagnostics);
@@ -401,8 +411,10 @@ public class ClientGeneratorTests
 
         var withClass = withInterface.Replace("IContext ctx", "Context ctx", StringComparison.Ordinal);
 
-        var (interfaceDriver, _, _) = GeneratorTestHelper.RunGenerator(withInterface);
-        var (classDriver, _, _) = GeneratorTestHelper.RunGenerator(withClass);
+        var (interfaceDriver, interfaceOutput, _) = GeneratorTestHelper.RunGenerator(withInterface);
+        var (classDriver, classOutput, _) = GeneratorTestHelper.RunGenerator(withClass);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(interfaceOutput);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(classOutput);
 
         Assert.Empty(GeneratorTestHelper.GetGeneratorDiagnostics(interfaceDriver));
 
@@ -445,8 +457,10 @@ public class ClientGeneratorTests
             .Replace("IObjectContext ctx", "ObjectContext ctx", StringComparison.Ordinal)
             .Replace("ISharedObjectContext ctx", "SharedObjectContext ctx", StringComparison.Ordinal);
 
-        var (interfaceDriver, _, _) = GeneratorTestHelper.RunGenerator(withInterfaces);
-        var (classDriver, _, _) = GeneratorTestHelper.RunGenerator(withClasses);
+        var (interfaceDriver, interfaceOutput, _) = GeneratorTestHelper.RunGenerator(withInterfaces);
+        var (classDriver, classOutput, _) = GeneratorTestHelper.RunGenerator(withClasses);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(interfaceOutput);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(classOutput);
 
         Assert.Empty(GeneratorTestHelper.GetGeneratorDiagnostics(interfaceDriver));
 
@@ -486,6 +500,88 @@ public class ClientGeneratorTests
     }
 
     [Fact]
+    public void Handler_ClassImplementingContextInterface_EmitsRESTATE002()
+    {
+        // The stub declares IContext in its base list only; the generator matches on the declared
+        // parameter type, and the invoker cannot cast the runtime Context to a user class.
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     public abstract class UserContext : IContext;
+
+                     [Service]
+                     public class BadService
+                     {
+                         [Handler]
+                         public Task<string> Greet(UserContext ctx) => Task.FromResult("Hello");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        Assert.Contains(diagnostics, d => d.Id == "RESTATE002");
+
+        // A cast the generated code cannot compile must not be emitted either.
+        var invoker = GeneratorTestHelper.GetGeneratedSource(driver, "BadServiceInvokers.g.cs");
+        Assert.NotNull(invoker);
+        Assert.DoesNotContain("(global::TestApp.UserContext)context", invoker);
+    }
+
+    [Fact]
+    public void Handler_UserInterfaceExtendingContextInterface_EmitsRESTATE002()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     public interface IUserContext : IContext;
+
+                     [Service]
+                     public class BadService
+                     {
+                         [Handler]
+                         public Task<string> Greet(IUserContext ctx) => Task.FromResult("Hello");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        // The invoker is handed a Restate.Sdk.Context, which never implements a user interface.
+        Assert.Contains(diagnostics, d => d.Id == "RESTATE002");
+    }
+
+    [Fact]
+    public void Handler_RunContextParameter_EmitsRESTATE002()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Service]
+                     public class BadService
+                     {
+                         [Handler]
+                         public Task<string> Greet(IRunContext ctx) => Task.FromResult("Hello");
+                     }
+                     """;
+
+        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "RESTATE002");
+        Assert.Contains("only valid inside", diagnostic.GetMessage(CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public void Workflow_LowercaseRunHandler_NoRESTATE004()
     {
         var source = """
@@ -502,7 +598,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
         Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE004");
@@ -530,7 +627,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
         Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE004");
@@ -576,7 +674,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -604,7 +703,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "MyServiceClient.g.cs");
 
         Assert.NotNull(generated);
@@ -629,7 +729,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "CounterObjectClient.g.cs");
 
         Assert.NotNull(generated);
@@ -678,7 +779,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
         Assert.Empty(diagnostics);
@@ -724,7 +826,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "CounterObjectClient.g.cs");
 
         Assert.NotNull(generated);
@@ -754,7 +857,8 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var generated = GeneratorTestHelper.GetGeneratedSource(driver, "GreeterServiceClient.g.cs");
 
         Assert.NotNull(generated);

@@ -20,6 +20,14 @@ internal static class Diagnostics
         DiagnosticSeverity.Warning,
         true);
 
+    public static readonly DiagnosticDescriptor RunContextParameter = new(
+        "RESTATE002",
+        "Invalid context parameter",
+        "Handler '{0}' takes an IRunContext parameter. IRunContext is only valid inside Run; take a Context (or derived) parameter instead.",
+        "Restate",
+        DiagnosticSeverity.Warning,
+        true);
+
     public static readonly DiagnosticDescriptor NestedServiceClass = new(
         "RESTATE003",
         "Nested service class",

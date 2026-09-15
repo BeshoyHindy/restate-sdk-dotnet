@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -6,17 +7,17 @@ namespace Restate.Sdk.Generators.Tests;
 
 internal static class GeneratorTestHelper
 {
+    private static readonly MetadataReference[] References = LoadMetadataReferences();
+
     public static (GeneratorDriver Driver, Compilation OutputCompilation, ImmutableArray<Diagnostic> Diagnostics)
         RunGenerator(string source)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
 
-        var references = GetMetadataReferences();
-
         var compilation = CSharpCompilation.Create(
             "TestAssembly",
             [syntaxTree],
-            references,
+            References,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         var generator = new RestateClientGenerator();
@@ -42,17 +43,33 @@ internal static class GeneratorTestHelper
         return null;
     }
 
-    private static MetadataReference[] GetMetadataReferences()
+    /// <summary>
+    ///     Asserts that the generated sources compile. A handler the generator accepts but cannot
+    ///     emit an invoker for shows up here as an error in a .g.cs file rather than as a silent
+    ///     break in the consuming project.
+    /// </summary>
+    public static void AssertGeneratedCodeCompiles(Compilation outputCompilation)
     {
-        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        var errors = outputCompilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error
+                        && d.Location.SourceTree?.FilePath.EndsWith(".g.cs", StringComparison.Ordinal) == true)
+            .Select(d => $"{d.Location.SourceTree!.FilePath}: {d.Id} {d.GetMessage(CultureInfo.InvariantCulture)}")
+            .ToArray();
 
-        return
-        [
-            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-            MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Runtime.dll")),
-            MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Threading.Tasks.dll")),
-            MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Collections.dll")),
-            MetadataReference.CreateFromFile(typeof(Context).Assembly.Location)
-        ];
+        Assert.True(errors.Length == 0,
+            $"Generated sources did not compile:{Environment.NewLine}{string.Join(Environment.NewLine, errors)}");
+    }
+
+    private static MetadataReference[] LoadMetadataReferences()
+    {
+        // Reference everything the test host itself runs against, so the generated sources see
+        // the same framework and SDK assemblies a real consuming project would.
+        var trustedAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "";
+
+        return trustedAssemblies
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .ToArray();
     }
 }
