@@ -8,6 +8,7 @@
           "files": [
             "Restate.Sdk/Restate.Sdk.csproj",
             "Restate.Sdk.Testing/Restate.Sdk.Testing.csproj",
+            "Restate.Sdk.Testing.Containers/Restate.Sdk.Testing.Containers.csproj",
             "Restate.Sdk.Lambda/Restate.Sdk.Lambda.csproj"
           ]
         }
