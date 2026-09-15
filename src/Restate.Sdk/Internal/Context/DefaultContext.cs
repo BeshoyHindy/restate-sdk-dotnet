@@ -7,6 +7,10 @@ namespace Restate.Sdk.Internal.Context;
 
 internal sealed class DefaultContext : Restate.Sdk.Context
 {
+    // A rejected signal reaches the awaiting handler as a terminal failure. 500 is what the
+    // ingress uses for a rejected awakeable, and what RejectAwakeable already sends.
+    private const ushort SignalRejectionCode = 500;
+
     private readonly ILogger _logger;
     private readonly InvocationStateMachine _stateMachine;
     private DurableConsole? _console;
@@ -300,6 +304,36 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         if (serde is not null)
             return serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
         return _stateMachine.Deserialize<T>(result.Value);
+    }
+
+    public override ValueTask ResolveSignal<T>(string invocationId, string name, T value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return _stateMachine.ResolveSignalAsync(invocationId, name, null, _stateMachine.SerializeWithSerde(value, null), Aborted);
+    }
+
+    public override ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentOutOfRangeException.ThrowIfNegative(signalIndex);
+        return _stateMachine.ResolveSignalAsync(invocationId, null, (uint)signalIndex,
+            _stateMachine.SerializeWithSerde(value, null), Aborted);
+    }
+
+    public override ValueTask RejectSignal(string invocationId, string name, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return _stateMachine.RejectSignalAsync(invocationId, name, null, reason, SignalRejectionCode, Aborted);
+    }
+
+    public override ValueTask RejectSignal(string invocationId, int signalIndex, string reason)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(invocationId);
+        ArgumentOutOfRangeException.ThrowIfNegative(signalIndex);
+        return _stateMachine.RejectSignalAsync(invocationId, null, (uint)signalIndex, reason, SignalRejectionCode,
+            Aborted);
     }
 
     public override void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null)

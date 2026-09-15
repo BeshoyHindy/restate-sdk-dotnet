@@ -82,6 +82,37 @@ var first = await ctx.Race(ctx.Signal<string>("approved"), ctx.Signal<string>("r
 var unnamed = await ctx.Signal<string>().GetResult();
 ```
 
+## Resolving and rejecting signals
+
+The other half of a signal is the side that completes it. From a handler, address the target
+invocation through its **invocation handle**:
+
+```csharp
+InvocationHandle target = await ctx.Send("ReviewService", "Review", request);
+
+// Resolve the signal the target handler awaits by name
+await target.ResolveSignal(ctx, "approval", "granted");
+
+// Or reject it: the awaiting handler fails with a TerminalException carrying the reason
+await target.RejectSignal(ctx, "approval", "not approved");
+
+// Unnamed signals are addressed by index instead of name
+await ctx.ResolveSignal(target.InvocationId, 17, "granted");
+await ctx.RejectSignal(target.InvocationId, 17, "not approved");
+```
+
+From outside the runtime, `RestateClient` completes a signal by **id** — the id an invocation hands
+out with `ctx.Awakeable<T>().Id`:
+
+```csharp
+await client.ResolveSignal(signalId, "granted");
+await client.RejectSignal(signalId, "not approved");
+```
+
+The ingress addresses signals by id only, so a signal awaited by name is resolvable from a handler
+but not over ingress. Sending a signal is journaled, so a replayed attempt re-traverses it without
+signalling twice.
+
 A signal resolved before the current attempt started resolves from the journal on replay, without
 waiting again. Signals and awakeables share one index allocator and one notification path: an
 awakeable is an unnamed signal plus the opaque id that addresses it, so use `ctx.Awakeable<T>()`

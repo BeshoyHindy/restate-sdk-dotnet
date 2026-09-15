@@ -162,6 +162,32 @@ public abstract class Context : IContext
     /// </summary>
     public abstract IDurableFuture<T> Signal<T>();
 
+    /// <summary>
+    ///     Resolves a named signal on another invocation. The awaiting handler receives
+    ///     <paramref name="value" /> from its <see cref="Signal{T}(string)" /> future.
+    /// </summary>
+    /// <param name="invocationId">The invocation to signal, from an <see cref="InvocationHandle" />.</param>
+    /// <param name="name">The signal name the target handler awaits.</param>
+    /// <param name="value">The value the signal resolves with.</param>
+    public abstract ValueTask ResolveSignal<T>(string invocationId, string name, T value);
+
+    /// <summary>
+    ///     Resolves an unnamed signal on another invocation, addressed by its index
+    ///     (see <see cref="Signal{T}()" />).
+    /// </summary>
+    public abstract ValueTask ResolveSignal<T>(string invocationId, int signalIndex, T value);
+
+    /// <summary>
+    ///     Rejects a named signal on another invocation: the awaiting handler's future fails with
+    ///     a <see cref="TerminalException" /> carrying <paramref name="reason" />.
+    /// </summary>
+    public abstract ValueTask RejectSignal(string invocationId, string name, string reason);
+
+    /// <summary>
+    ///     Rejects an unnamed signal on another invocation, addressed by its index.
+    /// </summary>
+    public abstract ValueTask RejectSignal(string invocationId, int signalIndex, string reason);
+
     /// <summary>Resolves a previously created awakeable with a payload.</summary>
     public abstract void ResolveAwakeable<T>(string id, T payload, ISerde<T>? serde = null);
 

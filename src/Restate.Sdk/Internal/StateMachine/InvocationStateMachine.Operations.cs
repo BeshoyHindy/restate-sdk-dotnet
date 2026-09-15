@@ -1092,6 +1092,53 @@ internal sealed partial class InvocationStateMachine
         Log.CancellingInvocation(Logger, InvocationId, targetInvocationId);
     }
 
+    // ------- Resolving signals on other invocations -------
+    //
+    // Both directions are journaled SendSignalCommands, so a replayed attempt re-traverses them
+    // without sending the signal twice.
+
+    /// <summary>Resolves a signal on another invocation with a serialized value.</summary>
+    public ValueTask ResolveSignalAsync(string targetInvocationId, string? name, uint? index,
+        ReadOnlyMemory<byte> value, CancellationToken ct)
+    {
+        EnsureActive();
+
+        if (State == InvocationState.Replaying)
+        {
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            return ValueTask.CompletedTask;
+        }
+
+        return SendSignalAsync(
+            ProtobufCodec.CreateResolveSignalCommand(targetInvocationId, name, index, value.Span), ct);
+    }
+
+    /// <summary>
+    ///     Rejects a signal on another invocation: the awaiting handler sees a terminal failure
+    ///     carrying <paramref name="reason" />.
+    /// </summary>
+    public ValueTask RejectSignalAsync(string targetInvocationId, string? name, uint? index, string reason,
+        ushort code, CancellationToken ct)
+    {
+        EnsureActive();
+
+        if (State == InvocationState.Replaying)
+        {
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            return ValueTask.CompletedTask;
+        }
+
+        return SendSignalAsync(
+            ProtobufCodec.CreateRejectSignalCommand(targetInvocationId, name, index, code, reason), ct);
+    }
+
+    private async ValueTask SendSignalAsync(Gen.SendSignalCommandMessage msg, CancellationToken ct)
+    {
+        WriteCommand(MessageType.SendSignalCommand, msg);
+        _journal.Append(JournalEntry.Completed(JournalEntryType.SendSignal, ReadOnlyMemory<byte>.Empty));
+        await FlushAsync(ct).ConfigureAwait(false);
+    }
+
     // ------- Output / Error -------
 
     /// <summary>

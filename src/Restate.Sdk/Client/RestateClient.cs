@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -337,6 +338,76 @@ public sealed class RestateClient : IDisposable
         using var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Resolves a signal on a running invocation with a value.
+    ///     <para>
+    ///         <paramref name="signalId" /> is the id an invocation hands out for an unnamed
+    ///         signal — <c>ctx.Awakeable&lt;T&gt;().Id</c>. The ingress addresses signals by id
+    ///         only: a signal awaited by name can be resolved from a handler
+    ///         (<c>InvocationHandle.ResolveSignal</c>) but has no ingress route.
+    ///     </para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="signalId" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="signalId" /> is empty.</exception>
+    [RequiresUnreferencedCode(ReflectionJsonMessage)]
+    [RequiresDynamicCode(ReflectionJsonMessage)]
+    public async Task ResolveSignal<T>(string signalId, T value, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
+        using var content = JsonContent.Create(value, options: GetReflectionJsonOptions());
+        using var response = await _http.PostAsync(SignalPath(signalId, "resolve"), content, ct)
+            .ConfigureAwait(false);
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Resolves a signal on a running invocation with a value.
+    ///     AOT-safe: serializes the value using the provided <see cref="JsonTypeInfo{T}" />.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="signalId" /> or <paramref name="valueTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="signalId" /> is empty.</exception>
+    public async Task ResolveSignal<T>(string signalId, T value, JsonTypeInfo<T> valueTypeInfo,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
+        ArgumentNullException.ThrowIfNull(valueTypeInfo);
+        using var content = JsonContent.Create(value, valueTypeInfo);
+        using var response = await _http.PostAsync(SignalPath(signalId, "resolve"), content, ct)
+            .ConfigureAwait(false);
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Rejects a signal on a running invocation: the handler awaiting it fails with a terminal
+    ///     error carrying <paramref name="reason" />.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="signalId" /> or <paramref name="reason" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="signalId" /> is empty.</exception>
+    public async Task RejectSignal(string signalId, string reason, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
+        ArgumentNullException.ThrowIfNull(reason);
+
+        // The reject endpoint takes the reason as the raw body, not JSON.
+        using var content = new StringContent(reason, Encoding.UTF8, "text/plain");
+        using var response = await _http.PostAsync(SignalPath(signalId, "reject"), content, ct)
+            .ConfigureAwait(false);
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The ingress route for completing a signal by id, which the server serves under
+    ///     <c>/restate/awakeables</c> for both signal ids and legacy awakeable ids.
+    /// </summary>
+    private static string SignalPath(string signalId, string verb)
+    {
+        return $"/restate/awakeables/{signalId}/{verb}";
     }
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
