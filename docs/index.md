@@ -13,6 +13,7 @@ applications using *distributed durable async/await*.
 |---------|-------------|
 | `Restate.Sdk` | Core SDK with bundled source generator |
 | `Restate.Sdk.Testing` | Mock contexts for unit testing |
+| `Restate.Sdk.Testing.Containers` | Testcontainers harness for integration testing |
 | `Restate.Sdk.Lambda` | AWS Lambda adapter |
 
 ## Contents
@@ -21,6 +22,9 @@ applications using *distributed durable async/await*.
 - [Service Types](guide/service-types.md) — Service, Virtual Object, Workflow
 - [Durable Building Blocks](guide/durable-building-blocks.md) — Run, Sleep, state, awakeables, calls
 - [Testing](guide/testing.md) — mock contexts for unit tests
+- [Integration Testing with Testcontainers](guide/testcontainers.md) — a real Restate server in Docker
+- [Request Identity Verification](guide/request-identity.md) — verify that requests come from Restate
+- [Telemetry](guide/telemetry.md) — metrics, spans, and replay-aware logging
 - [AWS Lambda](guide/lambda.md) — deploy handlers as Lambda functions
 - [Native AOT](guide/native-aot.md) — ahead-of-time compiled deployments
 - [API Reference](api/Restate.Sdk.yml) — generated from XML documentation

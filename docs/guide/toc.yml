@@ -6,6 +6,12 @@
   href: durable-building-blocks.md
 - name: Testing
   href: testing.md
+- name: Integration Testing with Testcontainers
+  href: testcontainers.md
+- name: Request Identity Verification
+  href: request-identity.md
+- name: Telemetry
+  href: telemetry.md
 - name: AWS Lambda
   href: lambda.md
 - name: Native AOT
