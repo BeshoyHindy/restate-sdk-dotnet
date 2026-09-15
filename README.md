@@ -292,6 +292,8 @@ CancellationToken ct = ctx.Aborted;     // fires when invocation is cancelled
 
 #### Scope and limit key
 
+> New in 0.3.0.
+
 A **scope** is a named server-side concurrency limit: invocations sent into it run under the limit
 configured for that scope on the server. A **limit key** narrows that limit further, to the
 invocations inside the scope sharing the same key (one tenant, one customer, one device). Both are
@@ -309,6 +311,48 @@ var quote = await client.QuoteAsync(request, CallOptions.WithScope("tenant-a", "
 var sender = ctx.ServiceSendClient<IEmailServiceSendClient>(SendOptions.WithScope("tenant-a"));
 await sender.SendEmailSend(request);
 ```
+
+#### Signals
+
+> New in 0.3.0.
+
+A **signal** is a durable value delivered to a running invocation from outside it. The handler awaits
+it by name and suspends until it is completed; whoever holds the **invocation handle** resolves or
+rejects it. Unlike an awakeable, a named signal needs no id passed around -- the name is the
+rendezvous point.
+
+```csharp
+[Workflow]
+public class ReviewWorkflow
+{
+    [Handler]
+    public async Task<string> Run(WorkflowContext ctx, ReviewRequest request)
+    {
+        // Suspends here until someone completes the signal named "approval"
+        var decision = await ctx.Signal<string>("approval").GetResult();
+        return decision;
+    }
+}
+```
+
+The completing side addresses the target invocation through the handle its send returned:
+
+```csharp
+InvocationHandle target = await ctx.Send("ReviewWorkflow", request.Id, "Run", request);
+
+// Resolve the signal the target awaits by name...
+await target.ResolveSignal(ctx, "approval", "granted");
+
+// ...or reject it: the awaiting handler fails with the reason
+await target.RejectSignal(ctx, "approval", "not approved");
+
+// Unnamed signals (ctx.Signal<T>()) are addressed by index instead -- the first is 17
+await ctx.ResolveSignal(target.InvocationId, 17, "granted");
+```
+
+Signals are durable futures, so they compose with `All`, `Race`, `Any` and `AllSettled` like any
+other. From outside the runtime, `RestateClient.ResolveSignal` and `RestateClient.RejectSignal`
+complete a signal by id -- the id an invocation hands out with `ctx.Awakeable<T>().Id`.
 
 ### Error Handling
 
@@ -342,6 +386,42 @@ var app = builder.Build();
 app.MapRestate();
 await app.RunAsync();
 ```
+
+### Request Identity Verification
+
+Restate signs the requests it sends to your endpoint. Configure the `publickeyv1_...` keys printed by
+`restate-server` on startup, and every request to `/invoke` and `/discover` must then carry a valid
+`x-restate-jwt-v1` signature; unsigned or mis-signed requests are rejected with `401 Unauthorized`.
+With no keys configured nothing is verified, which is what local development wants.
+
+```csharp
+await RestateHost.CreateBuilder()
+    .AddService<GreeterService>()
+    .WithIdentityKeys("publickeyv1_F6EnyGehkp5cx8JQcSajjYv282Y2N9zYx7BfNi69gSPh")
+    .Build()
+    .RunAsync();
+```
+
+The same keys are configurable on `RestateOptions` (`AddRestate(opts => opts.WithIdentityKeys(...))`)
+and on `RestateLambdaHandler`. See the [request identity guide](docs/guide/request-identity.md).
+
+### Telemetry
+
+The SDK exposes an `ActivitySource` and a `Meter`, both named `Restate.Sdk`. Every invocation gets a
+span, and the meter records `restate.sdk.invocations`, `restate.sdk.invocation.duration` and
+`restate.sdk.journal.replayed_commands`. Per-operation activities for `Run`, `Call` and `Sleep` are
+off by default -- turn them on through `RestateTelemetryOptions`:
+
+```csharp
+await RestateHost.CreateBuilder()
+    .AddService<GreeterService>()
+    .ConfigureTelemetry(telemetry => telemetry.EnableOperationActivities = true)
+    .Build()
+    .RunAsync();
+```
+
+`ctx.Logger` is replay-aware: it logs while the handler runs for real and stays silent while the
+journal replays. See the [telemetry guide](docs/guide/telemetry.md).
 
 ### AWS Lambda
 
@@ -442,6 +522,29 @@ Assert.Single(ctx.Cancellations);
 Assert.Equal("inv-123", ctx.Cancellations[0]);
 ```
 
+#### Integration testing with Testcontainers
+
+`Restate.Sdk.Testing.Containers` runs handlers against a real Restate server in Docker.
+`RestateTestHarness.StartAsync` hosts the endpoint, starts the pinned
+`docker.io/restatedev/restate:1.7` container, registers the deployment and exposes an ingress client:
+
+```csharp
+using Restate.Sdk.Testing.Containers;
+
+await using var harness = await RestateTestHarness.StartAsync(
+    builder => builder.AddService<GreeterService>());
+
+var greeting = await harness.Client
+    .Service("GreeterService")
+    .Call<string>("Greet", "World");
+
+Assert.Equal("Hello, World!", greeting);
+```
+
+Reach for the mock contexts when the handler's own logic is under test, and for the harness when the
+runtime's behaviour is -- retries, suspension, state surviving across invocations. See the
+[Testcontainers guide](docs/guide/testcontainers.md).
+
 ### Interfaces
 
 Context interfaces (`IContext`, `IObjectContext`, etc.) are available for utility methods,
@@ -484,6 +587,8 @@ var quote = await client.Service("PricingService")
 await client.Service("EmailService")
     .Send("SendEmail", request, SendOptions.WithScope("tenant-a"));
 ```
+
+> New in 0.3.0: the scoped ingress paths above, and the typed exception below.
 
 Any non-success ingress response throws a `RestateIngressException`:
 
@@ -547,7 +652,23 @@ dotnet run
 
 | SDK Version | Restate Server | Protocol | .NET |
 |-------------|----------------|----------|------|
+| 0.1.0-alpha.1 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.2 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.3 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.4 | 1.6.0+ | v5 - v6 | .NET 10.0 |
+| 0.1.0-alpha.5 | 1.6.0+ | v5 - v6 | .NET 10.0 |
 | 0.2.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+| 0.2.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+| 0.3.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+
+The protocol version is negotiated per invocation from the request content type, so the SDK and the
+server settle on the highest version both support; v5 is the floor, which is why the minimum server
+version has not moved. 0.3.0 is the release being cut from `main`: it is the first to carry scope and
+limit key, signals, and `RestateIngressException` -- everything else documented here is in 0.2.1.
+
+Two features degrade rather than fail against older servers: scope and limit key need a server that
+honours them (CI runs against restate-server 1.7), and `RestateIngressException.ErrorSource` and
+`ErrorCode` are only reported by restate-server 1.7.4 and newer.
 
 ## Contributing
 
@@ -577,9 +698,16 @@ dotnet format --verify-no-changes
 
 ### CI
 
-Pull requests run two GitHub Actions jobs automatically:
-- **Build & Test** -- builds in Release mode and runs all tests
-- **Format Check** -- verifies `dotnet format` compliance
+Every pull request runs five required checks:
+- **Build & Test** (`ci.yml`) -- builds in Release mode, runs all tests with coverage, packs the
+  NuGet packages and verifies the source generator is bundled
+- **Format Check** (`ci.yml`) -- verifies `dotnet format --verify-no-changes` compliance
+- **Integration Test** (`ci.yml`) -- runs after `Build & Test`: starts a real Restate server in
+  Docker and drives the samples end to end, including the Native AOT builds and request identity
+- **analyze** (`codeql.yml`) -- CodeQL security analysis for C#
+- **Validate PR title** (`pr-title.yml`) -- enforces the Conventional Commits title
+
+`docs.yml` builds the docfx site and publishes it to GitHub Pages on pushes to `main`.
 
 ## License
 
