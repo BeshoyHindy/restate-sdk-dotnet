@@ -1,1 +1,14 @@
 #nullable enable
+Restate.Sdk.Testing.RecordedCall.LimitKey.get -> string?
+Restate.Sdk.Testing.RecordedCall.LimitKey.init -> void
+Restate.Sdk.Testing.RecordedCall.Scope.get -> string?
+Restate.Sdk.Testing.RecordedCall.Scope.init -> void
+Restate.Sdk.Testing.RecordedSend.LimitKey.get -> string?
+Restate.Sdk.Testing.RecordedSend.LimitKey.init -> void
+Restate.Sdk.Testing.RecordedSend.Scope.get -> string?
+Restate.Sdk.Testing.RecordedSend.Scope.init -> void
+override Restate.Sdk.Testing.MockContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>

@@ -526,6 +526,99 @@ public class RestateClientTests
         }
     }
 
+    // ── Scope and limit key ──
+
+    [Fact]
+    public async Task Call_WithScope_UsesVersionedIngressPath()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.Service("Greeter").Call(
+            "Greet", ClientTestJsonContext.Default.GreetResponse, CallOptions.WithScope("tenant-a"));
+
+        // Matches sdk-go's makeIngressUrl and the Java client: a scope moves the request to the
+        // versioned API, which carries the scope and the verb in the path.
+        Assert.Equal("/restate/scope/tenant-a/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task Call_WithScopeOnVirtualObject_KeepsTheKeyInThePath()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.VirtualObject("Counter", "my-key").Call(
+            "Add", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
+            ClientTestJsonContext.Default.GreetResponse, CallOptions.WithScope("tenant-a", "customer-7"));
+
+        Assert.Equal("/restate/scope/tenant-a/call/Counter/my-key/Add",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("customer-7", handler.LastRequest.Headers.GetValues("x-restate-limit-key").Single());
+    }
+
+    [Fact]
+    public async Task Call_WithIdempotencyKeyOption_SendsTheHeader()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.Service("Greeter").Call<GreetResponse>(
+            "Greet", new GreetRequest("Ada"), CallOptions.WithIdempotencyKey("order-1"));
+
+        Assert.Equal("/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("order-1", handler.LastRequest.Headers.GetValues("idempotency-key").Single());
+        Assert.False(handler.LastRequest.Headers.Contains("x-restate-limit-key"));
+    }
+
+    [Fact]
+    public async Task Send_WithScope_UsesVersionedIngressPathWithSendVerb()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+
+        var invocationId = await client.Service("Greeter").Send(
+            "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
+            SendOptions.WithScope("tenant-a", "customer-7"));
+
+        // The scoped form carries the verb in the prefix — there is no "/send" suffix.
+        Assert.Equal("/restate/scope/tenant-a/send/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("customer-7", handler.LastRequest.Headers.GetValues("x-restate-limit-key").Single());
+        Assert.Equal("inv-1", invocationId);
+    }
+
+    [Fact]
+    public async Task Send_WithoutScope_KeepsTheUnversionedSendPath()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+
+        await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+            new SendOptions { Delay = TimeSpan.FromSeconds(30), IdempotencyKey = "order-1" });
+
+        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("?delay=30000ms", handler.LastRequest.RequestUri.Query);
+        Assert.Equal("order-1", handler.LastRequest.Headers.GetValues("idempotency-key").Single());
+        Assert.False(handler.LastRequest.Headers.Contains("x-restate-limit-key"));
+    }
+
+    [Fact]
+    public async Task LimitKeyWithoutScope_ThrowsWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        var call = await Assert.ThrowsAsync<ArgumentException>(() => client.Service("Greeter").Call(
+            "Greet", ClientTestJsonContext.Default.GreetResponse, new CallOptions { LimitKey = "customer-7" }));
+        Assert.Equal("options", call.ParamName);
+
+        var send = await Assert.ThrowsAsync<ArgumentException>(() => client.Service("Greeter").Send(
+            "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
+            new SendOptions { LimitKey = "customer-7" }));
+        Assert.Equal("options", send.ParamName);
+
+        Assert.Null(handler.LastRequest);
+    }
+
     internal sealed class StubHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

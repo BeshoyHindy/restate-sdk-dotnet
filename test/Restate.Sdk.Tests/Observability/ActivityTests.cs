@@ -174,7 +174,7 @@ public class ActivityTests
         using var invocation = InvocationHandler.ActivitySource.StartActivity("obs-act-5-invocation");
         Assert.NotNull(invocation);
 
-        var call = sm.CallAsync<string>("OtherService", null, "Echo", "ping", CancellationToken.None);
+        var call = sm.CallAsync<string>("OtherService", null, "Echo", "ping", default, CancellationToken.None);
 
         // CallAsync appends the dummy invocation-id notification slot at index 0,
         // so the call itself awaits completion id 1.

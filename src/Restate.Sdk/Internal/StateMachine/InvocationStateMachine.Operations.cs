@@ -415,44 +415,49 @@ internal sealed partial class InvocationStateMachine
         return (tcs, value);
     }
 
-    // ------- Calls -------
+    // ------- Calls and sends -------
+    //
+    // Every entry point below — typed, untyped, and future — writes the same command and differs
+    // only in how the request was serialized and what it does with the result, so they all funnel
+    // through BeginCallAsync / SendCoreAsync.
 
     /// <summary>
     ///     CallCommand includes invocation_id_notification_idx (field 10).
     ///     The invocation-id notification gets its own completion id, which the SDK ignores for
-    ///     request/response calls.
+    ///     request/response calls. The idempotency key, scope and limit key are written only when
+    ///     the options carry them.
     /// </summary>
     private void WriteCallCommandMessage(string service, string handler, string? key, ReadOnlyMemory<byte> requestBytes,
-        uint invocationIdNotificationIdx, uint completionId)
+        uint invocationIdNotificationIdx, uint completionId, in CallOptions options)
     {
         var msg = ProtobufCodec.CreateCallCommand(
-            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx);
+            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx,
+            options.IdempotencyKey, options.Scope, options.LimitKey);
         WriteCommand(MessageType.CallCommand, msg);
     }
 
     private void WriteSendCommandMessage(string service, string handler, string? key, ReadOnlyMemory<byte> requestBytes,
-        TimeSpan? delay, string? idempotencyKey, uint notificationIdx)
+        in SendOptions options, uint notificationIdx)
     {
-        var invokeTime = delay.HasValue && delay.Value > TimeSpan.Zero
-            ? (ulong)DateTimeOffset.UtcNow.Add(delay.Value).ToUnixTimeMilliseconds()
+        var invokeTime = options.Delay is { } delay && delay > TimeSpan.Zero
+            ? (ulong)DateTimeOffset.UtcNow.Add(delay).ToUnixTimeMilliseconds()
             : 0UL;
         var msg = ProtobufCodec.CreateSendCommand(
-            service, handler, key, requestBytes.Span, invokeTime, idempotencyKey, notificationIdx);
+            service, handler, key, requestBytes.Span, invokeTime, options.IdempotencyKey, notificationIdx,
+            options.Scope, options.LimitKey);
         WriteCommand(MessageType.OneWayCallCommand, msg);
     }
 
-    public async ValueTask<TResponse> CallAsync<TResponse>(
-        string service, string? key, string handler, object? request, CancellationToken ct)
+    /// <summary>
+    ///     Writes the CallCommand for a live call and returns the source that resolves with its
+    ///     result, plus the completion id it is registered under. <paramref name="requestBytes" />
+    ///     must already be serialized: the shared serialization buffer is only valid until the
+    ///     next Serialize call, and this copies it into the command before the first await.
+    /// </summary>
+    private async ValueTask<(TaskCompletionSource<CompletionResult> Tcs, uint CompletionId)> BeginCallAsync(
+        string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes, CallOptions options,
+        CancellationToken ct)
     {
-        EnsureActive();
-
-        if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
-
-        using var activity = StartCallActivity(service, handler);
-
-        var requestBytes = SerializeObject(request);
-
         // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
         // registered: the live notification is stored as an early result by TryComplete, and a
         // pending registration would otherwise be poisoned on EOF and advertised in the
@@ -464,14 +469,73 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
         var tcs = _completions.GetOrRegister((int)completionId);
 
-        WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
+        WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId,
+            options);
 
         await FlushAsync(ct).ConfigureAwait(false);
+
+        return (tcs, completionId);
+    }
+
+    /// <summary>Awaits a live call started by <see cref="BeginCallAsync" /> and deserializes its result.</summary>
+    private async ValueTask<TResponse> CallCoreAsync<TResponse>(string service, string? key, string handler,
+        ReadOnlyMemory<byte> requestBytes, CallOptions options, CancellationToken ct)
+    {
+        using var activity = StartCallActivity(service, handler);
+
+        var (tcs, completionId) =
+            await BeginCallAsync(service, key, handler, requestBytes, options, ct).ConfigureAwait(false);
 
         Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<TResponse>(completion.Value);
+    }
+
+    /// <summary>Writes the OneWayCallCommand for a live send and awaits the target invocation id.</summary>
+    private async ValueTask<InvocationHandle> SendCoreAsync(string service, string? key, string handler,
+        ReadOnlyMemory<byte> requestBytes, SendOptions options, CancellationToken ct)
+    {
+        var invocationIdNotificationIdx = NextCompletionId();
+
+        // Register journal entry and TCS before flush to prevent race with incoming notifications.
+        _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
+        var tcs = _completions.GetOrRegister((int)invocationIdNotificationIdx);
+
+        WriteSendCommandMessage(service, handler, key, requestBytes, options, invocationIdNotificationIdx);
+
+        await FlushAsync(ct).ConfigureAwait(false);
+
+        Log.AwaitingCompletion(Logger, InvocationId, (int)invocationIdNotificationIdx);
+        var completion = await tcs.Task.ConfigureAwait(false);
+        var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
+        return new InvocationHandle(invocationId);
+    }
+
+    /// <summary>Calls a handler, serializing the request as an untyped object.</summary>
+    public ValueTask<TResponse> CallAsync<TResponse>(
+        string service, string? key, string handler, object? request, CallOptions options, CancellationToken ct)
+    {
+        EnsureActive();
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+
+        if (State == InvocationState.Replaying)
+            return ReplayResultAsync<TResponse>(JournalEntryType.Call);
+
+        return CallCoreAsync<TResponse>(service, key, handler, SerializeObject(request), options, ct);
+    }
+
+    /// <summary>Calls a handler, serializing the request with its static type.</summary>
+    public ValueTask<TResponse> CallAsync<TRequest, TResponse>(
+        string service, string handler, TRequest request, string? key, CallOptions options, CancellationToken ct)
+    {
+        EnsureActive();
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+
+        if (State == InvocationState.Replaying)
+            return ReplayResultAsync<TResponse>(JournalEntryType.Call);
+
+        return CallCoreAsync<TResponse>(service, key, handler, Serialize(request), options, ct);
     }
 
     /// <summary>Starts an opt-in child activity for an outgoing call, tagged with the RPC target.</summary>
@@ -487,62 +551,53 @@ internal sealed partial class InvocationStateMachine
         return activity;
     }
 
-    public async ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
-        TimeSpan? delay, string? idempotencyKey, CancellationToken ct)
+    /// <summary>Sends a one-way invocation, serializing the request as an untyped object.</summary>
+    public ValueTask<InvocationHandle> SendAsync(string service, string? key, string handler, object? request,
+        SendOptions options, CancellationToken ct)
     {
         EnsureActive();
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
 
         if (State == InvocationState.Replaying)
-            return await ReplaySendAsync().ConfigureAwait(false);
+            return ReplaySendAsync();
 
-        var requestBytes = SerializeObject(request);
-        var invocationIdNotificationIdx = NextCompletionId();
+        return SendCoreAsync(service, key, handler, SerializeObject(request), options, ct);
+    }
 
-        // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
-        var tcs = _completions.GetOrRegister((int)invocationIdNotificationIdx);
+    /// <summary>Sends a one-way invocation, serializing the request with its static type.</summary>
+    public ValueTask<InvocationHandle> SendAsync<TRequest>(
+        string service, string handler, TRequest request, string? key, SendOptions options, CancellationToken ct)
+    {
+        EnsureActive();
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
 
-        WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
-            invocationIdNotificationIdx);
+        if (State == InvocationState.Replaying)
+            return ReplaySendAsync();
 
-        await FlushAsync(ct).ConfigureAwait(false);
-
-        Log.AwaitingCompletion(Logger, InvocationId, (int)invocationIdNotificationIdx);
-        var completion = await tcs.Task.ConfigureAwait(false);
-        var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
-        return new InvocationHandle(invocationId);
+        return SendCoreAsync(service, key, handler, Serialize(request), options, ct);
     }
 
     // ------- Non-blocking Call (CallFuture) -------
 
-    public async ValueTask<TaskCompletionSource<CompletionResult>> CallFutureAsync(
-        string service, string? key, string handler, object? request, CancellationToken ct)
+    public ValueTask<TaskCompletionSource<CompletionResult>> CallFutureAsync(
+        string service, string? key, string handler, object? request, CallOptions options, CancellationToken ct)
     {
         EnsureActive();
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
 
         if (State == InvocationState.Replaying)
         {
             var replay = TakeReplayEntry(JournalEntryType.Call);
-            return RegisterReplayCompletion(in replay);
+            return new ValueTask<TaskCompletionSource<CompletionResult>>(RegisterReplayCompletion(in replay));
         }
 
-        var requestBytes = SerializeObject(request);
+        return BeginCallFutureAsync(service, key, handler, SerializeObject(request), options, ct);
+    }
 
-        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
-        // registered: the live notification is stored as an early result by TryComplete, and a
-        // pending registration would otherwise be poisoned on EOF and advertised in the
-        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
-        var invocationIdNotificationIdx = NextCompletionId();
-
-        var completionId = NextCompletionId();
-        // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister((int)completionId);
-
-        WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
-
-        await FlushAsync(ct).ConfigureAwait(false);
-
+    private async ValueTask<TaskCompletionSource<CompletionResult>> BeginCallFutureAsync(string service, string? key,
+        string handler, ReadOnlyMemory<byte> requestBytes, CallOptions options, CancellationToken ct)
+    {
+        var (tcs, _) = await BeginCallAsync(service, key, handler, requestBytes, options, ct).ConfigureAwait(false);
         return tcs;
     }
 
@@ -990,68 +1045,6 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompletePromise, ReadOnlyMemory<byte>.Empty, name));
     }
 
-    // ------- Generic Calls (typed serialization by name) -------
-
-    public async ValueTask<TResponse> CallAsync<TRequest, TResponse>(
-        string service, string handler, TRequest request, string? key, CancellationToken ct)
-    {
-        EnsureActive();
-
-        if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
-
-        using var activity = StartCallActivity(service, handler);
-
-        var requestBytes = Serialize(request);
-
-        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
-        // registered: the live notification is stored as an early result by TryComplete, and a
-        // pending registration would otherwise be poisoned on EOF and advertised in the
-        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
-        var invocationIdNotificationIdx = NextCompletionId();
-
-        var completionId = NextCompletionId();
-        // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister((int)completionId);
-
-        WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId);
-
-        await FlushAsync(ct).ConfigureAwait(false);
-
-        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
-        var completion = await tcs.Task.ConfigureAwait(false);
-        completion.ThrowIfFailure();
-        return Deserialize<TResponse>(completion.Value);
-    }
-
-    public async ValueTask<InvocationHandle> SendAsync<TRequest>(
-        string service, string handler, TRequest request, string? key, TimeSpan? delay, string? idempotencyKey,
-        CancellationToken ct)
-    {
-        EnsureActive();
-
-        if (State == InvocationState.Replaying)
-            return await ReplaySendAsync().ConfigureAwait(false);
-
-        var requestBytes = Serialize(request);
-        var invocationIdNotificationIdx = NextCompletionId();
-
-        // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        _journal.Append(JournalEntry.Pending(JournalEntryType.OneWayCall));
-        var tcs = _completions.GetOrRegister((int)invocationIdNotificationIdx);
-
-        WriteSendCommandMessage(service, handler, key, requestBytes, delay, idempotencyKey,
-            invocationIdNotificationIdx);
-
-        await FlushAsync(ct).ConfigureAwait(false);
-
-        Log.AwaitingCompletion(Logger, InvocationId, (int)invocationIdNotificationIdx);
-        var completion = await tcs.Task.ConfigureAwait(false);
-        var invocationIdStr = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
-        return new InvocationHandle(invocationIdStr);
-    }
-
     // ------- Cancel invocation -------
 
     public async ValueTask CancelInvocationAsync(string targetInvocationId, CancellationToken ct)
@@ -1072,51 +1065,6 @@ internal sealed partial class InvocationStateMachine
         await FlushAsync(ct).ConfigureAwait(false);
 
         Log.CancellingInvocation(Logger, InvocationId, targetInvocationId);
-    }
-
-    // ------- Calls with idempotency key -------
-
-    private void WriteCallCommandMessageWithOptions(string service, string handler, string? key,
-        ReadOnlyMemory<byte> requestBytes,
-        uint invocationIdNotificationIdx, uint completionId, string? idempotencyKey)
-    {
-        var msg = ProtobufCodec.CreateCallCommandWithOptions(
-            service, handler, key, requestBytes.Span, completionId, invocationIdNotificationIdx, idempotencyKey);
-        WriteCommand(MessageType.CallCommand, msg);
-    }
-
-    public async ValueTask<TResponse> CallAsync<TResponse>(
-        string service, string? key, string handler, object? request, string? idempotencyKey, CancellationToken ct)
-    {
-        EnsureActive();
-
-        if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>(JournalEntryType.Call).ConfigureAwait(false);
-
-        using var activity = StartCallActivity(service, handler);
-
-        var requestBytes = SerializeObject(request);
-
-        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
-        // registered: the live notification is stored as an early result by TryComplete, and a
-        // pending registration would otherwise be poisoned on EOF and advertised in the
-        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
-        var invocationIdNotificationIdx = NextCompletionId();
-
-        var completionId = NextCompletionId();
-        // Register journal entry and TCS before flush to prevent race with incoming notifications.
-        _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
-        var tcs = _completions.GetOrRegister((int)completionId);
-
-        WriteCallCommandMessageWithOptions(service, handler, key, requestBytes, invocationIdNotificationIdx,
-            completionId, idempotencyKey);
-
-        await FlushAsync(ct).ConfigureAwait(false);
-
-        Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
-        var completion = await tcs.Task.ConfigureAwait(false);
-        completion.ThrowIfFailure();
-        return Deserialize<TResponse>(completion.Value);
     }
 
     // ------- Output / Error -------

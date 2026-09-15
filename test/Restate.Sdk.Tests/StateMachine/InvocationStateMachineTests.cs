@@ -95,7 +95,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            sm.SendAsync("Svc", null, "Handler", (object?)null, null, null, CancellationToken.None).AsTask());
+            sm.SendAsync("Svc", null, "Handler", (object?)null, default, CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -216,6 +216,120 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal(InvocationState.Replaying, sm.State);
     }
 
+    // ------- Scope and limit key -------
+
+    [Fact]
+    public async Task Call_WithScopeAndLimitKey_WritesThemOnTheCallCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.CallAsync<string>("Svc", "obj-key", "Handler", (object?)"payload",
+            CallOptions.WithScope("tenant-a", "customer-7"), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.CallCommand, frames[0].Type);
+        var call = Gen.CallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("tenant-a", call.Scope);
+        Assert.Equal("customer-7", call.LimitKey);
+    }
+
+    [Fact]
+    public async Task Call_WithoutOptions_OmitsScopeAndLimitKey()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.CallAsync<string>("Svc", null, "Handler", (object?)"payload", default, CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var call = Gen.CallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        // Optional fields: absent, not empty strings — an empty scope means "unscoped" on the wire.
+        Assert.False(call.HasScope);
+        Assert.False(call.HasLimitKey);
+        Assert.False(call.HasIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task Send_WithScopeAndLimitKey_WritesThemOnTheOneWayCallCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.SendAsync("Svc", "obj-key", "Handler", (object?)"payload",
+            SendOptions.WithScope("tenant-a", "customer-7"), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.OneWayCallCommand, frames[0].Type);
+        var send = Gen.OneWayCallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("tenant-a", send.Scope);
+        Assert.Equal("customer-7", send.LimitKey);
+    }
+
+    [Fact]
+    public async Task Send_WithoutOptions_OmitsScopeAndLimitKey()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.SendAsync("Svc", null, "Handler", (object?)"payload", default, CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var send = Gen.OneWayCallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.False(send.HasScope);
+        Assert.False(send.HasLimitKey);
+    }
+
+    [Fact]
+    public async Task TypedCall_WithScope_WritesItOnTheCallCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.CallAsync<string, string>("Svc", "Handler", "payload", null,
+            CallOptions.WithScope("tenant-a"), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var call = Gen.CallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("tenant-a", call.Scope);
+        Assert.False(call.HasLimitKey);
+    }
+
+    [Fact]
+    public async Task CallFuture_WithScope_WritesItOnTheCallCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        _ = sm.CallFutureAsync("Svc", null, "Handler", (object?)"payload",
+            CallOptions.WithScope("tenant-a"), CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        var call = Gen.CallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("tenant-a", call.Scope);
+    }
+
+    [Fact]
+    public async Task LimitKeyWithoutScope_Throws()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        // The server only honours a limit key inside a scope, so asking for one without a scope
+        // is a usage error rather than a silently dropped option.
+        var call = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await sm.CallAsync<string>("Svc", null, "Handler", (object?)null,
+                new CallOptions { LimitKey = "customer-7" }, CancellationToken.None));
+        Assert.Equal("options", call.ParamName);
+
+        var send = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await sm.SendAsync("Svc", null, "Handler", (object?)null,
+                new SendOptions { LimitKey = "customer-7" }, CancellationToken.None));
+        Assert.Equal("options", send.ParamName);
+
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
     // ------- Calls -------
 
     [Fact]
@@ -226,7 +340,7 @@ public class InvocationStateMachineTests : IDisposable
 
         // SendAsync now awaits a completion — we can't test it without a protocol writer that sends back the invocation ID
         // Just verify it doesn't throw synchronously for now
-        var task = sm.SendAsync("Greeter", null, "Greet", (object?)"hello", null, null, CancellationToken.None);
+        var task = sm.SendAsync("Greeter", null, "Greet", (object?)"hello", default, CancellationToken.None);
         Assert.False(task.IsCompleted); // awaiting invocation ID notification
     }
 

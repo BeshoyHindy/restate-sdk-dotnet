@@ -10,6 +10,15 @@ namespace Restate.Sdk;
 /// </summary>
 public interface IContext
 {
+    /// <summary>
+    ///     Reported by the default implementations of the options overloads below. They exist so
+    ///     that adding an overload does not break external implementations of this interface
+    ///     (mirroring <see cref="Logger" />); an implementation that has not overridden them
+    ///     cannot honour a scope or limit key, and says so instead of dropping it.
+    /// </summary>
+    private const string OptionsNotSupported =
+        "This IContext implementation does not support call or send options; override the overload that takes them.";
+
     /// <summary>Unique identifier of the current invocation.</summary>
     string InvocationId { get; }
 
@@ -77,6 +86,18 @@ public interface IContext
         CallOptions options);
 
     /// <summary>
+    ///     Calls a handler with typed request/response serialization and call options
+    ///     (idempotency key, scope, limit key). Defaults to the option-less overload, so external
+    ///     implementations keep compiling; an implementation that cannot honour the options
+    ///     reports that rather than dropping them.
+    /// </summary>
+    ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request, string? key,
+        CallOptions options) =>
+        options == default
+            ? Call<TRequest, TResponse>(service, handler, request, key)
+            : throw new NotSupportedException(OptionsNotSupported);
+
+    /// <summary>
     ///     Cancels a running invocation by sending a cancel signal.
     ///     The target invocation will be aborted with a cancellation error.
     /// </summary>
@@ -89,6 +110,23 @@ public interface IContext
     /// <summary>Sends a one-way invocation to a keyed virtual object or workflow. Returns a handle to track the invocation.</summary>
     ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null);
+
+    /// <summary>
+    ///     Sends a one-way invocation with send options (delay, idempotency key, scope, limit key).
+    /// </summary>
+    ValueTask<InvocationHandle> Send(string service, string handler, object? request, SendOptions options) =>
+        options.Scope is null && options.LimitKey is null
+            ? Send(service, handler, request, options.Delay, options.IdempotencyKey)
+            : throw new NotSupportedException(OptionsNotSupported);
+
+    /// <summary>
+    ///     Sends a one-way invocation to a keyed virtual object or workflow with send options.
+    /// </summary>
+    ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options) =>
+        options.Scope is null && options.LimitKey is null
+            ? Send(service, key, handler, request, options.Delay, options.IdempotencyKey)
+            : throw new NotSupportedException(OptionsNotSupported);
 
     /// <summary>Suspends execution for the specified duration. Durable — survives process restarts.</summary>
     ValueTask Sleep(TimeSpan duration);
@@ -144,4 +182,24 @@ public interface IContext
     /// </summary>
     IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request = null);
+
+    /// <summary>
+    ///     Calls a handler with call options (idempotency key, scope, limit key) and returns a
+    ///     non-blocking future.
+    /// </summary>
+    IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
+        CallOptions options) =>
+        options == default
+            ? CallFuture<TResponse>(service, handler, request)
+            : throw new NotSupportedException(OptionsNotSupported);
+
+    /// <summary>
+    ///     Calls a handler on a keyed virtual object or workflow with call options and returns a
+    ///     non-blocking future.
+    /// </summary>
+    IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler, object? request,
+        CallOptions options) =>
+        options == default
+            ? CallFuture<TResponse>(service, key, handler, request)
+            : throw new NotSupportedException(OptionsNotSupported);
 }

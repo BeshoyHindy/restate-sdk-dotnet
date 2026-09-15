@@ -100,19 +100,31 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler,
         object? request = null)
     {
-        return CallFutureInternal<TResponse>(service, null, handler, request);
+        return CallFutureInternal<TResponse>(service, null, handler, request, default);
     }
 
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        return CallFutureInternal<TResponse>(service, key, handler, request);
+        return CallFutureInternal<TResponse>(service, key, handler, request, default);
+    }
+
+    public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
+        CallOptions options)
+    {
+        return CallFutureInternal<TResponse>(service, null, handler, request, options);
+    }
+
+    public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
+        object? request, CallOptions options)
+    {
+        return CallFutureInternal<TResponse>(service, key, handler, request, options);
     }
 
     private IDurableFuture<TResponse> CallFutureInternal<TResponse>(string service, string? key, string handler,
-        object? request)
+        object? request, CallOptions options)
     {
-        var task = _stateMachine.CallFutureAsync(service, key, handler, request, Aborted);
+        var task = _stateMachine.CallFutureAsync(service, key, handler, request, options, Aborted);
         if (task.IsCompletedSuccessfully)
             return new DurableFuture<TResponse>(task.Result, _stateMachine.JsonOptions);
         return new LazyCallFuture<TResponse>(task, _stateMachine.JsonOptions);
@@ -120,25 +132,31 @@ internal sealed class DefaultContext : Restate.Sdk.Context
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
-        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, default, Aborted);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, default, Aborted);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
         CallOptions options)
     {
-        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options.IdempotencyKey, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, null, handler, request, options, Aborted);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
         CallOptions options)
     {
-        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options.IdempotencyKey, Aborted);
+        return _stateMachine.CallAsync<TResponse>(service, key, handler, request, options, Aborted);
+    }
+
+    public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
+        string? key, CallOptions options)
+    {
+        return _stateMachine.CallAsync<TRequest, TResponse>(service, handler, request, key, options, Aborted);
     }
 
     public override ValueTask CancelInvocation(string invocationId)
@@ -149,13 +167,27 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        return _stateMachine.SendAsync(service, null, handler, request, delay, idempotencyKey, Aborted);
+        return _stateMachine.SendAsync(service, null, handler, request,
+            new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, Aborted);
     }
 
     public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        return _stateMachine.SendAsync(service, key, handler, request, delay, idempotencyKey, Aborted);
+        return _stateMachine.SendAsync(service, key, handler, request,
+            new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, Aborted);
+    }
+
+    public override ValueTask<InvocationHandle> Send(string service, string handler, object? request,
+        SendOptions options)
+    {
+        return _stateMachine.SendAsync(service, null, handler, request, options, Aborted);
+    }
+
+    public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request,
+        SendOptions options)
+    {
+        return _stateMachine.SendAsync(service, key, handler, request, options, Aborted);
     }
 
     public override TClient ServiceClient<TClient>()
@@ -191,14 +223,13 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler,
         TRequest request, string? key = null)
     {
-        return _stateMachine.CallAsync<TRequest, TResponse>(service, handler, request, key, Aborted);
+        return _stateMachine.CallAsync<TRequest, TResponse>(service, handler, request, key, default, Aborted);
     }
 
     public override ValueTask<InvocationHandle> Send<TRequest>(string service, string handler,
         TRequest request, string? key = null, SendOptions? options = null)
     {
-        return _stateMachine.SendAsync(service, handler, request, key, options?.Delay, options?.IdempotencyKey,
-            Aborted);
+        return _stateMachine.SendAsync(service, handler, request, key, options ?? default, Aborted);
     }
 
     public override ValueTask<T> Attach<T>(string invocationId)

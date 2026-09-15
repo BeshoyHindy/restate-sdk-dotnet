@@ -358,6 +358,62 @@ public class ProtobufCodecTests
     }
 
     [Fact]
+    public void CreateCallCommand_WithScopeAndLimitKey_RoundTripsThroughTheWire()
+    {
+        var msg = ProtobufCodec.CreateCallCommand(
+            "Svc", "Handler", "k1", Encoding.UTF8.GetBytes("{}"), completionId: 5,
+            invocationIdNotificationIdx: 3, idempotencyKey: "order-1", scope: "tenant-a", limitKey: "customer-7");
+
+        var parsed = Gen.CallCommandMessage.Parser.ParseFrom(msg.ToByteArray());
+
+        // Fields 6, 7 and 8 of CallCommandMessage.
+        Assert.Equal("order-1", parsed.IdempotencyKey);
+        Assert.Equal("tenant-a", parsed.Scope);
+        Assert.Equal("customer-7", parsed.LimitKey);
+    }
+
+    [Fact]
+    public void CreateCallCommand_WithoutOptions_OmitsTheOptionalFields()
+    {
+        var msg = ProtobufCodec.CreateCallCommand(
+            "Svc", "Handler", "k1", Encoding.UTF8.GetBytes("{}"), completionId: 5, invocationIdNotificationIdx: 3);
+
+        var parsed = Gen.CallCommandMessage.Parser.ParseFrom(msg.ToByteArray());
+
+        Assert.False(parsed.HasIdempotencyKey);
+        Assert.False(parsed.HasScope);
+        Assert.False(parsed.HasLimitKey);
+    }
+
+    [Fact]
+    public void CreateSendCommand_WithScopeAndLimitKey_RoundTripsThroughTheWire()
+    {
+        var msg = ProtobufCodec.CreateSendCommand(
+            "Svc", "Handler", "k1", Encoding.UTF8.GetBytes("{}"), 1000UL, "order-1", 42,
+            scope: "tenant-a", limitKey: "customer-7");
+
+        var parsed = Gen.OneWayCallCommandMessage.Parser.ParseFrom(msg.ToByteArray());
+
+        // Fields 7, 8 and 9 of OneWayCallCommandMessage.
+        Assert.Equal("order-1", parsed.IdempotencyKey);
+        Assert.Equal("tenant-a", parsed.Scope);
+        Assert.Equal("customer-7", parsed.LimitKey);
+    }
+
+    [Fact]
+    public void CreateSendCommand_WithoutOptions_OmitsTheOptionalFields()
+    {
+        var msg = ProtobufCodec.CreateSendCommand(
+            "Svc", "Handler", "k1", Encoding.UTF8.GetBytes("{}"), 1000UL, null, 42);
+
+        var parsed = Gen.OneWayCallCommandMessage.Parser.ParseFrom(msg.ToByteArray());
+
+        Assert.False(parsed.HasIdempotencyKey);
+        Assert.False(parsed.HasScope);
+        Assert.False(parsed.HasLimitKey);
+    }
+
+    [Fact]
     public void CreateSleepCommand_SetsFields()
     {
         var msg = ProtobufCodec.CreateSleepCommand(999UL, 3);
