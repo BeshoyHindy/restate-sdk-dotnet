@@ -665,8 +665,10 @@ public class RestateClientTests
         var (client, handler) = CreateClient();
         handler.ResponseStatusCode = HttpStatusCode.NotFound;
 
-        await Assert.ThrowsAsync<HttpRequestException>(
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
             () => client.ResolveSignal("sign_1abc", "value", ClientTestJsonContext.Default.String));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
     }
 
     [Fact]

@@ -359,7 +359,7 @@ public sealed class RestateClient : IDisposable
         using var content = JsonContent.Create(value, options: GetReflectionJsonOptions());
         using var response = await _http.PostAsync(SignalPath(signalId, "resolve"), content, ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -378,7 +378,7 @@ public sealed class RestateClient : IDisposable
         using var content = JsonContent.Create(value, valueTypeInfo);
         using var response = await _http.PostAsync(SignalPath(signalId, "resolve"), content, ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -398,7 +398,7 @@ public sealed class RestateClient : IDisposable
         using var content = new StringContent(reason, Encoding.UTF8, "text/plain");
         using var response = await _http.PostAsync(SignalPath(signalId, "reject"), content, ct)
             .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
 
     /// <summary>
