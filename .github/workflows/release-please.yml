@@ -8,6 +8,9 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  RELEASE_BRANCH: release-please--branches--main
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
@@ -22,18 +25,50 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # The action only reports a pull request when it creates or updates one, so a commit that
+      # leaves the release pull request unchanged (a `ci:` or `chore:` subject, say) reports
+      # nothing. Fall back to looking the open release pull request up, so the roll below runs
+      # whenever one is waiting to be merged.
+      #
+      # The raw output is read inside `run:` rather than in an expression: GitHub evaluates a
+      # step's `env:` even when its `if:` is false, and `fromJson` on the empty output fails the
+      # whole workflow.
+      - name: Find the open release pull request
+        id: release-pr
+        env:
+          PR_JSON: ${{ steps.release.outputs.pr }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+        run: |
+          branch=""
+          if [ -n "$PR_JSON" ]; then
+            branch="$(printf '%s' "$PR_JSON" | jq -r '.headBranchName // ""')"
+          fi
+
+          if [ -z "$branch" ]; then
+            branch="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$RELEASE_BRANCH" \
+              --state open --json headRefName --jq '.[0].headRefName // ""')"
+          fi
+
+          if [ -z "$branch" ]; then
+            echo "No open release pull request: nothing to roll."
+          else
+            echo "Rolling public API entries onto $branch."
+          fi
+
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
       # The release PR already carries the version and changelog change, so the public API
       # roll belongs in the same reviewable commit — and lands with the same merge.
       - uses: actions/checkout@v7
-        if: steps.release.outputs.pr
+        if: steps.release-pr.outputs.branch
         with:
-          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          ref: ${{ steps.release-pr.outputs.branch }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
 
       - name: Roll public API entries to shipped
-        if: steps.release.outputs.pr
+        if: steps.release-pr.outputs.branch
         env:
-          BRANCH: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          BRANCH: ${{ steps.release-pr.outputs.branch }}
         run: |
           .github/scripts/roll-public-api.sh
 
