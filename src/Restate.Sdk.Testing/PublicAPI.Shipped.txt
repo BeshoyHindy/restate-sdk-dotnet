@@ -1,5 +1,6 @@
 #nullable enable
 Restate.Sdk.Testing.MockContext
+Restate.Sdk.Testing.MockContext.AwaitedSignals.get -> System.Collections.Generic.IReadOnlyList<string?>!
 Restate.Sdk.Testing.MockContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
 Restate.Sdk.Testing.MockContext.Cancellations.get -> System.Collections.Generic.IReadOnlyList<string!>!
 Restate.Sdk.Testing.MockContext.CurrentTime.get -> System.DateTimeOffset
@@ -13,6 +14,10 @@ Restate.Sdk.Testing.MockContext.SetupCall<T>(string! service, string! handler, T
 Restate.Sdk.Testing.MockContext.SetupCall<T>(string! service, string! key, string! handler, T result) -> void
 Restate.Sdk.Testing.MockContext.SetupCallFailure(string! service, string! handler, Restate.Sdk.TerminalException! exception) -> void
 Restate.Sdk.Testing.MockContext.SetupCallFailure(string! service, string! key, string! handler, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockContext.SetupSignal<T>(T result) -> void
+Restate.Sdk.Testing.MockContext.SetupSignal<T>(string! name, T result) -> void
+Restate.Sdk.Testing.MockContext.SetupSignalFailure(string! name, Restate.Sdk.TerminalException! exception) -> void
+Restate.Sdk.Testing.MockContext.SignalCompletions.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSignalCompletion!>!
 Restate.Sdk.Testing.MockContext.Sleeps.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedSleep!>!
 Restate.Sdk.Testing.MockObjectContext
 Restate.Sdk.Testing.MockObjectContext.Calls.get -> System.Collections.Generic.IReadOnlyList<Restate.Sdk.Testing.RecordedCall!>!
@@ -98,9 +103,13 @@ Restate.Sdk.Testing.RecordedCall.IdempotencyKey.get -> string?
 Restate.Sdk.Testing.RecordedCall.IdempotencyKey.init -> void
 Restate.Sdk.Testing.RecordedCall.Key.get -> string?
 Restate.Sdk.Testing.RecordedCall.Key.init -> void
+Restate.Sdk.Testing.RecordedCall.LimitKey.get -> string?
+Restate.Sdk.Testing.RecordedCall.LimitKey.init -> void
 Restate.Sdk.Testing.RecordedCall.RecordedCall(string! Service, string? Key, string! Handler, object? Request, string? IdempotencyKey = null) -> void
 Restate.Sdk.Testing.RecordedCall.Request.get -> object?
 Restate.Sdk.Testing.RecordedCall.Request.init -> void
+Restate.Sdk.Testing.RecordedCall.Scope.get -> string?
+Restate.Sdk.Testing.RecordedCall.Scope.init -> void
 Restate.Sdk.Testing.RecordedCall.Service.get -> string!
 Restate.Sdk.Testing.RecordedCall.Service.init -> void
 Restate.Sdk.Testing.RecordedSend
@@ -115,11 +124,30 @@ Restate.Sdk.Testing.RecordedSend.IdempotencyKey.get -> string?
 Restate.Sdk.Testing.RecordedSend.IdempotencyKey.init -> void
 Restate.Sdk.Testing.RecordedSend.Key.get -> string?
 Restate.Sdk.Testing.RecordedSend.Key.init -> void
+Restate.Sdk.Testing.RecordedSend.LimitKey.get -> string?
+Restate.Sdk.Testing.RecordedSend.LimitKey.init -> void
 Restate.Sdk.Testing.RecordedSend.RecordedSend(string! Service, string? Key, string! Handler, object? Request, System.TimeSpan? Delay, string? IdempotencyKey) -> void
 Restate.Sdk.Testing.RecordedSend.Request.get -> object?
 Restate.Sdk.Testing.RecordedSend.Request.init -> void
+Restate.Sdk.Testing.RecordedSend.Scope.get -> string?
+Restate.Sdk.Testing.RecordedSend.Scope.init -> void
 Restate.Sdk.Testing.RecordedSend.Service.get -> string!
 Restate.Sdk.Testing.RecordedSend.Service.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion
+Restate.Sdk.Testing.RecordedSignalCompletion.<Clone>$() -> Restate.Sdk.Testing.RecordedSignalCompletion!
+Restate.Sdk.Testing.RecordedSignalCompletion.Deconstruct(out string! InvocationId, out string? Name, out int? SignalIndex, out object? Value, out string? RejectionReason) -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Equals(Restate.Sdk.Testing.RecordedSignalCompletion? other) -> bool
+Restate.Sdk.Testing.RecordedSignalCompletion.InvocationId.get -> string!
+Restate.Sdk.Testing.RecordedSignalCompletion.InvocationId.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Name.get -> string?
+Restate.Sdk.Testing.RecordedSignalCompletion.Name.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.RecordedSignalCompletion(string! InvocationId, string? Name, int? SignalIndex, object? Value, string? RejectionReason) -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.RejectionReason.get -> string?
+Restate.Sdk.Testing.RecordedSignalCompletion.RejectionReason.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.SignalIndex.get -> int?
+Restate.Sdk.Testing.RecordedSignalCompletion.SignalIndex.init -> void
+Restate.Sdk.Testing.RecordedSignalCompletion.Value.get -> object?
+Restate.Sdk.Testing.RecordedSignalCompletion.Value.init -> void
 Restate.Sdk.Testing.RecordedSleep
 Restate.Sdk.Testing.RecordedSleep.<Clone>$() -> Restate.Sdk.Testing.RecordedSleep!
 Restate.Sdk.Testing.RecordedSleep.Deconstruct(out System.TimeSpan Duration) -> void
@@ -134,12 +162,15 @@ override Restate.Sdk.Testing.MockContext.Any<T>(params System.ReadOnlySpan<Resta
 override Restate.Sdk.Testing.MockContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
 override Restate.Sdk.Testing.MockContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
 override Restate.Sdk.Testing.MockContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.Testing.MockContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.Testing.MockContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.Testing.MockContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Console.get -> Restate.Sdk.DurableConsole!
 override Restate.Sdk.Testing.MockContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
@@ -152,7 +183,11 @@ override Restate.Sdk.Testing.MockContext.ObjectSendClient<TClient>(string! key, 
 override Restate.Sdk.Testing.MockContext.Race<T>(params System.ReadOnlySpan<Restate.Sdk.IDurableFuture<T>!> futures) -> System.Threading.Tasks.ValueTask<T>
 override Restate.Sdk.Testing.MockContext.Random.get -> Restate.Sdk.DurableRandom!
 override Restate.Sdk.Testing.MockContext.RejectAwakeable(string! id, string! reason) -> void
+override Restate.Sdk.Testing.MockContext.RejectSignal(string! invocationId, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.RejectSignal(string! invocationId, string! name, string! reason) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+override Restate.Sdk.Testing.MockContext.ResolveSignal<T>(string! invocationId, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.Testing.MockContext.ResolveSignal<T>(string! invocationId, string! name, T value) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
@@ -163,10 +198,14 @@ override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<T>! ac
 override Restate.Sdk.Testing.MockContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
 override Restate.Sdk.Testing.MockContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.Testing.MockContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.Testing.MockContext.ServiceClient<TClient>() -> TClient!
 override Restate.Sdk.Testing.MockContext.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.Testing.MockContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.Testing.MockContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.Testing.MockContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.Testing.MockContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
 override Restate.Sdk.Testing.MockContext.WaitAll(params Restate.Sdk.IDurableFuture![]! futures) -> System.Collections.Generic.IAsyncEnumerable<(Restate.Sdk.IDurableFuture! future, System.Exception? error)>!
@@ -203,6 +242,9 @@ override Restate.Sdk.Testing.RecordedCall.ToString() -> string!
 override Restate.Sdk.Testing.RecordedSend.Equals(object? obj) -> bool
 override Restate.Sdk.Testing.RecordedSend.GetHashCode() -> int
 override Restate.Sdk.Testing.RecordedSend.ToString() -> string!
+override Restate.Sdk.Testing.RecordedSignalCompletion.Equals(object? obj) -> bool
+override Restate.Sdk.Testing.RecordedSignalCompletion.GetHashCode() -> int
+override Restate.Sdk.Testing.RecordedSignalCompletion.ToString() -> string!
 override Restate.Sdk.Testing.RecordedSleep.Equals(object? obj) -> bool
 override Restate.Sdk.Testing.RecordedSleep.GetHashCode() -> int
 override Restate.Sdk.Testing.RecordedSleep.ToString() -> string!
@@ -210,5 +252,7 @@ static Restate.Sdk.Testing.RecordedCall.operator !=(Restate.Sdk.Testing.Recorded
 static Restate.Sdk.Testing.RecordedCall.operator ==(Restate.Sdk.Testing.RecordedCall? left, Restate.Sdk.Testing.RecordedCall? right) -> bool
 static Restate.Sdk.Testing.RecordedSend.operator !=(Restate.Sdk.Testing.RecordedSend? left, Restate.Sdk.Testing.RecordedSend? right) -> bool
 static Restate.Sdk.Testing.RecordedSend.operator ==(Restate.Sdk.Testing.RecordedSend? left, Restate.Sdk.Testing.RecordedSend? right) -> bool
+static Restate.Sdk.Testing.RecordedSignalCompletion.operator !=(Restate.Sdk.Testing.RecordedSignalCompletion? left, Restate.Sdk.Testing.RecordedSignalCompletion? right) -> bool
+static Restate.Sdk.Testing.RecordedSignalCompletion.operator ==(Restate.Sdk.Testing.RecordedSignalCompletion? left, Restate.Sdk.Testing.RecordedSignalCompletion? right) -> bool
 static Restate.Sdk.Testing.RecordedSleep.operator !=(Restate.Sdk.Testing.RecordedSleep? left, Restate.Sdk.Testing.RecordedSleep? right) -> bool
 static Restate.Sdk.Testing.RecordedSleep.operator ==(Restate.Sdk.Testing.RecordedSleep? left, Restate.Sdk.Testing.RecordedSleep? right) -> bool

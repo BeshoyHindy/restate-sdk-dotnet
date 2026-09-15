@@ -11,6 +11,10 @@ Restate.Sdk.CallOptions.CallOptions() -> void
 Restate.Sdk.CallOptions.Equals(Restate.Sdk.CallOptions other) -> bool
 Restate.Sdk.CallOptions.IdempotencyKey.get -> string?
 Restate.Sdk.CallOptions.IdempotencyKey.init -> void
+Restate.Sdk.CallOptions.LimitKey.get -> string?
+Restate.Sdk.CallOptions.LimitKey.init -> void
+Restate.Sdk.CallOptions.Scope.get -> string?
+Restate.Sdk.CallOptions.Scope.init -> void
 Restate.Sdk.Client.RestateClient
 Restate.Sdk.Client.RestateClient.Attach<TResponse>(string! invocationId, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.RestateClient.Attach<TResponse>(string! invocationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
@@ -18,18 +22,37 @@ Restate.Sdk.Client.RestateClient.Cancel(string! invocationId, System.Threading.C
 Restate.Sdk.Client.RestateClient.Dispose() -> void
 Restate.Sdk.Client.RestateClient.GetOutput<TResponse>(string! invocationId, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.RestateClient.GetOutput<TResponse>(string! invocationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.RestateClient.RejectSignal(string! signalId, string! reason, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Restate.Sdk.Client.RestateClient.ResolveSignal<T>(string! signalId, T value, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T>! valueTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Restate.Sdk.Client.RestateClient.ResolveSignal<T>(string! signalId, T value, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Restate.Sdk.Client.RestateClient.RestateClient(System.Net.Http.HttpClient! httpClient) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(System.Net.Http.HttpClient! httpClient, Restate.Sdk.Client.RestateClientOptions! options) -> void
 Restate.Sdk.Client.RestateClient.RestateClient(System.Uri! baseUrl) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(System.Uri! baseUrl, Restate.Sdk.Client.RestateClientOptions! options) -> void
 Restate.Sdk.Client.RestateClient.RestateClient(string! baseUrl) -> void
+Restate.Sdk.Client.RestateClient.RestateClient(string! baseUrl, Restate.Sdk.Client.RestateClientOptions! options) -> void
 Restate.Sdk.Client.RestateClient.Service(string! serviceName) -> Restate.Sdk.Client.ServiceHandle
 Restate.Sdk.Client.RestateClient.VirtualObject(string! serviceName, string! key) -> Restate.Sdk.Client.ServiceHandle
 Restate.Sdk.Client.RestateClient.Workflow(string! serviceName, string! key) -> Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.RestateClientOptions
+Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
+Restate.Sdk.Client.RestateClientOptions.JsonSerializerOptions.set -> void
+Restate.Sdk.Client.RestateClientOptions.RestateClientOptions() -> void
+Restate.Sdk.Client.RestateIngressException
+Restate.Sdk.Client.RestateIngressException.ErrorCode.get -> string?
+Restate.Sdk.Client.RestateIngressException.ErrorSource.get -> string?
+Restate.Sdk.Client.RestateIngressException.RestateIngressException(string! message, System.Net.HttpStatusCode statusCode, string? errorSource, string? errorCode) -> void
 Restate.Sdk.Client.ServiceHandle
+Restate.Sdk.Client.ServiceHandle.Call<TRequest, TResponse>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, Restate.Sdk.CallOptions options, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.ServiceHandle.Call<TRequest, TResponse>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, Restate.Sdk.CallOptions options, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse>! responseTypeInfo, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, object? request = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
+Restate.Sdk.Client.ServiceHandle.Call<TResponse>(string! handler, object? request, Restate.Sdk.CallOptions options, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<TResponse>!
 Restate.Sdk.Client.ServiceHandle.Equals(Restate.Sdk.Client.ServiceHandle other) -> bool
 Restate.Sdk.Client.ServiceHandle.Send(string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+Restate.Sdk.Client.ServiceHandle.Send(string! handler, object? request, Restate.Sdk.SendOptions options, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+Restate.Sdk.Client.ServiceHandle.Send<TRequest>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, Restate.Sdk.SendOptions options, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 Restate.Sdk.Client.ServiceHandle.Send<TRequest>(string! handler, TRequest? request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest>! requestTypeInfo, System.TimeSpan? delay = null, string? idempotencyKey = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 Restate.Sdk.Client.ServiceHandle.ServiceHandle() -> void
 Restate.Sdk.ClientFactory
@@ -134,12 +157,15 @@ Restate.Sdk.IContext.Aborted.get -> System.Threading.CancellationToken
 Restate.Sdk.IContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
 Restate.Sdk.IContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
 Restate.Sdk.IContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+Restate.Sdk.IContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 Restate.Sdk.IContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 Restate.Sdk.IContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 Restate.Sdk.IContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 Restate.Sdk.IContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+Restate.Sdk.IContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 Restate.Sdk.IContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
 Restate.Sdk.IContext.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
@@ -147,7 +173,11 @@ Restate.Sdk.IContext.InvocationId.get -> string!
 Restate.Sdk.IContext.Logger.get -> Microsoft.Extensions.Logging.ILogger!
 Restate.Sdk.IContext.Now() -> System.Threading.Tasks.ValueTask<System.DateTimeOffset>
 Restate.Sdk.IContext.RejectAwakeable(string! id, string! reason) -> void
+Restate.Sdk.IContext.RejectSignal(string! invocationId, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.RejectSignal(string! invocationId, string! name, string! reason) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+Restate.Sdk.IContext.ResolveSignal<T>(string! invocationId, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.IContext.ResolveSignal<T>(string! invocationId, string! name, T value) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
@@ -158,8 +188,12 @@ Restate.Sdk.IContext.Run<T>(string! name, System.Func<T>! action) -> System.Thre
 Restate.Sdk.IContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
 Restate.Sdk.IContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
 Restate.Sdk.IContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 Restate.Sdk.IContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 Restate.Sdk.IContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+Restate.Sdk.IContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+Restate.Sdk.IContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 Restate.Sdk.IContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.IContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
 Restate.Sdk.IDurableFuture
@@ -195,6 +229,8 @@ Restate.Sdk.InvocationHandle.InvocationHandle() -> void
 Restate.Sdk.InvocationHandle.InvocationHandle(string! InvocationId) -> void
 Restate.Sdk.InvocationHandle.InvocationId.get -> string!
 Restate.Sdk.InvocationHandle.InvocationId.init -> void
+Restate.Sdk.InvocationHandle.RejectSignal(Restate.Sdk.Context! context, string! name, string! reason) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.InvocationHandle.ResolveSignal<T>(Restate.Sdk.Context! context, string! name, T value) -> System.Threading.Tasks.ValueTask
 Restate.Sdk.JsonSerde
 Restate.Sdk.ObjectContext
 Restate.Sdk.ObjectContext.ObjectContext() -> void
@@ -228,6 +264,10 @@ Restate.Sdk.SendOptions.Delay.init -> void
 Restate.Sdk.SendOptions.Equals(Restate.Sdk.SendOptions other) -> bool
 Restate.Sdk.SendOptions.IdempotencyKey.get -> string?
 Restate.Sdk.SendOptions.IdempotencyKey.init -> void
+Restate.Sdk.SendOptions.LimitKey.get -> string?
+Restate.Sdk.SendOptions.LimitKey.init -> void
+Restate.Sdk.SendOptions.Scope.get -> string?
+Restate.Sdk.SendOptions.Scope.init -> void
 Restate.Sdk.SendOptions.SendOptions() -> void
 Restate.Sdk.ServiceAttribute
 Restate.Sdk.ServiceAttribute.Name.get -> string?
@@ -272,12 +312,15 @@ abstract Restate.Sdk.Context.Aborted.get -> System.Threading.CancellationToken
 abstract Restate.Sdk.Context.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
 abstract Restate.Sdk.Context.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
 abstract Restate.Sdk.Context.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+abstract Restate.Sdk.Context.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 abstract Restate.Sdk.Context.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+abstract Restate.Sdk.Context.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 abstract Restate.Sdk.Context.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.Console.get -> Restate.Sdk.DurableConsole!
 abstract Restate.Sdk.Context.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
@@ -288,7 +331,11 @@ abstract Restate.Sdk.Context.ObjectClient<TClient>(string! key) -> TClient!
 abstract Restate.Sdk.Context.ObjectSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
 abstract Restate.Sdk.Context.Random.get -> Restate.Sdk.DurableRandom!
 abstract Restate.Sdk.Context.RejectAwakeable(string! id, string! reason) -> void
+abstract Restate.Sdk.Context.RejectSignal(string! invocationId, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.RejectSignal(string! invocationId, string! name, string! reason) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+abstract Restate.Sdk.Context.ResolveSignal<T>(string! invocationId, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+abstract Restate.Sdk.Context.ResolveSignal<T>(string! invocationId, string! name, T value) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
@@ -299,10 +346,14 @@ abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<T>! action) -> Sys
 abstract Restate.Sdk.Context.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
 abstract Restate.Sdk.Context.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
 abstract Restate.Sdk.Context.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 abstract Restate.Sdk.Context.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+abstract Restate.Sdk.Context.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 abstract Restate.Sdk.Context.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 abstract Restate.Sdk.Context.ServiceClient<TClient>() -> TClient!
 abstract Restate.Sdk.Context.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+abstract Restate.Sdk.Context.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+abstract Restate.Sdk.Context.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 abstract Restate.Sdk.Context.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
 abstract Restate.Sdk.Context.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
 abstract Restate.Sdk.Context.WorkflowClient<TClient>(string! key) -> TClient!
@@ -333,12 +384,15 @@ override Restate.Sdk.SharedObjectContext.Aborted.get -> System.Threading.Cancell
 override Restate.Sdk.SharedObjectContext.Attach<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T>
 override Restate.Sdk.SharedObjectContext.Awakeable<T>(Restate.Sdk.ISerde<T>? serde = null) -> Restate.Sdk.Awakeable<T>
 override Restate.Sdk.SharedObjectContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key = null) -> System.Threading.Tasks.ValueTask<TResponse>
+override Restate.Sdk.SharedObjectContext.Call<TRequest, TResponse>(string! service, string! handler, TRequest request, string? key, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! key, string! handler, object? request = null) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.Call<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> System.Threading.Tasks.ValueTask<TResponse>
 override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request = null) -> Restate.Sdk.IDurableFuture<TResponse>!
+override Restate.Sdk.SharedObjectContext.CallFuture<TResponse>(string! service, string! key, string! handler, object? request, Restate.Sdk.CallOptions options) -> Restate.Sdk.IDurableFuture<TResponse>!
 override Restate.Sdk.SharedObjectContext.CancelInvocation(string! invocationId) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.Console.get -> Restate.Sdk.DurableConsole!
 override Restate.Sdk.SharedObjectContext.GetOutput<T>(string! invocationId) -> System.Threading.Tasks.ValueTask<T?>
@@ -350,7 +404,11 @@ override Restate.Sdk.SharedObjectContext.ObjectClient<TClient>(string! key) -> T
 override Restate.Sdk.SharedObjectContext.ObjectSendClient<TClient>(string! key, Restate.Sdk.SendOptions? options = null) -> TClient!
 override Restate.Sdk.SharedObjectContext.Random.get -> Restate.Sdk.DurableRandom!
 override Restate.Sdk.SharedObjectContext.RejectAwakeable(string! id, string! reason) -> void
+override Restate.Sdk.SharedObjectContext.RejectSignal(string! invocationId, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.RejectSignal(string! invocationId, string! name, string! reason) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.ResolveAwakeable<T>(string! id, T payload, Restate.Sdk.ISerde<T>? serde = null) -> void
+override Restate.Sdk.SharedObjectContext.ResolveSignal<T>(string! invocationId, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+override Restate.Sdk.SharedObjectContext.ResolveSignal<T>(string! invocationId, string! name, T value) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<Restate.Sdk.IRunContext!, System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.Run(string! name, System.Func<System.Threading.Tasks.Task!>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask
@@ -361,10 +419,14 @@ override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<T>! ac
 override Restate.Sdk.SharedObjectContext.Run<T>(string! name, System.Func<T>! action, Restate.Sdk.RetryPolicy! retryPolicy) -> System.Threading.Tasks.ValueTask<T>
 override Restate.Sdk.SharedObjectContext.RunAsync<T>(string! name, System.Func<System.Threading.Tasks.Task<T>!>! action) -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.SharedObjectContext.Send(string! service, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.Send(string! service, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.SharedObjectContext.Send(string! service, string! key, string! handler, object? request = null, System.TimeSpan? delay = null, string? idempotencyKey = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
+override Restate.Sdk.SharedObjectContext.Send(string! service, string! key, string! handler, object? request, Restate.Sdk.SendOptions options) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.SharedObjectContext.Send<TRequest>(string! service, string! handler, TRequest request, string? key = null, Restate.Sdk.SendOptions? options = null) -> System.Threading.Tasks.ValueTask<Restate.Sdk.InvocationHandle>
 override Restate.Sdk.SharedObjectContext.ServiceClient<TClient>() -> TClient!
 override Restate.Sdk.SharedObjectContext.ServiceSendClient<TClient>(Restate.Sdk.SendOptions? options = null) -> TClient!
+override Restate.Sdk.SharedObjectContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.SharedObjectContext.Signal<T>(string! name) -> Restate.Sdk.IDurableFuture<T>!
 override Restate.Sdk.SharedObjectContext.Sleep(System.TimeSpan duration) -> System.Threading.Tasks.ValueTask
 override Restate.Sdk.SharedObjectContext.Timer(System.TimeSpan duration) -> Restate.Sdk.IDurableFuture!
 override Restate.Sdk.SharedObjectContext.WorkflowClient<TClient>(string! key) -> TClient!
@@ -373,6 +435,8 @@ override Restate.Sdk.StateKey<T>.GetHashCode() -> int
 static Restate.Sdk.Awakeable<T>.operator !=(Restate.Sdk.Awakeable<T> left, Restate.Sdk.Awakeable<T> right) -> bool
 static Restate.Sdk.Awakeable<T>.operator ==(Restate.Sdk.Awakeable<T> left, Restate.Sdk.Awakeable<T> right) -> bool
 static Restate.Sdk.CallOptions.WithIdempotencyKey(string! key) -> Restate.Sdk.CallOptions
+static Restate.Sdk.CallOptions.WithScope(string! scope) -> Restate.Sdk.CallOptions
+static Restate.Sdk.CallOptions.WithScope(string! scope, string! limitKey) -> Restate.Sdk.CallOptions
 static Restate.Sdk.CallOptions.operator !=(Restate.Sdk.CallOptions left, Restate.Sdk.CallOptions right) -> bool
 static Restate.Sdk.CallOptions.operator ==(Restate.Sdk.CallOptions left, Restate.Sdk.CallOptions right) -> bool
 static Restate.Sdk.Client.ServiceHandle.operator !=(Restate.Sdk.Client.ServiceHandle left, Restate.Sdk.Client.ServiceHandle right) -> bool
@@ -396,6 +460,8 @@ static Restate.Sdk.RetryPolicy.operator !=(Restate.Sdk.RetryPolicy? left, Restat
 static Restate.Sdk.RetryPolicy.operator ==(Restate.Sdk.RetryPolicy? left, Restate.Sdk.RetryPolicy? right) -> bool
 static Restate.Sdk.SendOptions.AfterDelay(System.TimeSpan delay) -> Restate.Sdk.SendOptions
 static Restate.Sdk.SendOptions.WithIdempotencyKey(string! key) -> Restate.Sdk.SendOptions
+static Restate.Sdk.SendOptions.WithScope(string! scope) -> Restate.Sdk.SendOptions
+static Restate.Sdk.SendOptions.WithScope(string! scope, string! limitKey) -> Restate.Sdk.SendOptions
 static Restate.Sdk.SendOptions.operator !=(Restate.Sdk.SendOptions left, Restate.Sdk.SendOptions right) -> bool
 static Restate.Sdk.SendOptions.operator ==(Restate.Sdk.SendOptions left, Restate.Sdk.SendOptions right) -> bool
 static Restate.Sdk.SettledResult<T>.Failure(System.Exception! error) -> Restate.Sdk.SettledResult<T>
