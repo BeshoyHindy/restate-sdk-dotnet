@@ -1105,7 +1105,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
             return ValueTask.CompletedTask;
         }
 
@@ -1124,7 +1124,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex();
+            AdvanceReplayIndex(JournalEntryType.SendSignal);
             return ValueTask.CompletedTask;
         }
 
