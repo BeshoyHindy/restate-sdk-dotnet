@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 env:
   RELEASE_BRANCH: release-please--branches--main
@@ -18,12 +19,25 @@ jobs:
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          # Tags created with the default GITHUB_TOKEN do not trigger other
-          # workflows (publish.yml). Configure a RELEASE_PLEASE_TOKEN PAT
-          # secret to have the release tag trigger the NuGet publish.
+          # Tags created with the default GITHUB_TOKEN do not trigger `on: push: tags`
+          # workflows, so the step below dispatches publish.yml itself. A
+          # RELEASE_PLEASE_TOKEN PAT secret stays optional: with one the tag push also
+          # triggers publish.yml, and its `--skip-duplicate` push keeps the two runs from
+          # fighting over the package.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # workflow_dispatch is one of the two events GitHub lets the default token raise, so
+      # this is what gets a tagged release onto NuGet without a personal access token.
+      - name: Publish the release to NuGet
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          echo "Dispatching publish.yml on $TAG."
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
 
       # The action only reports a pull request when it creates or updates one, so a commit that
       # leaves the release pull request unchanged (a `ci:` or `chore:` subject, say) reports
