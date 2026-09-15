@@ -5,6 +5,28 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.2.1...v0.3.0) (2026-09-15)
+
+
+### Features
+
+* awaitable signals on the handler context ([#97](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/97)) ([a9d0895](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/a9d08955960e12972321ff74c33365b1f83467f5))
+* resolve and reject signals through the invocation handle ([#98](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/98)) ([b9ccc0e](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/b9ccc0e4e0e48e8e98d27a3486727e654fc79c89))
+* scope and limit key for calls, sends, and the ingress client ([#96](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/96)) ([2ce90b1](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/2ce90b1031e6096c1d60f0d7c306523ef7bca309))
+* typed ingress exception carrying the Restate error source and code ([#95](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/95)) ([bf2cfe5](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/bf2cfe5a520c5624fd9d68cbae905c78b06c07d9))
+
+
+### Bug Fixes
+
+* fail with a journal mismatch error instead of hanging on non-deterministic replay ([#93](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/93)) ([20beb57](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/20beb57dc32b062b5d15604f2e8046421c37af24))
+* **generator:** recognise interface context types and case-insensitive run handler ([#87](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/87)) ([e8e1e29](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/e8e1e293a9100bfd5b8562db340bd7b412e9376e))
+* **generator:** reject context parameters the invoker cannot supply ([#100](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/100)) ([78e5d5b](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/78e5d5b666193b4a89f8a5692bfda6c4852f739e))
+* honour requested manifest version when Accept is */* ([#86](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/86)) ([8d130e1](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/8d130e187baa107889b6ab13af2ea57ebaf28e20))
+* honour RetryPolicy when a Run is re-executed after replay ([#83](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/83)) ([d01e9c1](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/d01e9c14ea2768ed246782da11d1b3df02370895))
+* include PathBase in request identity audience ([#85](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/85)) ([3620b18](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/3620b18af0cbc471a1af749e5af051f76da9ad32))
+* make lazy durable futures safe to await more than once ([#94](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/94)) ([b448355](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/b448355e711a7b6401f11d61816162310f4a5dbb))
+* propose failure for the replayed run when retries are exhausted ([#99](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/99)) ([00c01cb](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/00c01cbe1c0aa4b43147bbaa8944a24b2bb82ed7))
+
 ## [Unreleased]
 
 ## [0.2.1] - 2026-07-12
