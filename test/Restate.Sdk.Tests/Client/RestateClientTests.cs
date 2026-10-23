@@ -39,7 +39,7 @@ public class RestateClientTests
             ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse);
 
         Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
-        Assert.Equal("/Greeter/Greet", handler.LastRequest.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/call/Greeter/Greet", handler.LastRequest.RequestUri!.AbsolutePath);
         Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
         Assert.Equal("hello Ada", response.Message);
     }
@@ -54,7 +54,7 @@ public class RestateClientTests
             "Add", new GreetRequest("x"),
             ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse);
 
-        Assert.Equal("/Counter/my-key/Add", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/call/Counter/my-key/Add", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class RestateClientTests
         var response = await client.Workflow("Signup", "wf-1").Call(
             "Status", ClientTestJsonContext.Default.GreetResponse);
 
-        Assert.Equal("/Signup/wf-1/Status", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/call/Signup/wf-1/Status", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Null(handler.LastRequestBody);
         Assert.Equal("empty", response.Message);
     }
@@ -81,7 +81,7 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
 
         Assert.Equal("inv-123", invocationId);
-        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/send/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.False(handler.LastRequest.Headers.Contains("x-restate-mode"));
         Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
     }
@@ -96,7 +96,7 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
             delay: TimeSpan.FromSeconds(2));
 
-        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/send/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("?delay=2000ms", handler.LastRequest!.RequestUri!.Query);
     }
 
@@ -110,7 +110,7 @@ public class RestateClientTests
             "Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
             idempotencyKey: "key-42");
 
-        Assert.Equal("/Greeter/ada/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/send/Greeter/ada/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("key-42", Assert.Single(handler.LastRequest!.Headers.GetValues("idempotency-key")));
     }
 
@@ -123,7 +123,7 @@ public class RestateClientTests
         var response = await client.Attach("inv-9", ClientTestJsonContext.Default.GreetResponse);
 
         Assert.Equal(HttpMethod.Get, handler.LastRequest!.Method);
-        Assert.Equal("/restate/invocation/inv-9/attach", handler.LastRequest.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/attach/inv-9", handler.LastRequest.RequestUri!.AbsolutePath);
         Assert.Equal("attached", response.Message);
     }
 
@@ -135,7 +135,7 @@ public class RestateClientTests
 
         var response = await client.GetOutput("inv-9", ClientTestJsonContext.Default.GreetResponse);
 
-        Assert.Equal("/restate/invocation/inv-9/output", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/output/inv-9", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("done", response.Message);
     }
 
@@ -208,7 +208,7 @@ public class RestateClientTests
 
         var response = await client.Service("Greeter").Call<GreetResponse>("Greet", new GreetRequest("Ada"));
 
-        Assert.Equal("/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("""{"name":"Ada"}""", handler.LastRequestBody);
         Assert.Equal("hello", response.Message);
     }
@@ -222,7 +222,7 @@ public class RestateClientTests
         var invocationId = await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"));
 
         Assert.Equal("inv-7", invocationId);
-        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/send/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.False(handler.LastRequest.Headers.Contains("x-restate-mode"));
     }
 
@@ -368,7 +368,7 @@ public class RestateClientTests
     {
         var (client, handler) = CreateClient();
 
-        // A null/empty id would silently build "/restate/invocation//..." and surface as an
+        // A null/empty id would silently build "/restate/attach/" with an empty id and surface as an
         // opaque 404 from the server — it must fail fast at the call site instead.
         await Assert.ThrowsAsync<ArgumentNullException>(() => client.Attach<GreetResponse>(null!));
         await Assert.ThrowsAsync<ArgumentException>(() => client.Attach<GreetResponse>(""));
@@ -567,7 +567,7 @@ public class RestateClientTests
         await client.Service("Greeter").Call<GreetResponse>(
             "Greet", new GreetRequest("Ada"), CallOptions.WithIdempotencyKey("order-1"));
 
-        Assert.Equal("/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("order-1", handler.LastRequest.Headers.GetValues("idempotency-key").Single());
         Assert.False(handler.LastRequest.Headers.Contains("x-restate-limit-key"));
     }
@@ -589,7 +589,7 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task Send_WithoutScope_KeepsTheUnversionedSendPath()
+    public async Task Send_WithoutScope_UsesTheCanonicalSendRoute()
     {
         var (client, handler) = CreateClient();
         handler.ResponseBody = """{"invocationId":"inv-1"}""";
@@ -597,7 +597,7 @@ public class RestateClientTests
         await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
             new SendOptions { Delay = TimeSpan.FromSeconds(30), IdempotencyKey = "order-1" });
 
-        Assert.Equal("/Greeter/Greet/send", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/restate/send/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("?delay=30000ms", handler.LastRequest.RequestUri.Query);
         Assert.Equal("order-1", handler.LastRequest.Headers.GetValues("idempotency-key").Single());
         Assert.False(handler.LastRequest.Headers.Contains("x-restate-limit-key"));
@@ -682,6 +682,195 @@ public class RestateClientTests
         await Assert.ThrowsAsync<ArgumentNullException>(() => client.RejectSignal("sign_1abc", null!));
 
         Assert.Null(handler.LastRequest);
+    }
+
+    // ── Canonical ingress routes and path escaping ──
+
+    // A segment carrying every character that is special in a URL path or query. Escaped once,
+    // it must stay inside a single segment instead of opening a new one or starting a query.
+    private const string Reserved = "a/b c?d#e%f";
+
+    private const string ReservedEscaped = "a%2Fb%20c%3Fd%23e%25f";
+
+    [Fact]
+    public async Task Call_Unscoped_UsesTheCanonicalCallRoute()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("http://localhost:8080/restate/call/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.VirtualObject("Counter", "my-key").Call("Add", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("http://localhost:8080/restate/call/Counter/my-key/Add",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task Send_Unscoped_UsesTheCanonicalSendRoute_WithAndWithoutDelay()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+
+        await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest);
+        Assert.Equal("http://localhost:8080/restate/send/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.VirtualObject("Counter", "my-key").Send("Add", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest);
+        Assert.Equal("http://localhost:8080/restate/send/Counter/my-key/Add",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, delay: TimeSpan.FromMilliseconds(1500));
+        Assert.Equal("http://localhost:8080/restate/send/Greeter/Greet?delay=1500ms",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.VirtualObject("Counter", "my-key").Send("Add", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, delay: TimeSpan.FromSeconds(30));
+        Assert.Equal("http://localhost:8080/restate/send/Counter/my-key/Add?delay=30000ms",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task Scoped_CallAndSend_KeepTheScopedRouteShape()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse,
+            CallOptions.WithScope("tenant-a"));
+        Assert.Equal("http://localhost:8080/restate/scope/tenant-a/call/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.VirtualObject("Counter", "my-key").Call("Add", ClientTestJsonContext.Default.GreetResponse,
+            CallOptions.WithScope("tenant-a"));
+        Assert.Equal("http://localhost:8080/restate/scope/tenant-a/call/Counter/my-key/Add",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+
+        await client.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, SendOptions.WithScope("tenant-a"));
+        Assert.Equal("http://localhost:8080/restate/scope/tenant-a/send/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.VirtualObject("Counter", "my-key").Send("Add", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest,
+            new SendOptions { Scope = "tenant-a", Delay = TimeSpan.FromSeconds(5) });
+        Assert.Equal("http://localhost:8080/restate/scope/tenant-a/send/Counter/my-key/Add?delay=5000ms",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task InvocationRoutes_AttachAndOutputAreCanonical_CancelStaysOnTheInvocationRoute()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"done"}""";
+
+        await client.Attach("inv-9", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("http://localhost:8080/restate/attach/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.Attach<GreetResponse>("inv-9");
+        Assert.Equal("http://localhost:8080/restate/attach/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.GetOutput("inv-9", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("http://localhost:8080/restate/output/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.GetOutput<GreetResponse>("inv-9");
+        Assert.Equal("http://localhost:8080/restate/output/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        // The 1.8 ingress serves no cancel verb, so cancel keeps the invocation route.
+        await client.Cancel("inv-9");
+        Assert.Equal("http://localhost:8080/restate/invocation/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task ReservedCharactersInCallAndSendSegments_StayInsideTheirSegment()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.VirtualObject("Counter", Reserved).Call("Add", ClientTestJsonContext.Default.GreetResponse);
+
+        var uri = handler.LastRequest!.RequestUri!;
+        Assert.Equal($"http://localhost:8080/restate/call/Counter/{ReservedEscaped}/Add", uri.AbsoluteUri);
+        // "/restate/call/Counter/{key}/Add": no segment added by the key, and no query started.
+        Assert.Equal(6, uri.Segments.Length);
+        Assert.Equal("", uri.Query);
+        Assert.Contains("%25", uri.AbsoluteUri);
+
+        await client.Service(Reserved).Call(Reserved, ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal($"http://localhost:8080/restate/call/{ReservedEscaped}/{ReservedEscaped}",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+        Assert.Equal(5, handler.LastRequest.RequestUri.Segments.Length);
+
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+
+        await client.VirtualObject("Counter", Reserved).Send("Add", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, delay: TimeSpan.FromSeconds(2));
+        Assert.Equal($"http://localhost:8080/restate/send/Counter/{ReservedEscaped}/Add?delay=2000ms",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+        Assert.Equal("?delay=2000ms", handler.LastRequest.RequestUri.Query);
+    }
+
+    [Fact]
+    public async Task ReservedCharactersInTheScope_StayInsideTheScopeSegment()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse,
+            CallOptions.WithScope(Reserved));
+
+        var uri = handler.LastRequest!.RequestUri!;
+        Assert.Equal($"http://localhost:8080/restate/scope/{ReservedEscaped}/call/Greeter/Greet", uri.AbsoluteUri);
+        Assert.Equal(7, uri.Segments.Length);
+        Assert.Equal("", uri.Query);
+    }
+
+    [Fact]
+    public async Task ReservedCharactersInInvocationAndSignalIds_StayInsideTheirSegment()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"done"}""";
+
+        await client.Attach(Reserved, ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal($"http://localhost:8080/restate/attach/{ReservedEscaped}",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+        Assert.Equal(4, handler.LastRequest.RequestUri.Segments.Length);
+
+        await client.GetOutput(Reserved, ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal($"http://localhost:8080/restate/output/{ReservedEscaped}",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.Cancel(Reserved);
+        Assert.Equal($"http://localhost:8080/restate/invocation/{ReservedEscaped}",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+
+        await client.ResolveSignal(Reserved, "value", ClientTestJsonContext.Default.String);
+        Assert.Equal($"http://localhost:8080/restate/awakeables/{ReservedEscaped}/resolve",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+        Assert.Equal(5, handler.LastRequest.RequestUri.Segments.Length);
+
+        await client.RejectSignal(Reserved, "nope");
+        Assert.Equal($"http://localhost:8080/restate/awakeables/{ReservedEscaped}/reject",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task OrdinaryNames_AreNotRewrittenByEscaping()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        await client.VirtualObject("Counter_Object.v2", "key-1.2_3~4").Call(
+            "Add-Item.v2", ClientTestJsonContext.Default.GreetResponse);
+
+        Assert.Equal("http://localhost:8080/restate/call/Counter_Object.v2/key-1.2_3~4/Add-Item.v2",
+            handler.LastRequest!.RequestUri!.AbsoluteUri);
     }
 
     internal sealed class StubHandler : HttpMessageHandler

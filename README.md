@@ -590,6 +590,17 @@ await client.Service("EmailService")
 
 > New in 0.3.0: the scoped ingress paths above, and the typed exception below.
 
+The client addresses the versioned ingress routes (`/restate/call/...`, `/restate/send/...`,
+`/restate/scope/{scope}/...`, `/restate/attach/{id}`, `/restate/output/{id}`), and escapes every
+service name, key, handler name, scope, invocation id and signal id it puts in a path, so a
+virtual-object key such as `a/b c?d` addresses the key rather than a different route.
+
+> On restate-server 1.8 the ingress silently drops every client-supplied `x-restate-*` request
+> header except `x-restate-limit-key`, which it reads before the drop. `RestateClient` has no
+> per-call header API, so this only affects callers that add such headers themselves — through
+> `HttpClient.DefaultRequestHeaders` or a `DelegatingHandler` on the `HttpClient` passed to
+> `new RestateClient(httpClient)`.
+
 Any non-success ingress response throws a `RestateIngressException`:
 
 ```csharp

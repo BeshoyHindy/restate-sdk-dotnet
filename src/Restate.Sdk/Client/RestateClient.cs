@@ -267,7 +267,7 @@ public sealed class RestateClient : IDisposable
     public async Task<TResponse> Attach<TResponse>(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
+        using var response = await _http.GetAsync(AttachPath(invocationId), ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
@@ -286,7 +286,7 @@ public sealed class RestateClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/attach", ct)
+        using var response = await _http.GetAsync(AttachPath(invocationId), ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
@@ -302,7 +302,7 @@ public sealed class RestateClient : IDisposable
     public async Task<TResponse> GetOutput<TResponse>(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
+        using var response = await _http.GetAsync(OutputPath(invocationId), ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync<TResponse>(GetReflectionJsonOptions(), ct).ConfigureAwait(false))!;
@@ -321,7 +321,7 @@ public sealed class RestateClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        using var response = await _http.GetAsync($"/restate/invocation/{invocationId}/output", ct)
+        using var response = await _http.GetAsync(OutputPath(invocationId), ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
         return (await response.Content.ReadFromJsonAsync(responseTypeInfo, ct).ConfigureAwait(false))!;
@@ -329,13 +329,18 @@ public sealed class RestateClient : IDisposable
 
     /// <summary>
     ///     Cancels a running invocation by ID.
+    ///     <para>
+    ///         restate-server 1.8 serves no cancel route on the ingress — cancellation is an
+    ///         admin API operation — so this request is rejected by a 1.8 ingress with a
+    ///         <see cref="RestateIngressException" />.
+    ///     </para>
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="invocationId" /> is <see langword="null" />.</exception>
     /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
     public async Task Cancel(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        using var response = await _http.DeleteAsync($"/restate/invocation/{invocationId}", ct)
+        using var response = await _http.DeleteAsync(CancelPath(invocationId), ct)
             .ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
@@ -407,7 +412,28 @@ public sealed class RestateClient : IDisposable
     /// </summary>
     private static string SignalPath(string signalId, string verb)
     {
-        return $"/restate/awakeables/{signalId}/{verb}";
+        return $"/restate/awakeables/{Uri.EscapeDataString(signalId)}/{verb}";
+    }
+
+    /// <summary>The canonical route for attaching to an invocation by id.</summary>
+    private static string AttachPath(string invocationId)
+    {
+        return $"/restate/attach/{Uri.EscapeDataString(invocationId)}";
+    }
+
+    /// <summary>The canonical route for reading the output of an invocation by id.</summary>
+    private static string OutputPath(string invocationId)
+    {
+        return $"/restate/output/{Uri.EscapeDataString(invocationId)}";
+    }
+
+    /// <summary>
+    ///     The route for cancelling an invocation by id. restate-server 1.8 serves no cancel verb
+    ///     under the versioned ingress API, so this stays on the invocation route.
+    /// </summary>
+    private static string CancelPath(string invocationId)
+    {
+        return $"/restate/invocation/{Uri.EscapeDataString(invocationId)}";
     }
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
@@ -470,9 +496,9 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
-    ///     Builds the POST for a call or send. <paramref name="path" /> is already complete — the
-    ///     scope, and for a send the "/send" suffix or "send" verb, are part of it (see
-    ///     <see cref="ServiceHandle" />).
+    ///     Builds the POST for a call or send. <paramref name="path" /> is already complete and
+    ///     already escaped — the "call" or "send" verb, and the scope, are part of it (see
+    ///     <see cref="ServiceHandle" />), so nothing here escapes it again.
     /// </summary>
     private static HttpRequestMessage CreateInvocationRequest(string path, TimeSpan? delay, string? idempotencyKey,
         string? limitKey)
@@ -677,24 +703,28 @@ public readonly record struct ServiceHandle
     }
 
     /// <summary>
-    ///     Builds the ingress path. A scoped invocation uses the versioned ingress API, which
-    ///     carries the scope and the verb in the path — the convention sdk-go's makeIngressUrl and
-    ///     the Java client both follow, and the only form the runtime accepts a scope in:
-    ///     <c>/restate/scope/{scope}/{call|send}/{service}[/{key}]/{handler}</c>.
-    ///     An unscoped invocation keeps the unversioned <c>/{service}[/{key}]/{handler}[/send]</c>.
+    ///     Builds the ingress path using the versioned ingress API, which carries the verb — and
+    ///     for a scoped invocation the scope — in the path:
+    ///     <c>/restate/{call|send}/{service}[/{key}]/{handler}</c> and
+    ///     <c>/restate/scope/{scope}/{call|send}/{service}[/{key}]/{handler}</c>. The unversioned
+    ///     <c>/{service}[/{key}]/{handler}[/send]</c> shape still routes on restate-server 1.8 but
+    ///     is deprecated and slated for removal.
+    ///     <para>
+    ///         Every dynamic segment is escaped here, exactly once, so that a service, key,
+    ///         handler or scope containing <c>/</c>, <c>?</c>, <c>#</c>, <c>%</c> or a space
+    ///         cannot address a different route.
+    ///     </para>
     /// </summary>
     private string BuildPath(string handler, string? scope, bool send)
     {
-        if (scope is not null)
-        {
-            var verb = send ? "send" : "call";
-            return _key is not null
-                ? $"/restate/scope/{scope}/{verb}/{_service}/{_key}/{handler}"
-                : $"/restate/scope/{scope}/{verb}/{_service}/{handler}";
-        }
+        var verb = send ? "send" : "call";
+        var target = _key is not null
+            ? $"{Uri.EscapeDataString(_service)}/{Uri.EscapeDataString(_key)}/{Uri.EscapeDataString(handler)}"
+            : $"{Uri.EscapeDataString(_service)}/{Uri.EscapeDataString(handler)}";
 
-        var path = _key is not null ? $"/{_service}/{_key}/{handler}" : $"/{_service}/{handler}";
-        return send ? $"{path}/send" : path;
+        return scope is not null
+            ? $"/restate/scope/{Uri.EscapeDataString(scope)}/{verb}/{target}"
+            : $"/restate/{verb}/{target}";
     }
 }
 
