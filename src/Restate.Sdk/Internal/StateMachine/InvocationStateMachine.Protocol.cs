@@ -128,7 +128,9 @@ internal sealed partial class InvocationStateMachine
             fields.InvocationId,
             fields.Key,
             (int)fields.KnownEntries,
-            fields.RandomSeed,
+            // The effective seed, which below V6 is derived from the invocation id rather than
+            // read from the StartMessage.
+            RandomSeed,
             input);
     }
 
