@@ -312,6 +312,11 @@ var sender = ctx.ServiceSendClient<IEmailServiceSendClient>(SendOptions.WithScop
 await sender.SendEmailSend(request);
 ```
 
+Scope and limit key are protocol v7 fields on the call command, so a handler needs a server that
+negotiates v7 (restate-server 1.8 does by default); the ingress client carries them in the request
+instead and needs no negotiation. See the
+[scope and limit key guide](docs/guide/scope-and-limit-key.md).
+
 #### Signals
 
 > New in 0.3.0.
@@ -332,6 +337,22 @@ public class ReviewWorkflow
         var decision = await ctx.Signal<string>("approval").GetResult();
         return decision;
     }
+}
+```
+
+New in 0.4.0: the unnamed `ctx.Signal<T>()` returns a `SignalHandle<T>` carrying the index this
+invocation allocated for the signal, alongside the future. The handle is itself a durable future,
+and the awaiting handler publishes its index so no resolver has to assume which one it got:
+
+```csharp
+private static readonly StateKey<int> SignalIndex = new("signalIndex");
+
+[Handler]
+public async Task<string> Run(WorkflowContext ctx, ReviewRequest request)
+{
+    SignalHandle<string> handle = ctx.Signal<string>();
+    ctx.Set(SignalIndex, handle.Index);     // publish it for the resolver to address
+    return await handle.GetResult();
 }
 ```
 
@@ -364,6 +385,27 @@ complete a signal by id -- the id an invocation hands out with `ctx.Awakeable<T>
 > signals for an invocation that has not started. It requires every node to run 1.8.1 or later, and
 > it is one-way: once a partition has it enabled, the cluster can no longer be rolled back below
 > 1.8.1.
+
+#### Named state entries
+
+> New in 0.4.0.
+
+Every durable state operation takes an optional entry name beside its key. The name labels the
+journal entry, so the Restate UI shows `load-count` instead of an anonymous state read -- the same
+thing `ctx.Run` already does for side effects. It is observability only: it does not change what is
+read or written, replay does not compare it, and omitting it records exactly the entry it always
+did.
+
+```csharp
+private static readonly StateKey<int> Count = new("count");
+
+// ObjectContext (or WorkflowContext): the name is the last argument of every state operation
+var current = await ctx.Get(Count, "load-count");
+ctx.Set(Count, current + 1, "bump-count");
+ctx.Clear("count", "reset-count");
+ctx.ClearAll("wipe-state");
+var keys = await ctx.StateKeys("list-keys");
+```
 
 ### Error Handling
 
@@ -611,10 +653,11 @@ var email = await client.LookupIdempotentInvocation("EmailService", "SendEmail",
 var sent = await client.GetOutput<bool>(email.InvocationId);
 ```
 
-> New in 0.3.0: the scoped ingress paths above, and the typed exception below.
-> The lookups and `WithScope` require restate-server 1.7 or later. A lookup derives the
+> New in 0.3.0: the scoped ingress paths above and the typed exception below. New in 0.4.0:
+> `WithScope` and the two lookups, which require restate-server 1.7 or later. A lookup derives the
 > invocation ID from the target rather than reading storage, so it answers for a target that was
-> never invoked too; the absence shows up as a 404 on `Attach`.
+> never invoked too; the absence shows up as a 404 on `Attach`. Both lookups also take an optional
+> scope, which defaults to the one bound by `WithScope`.
 
 The client addresses the versioned ingress routes (`/restate/call/...`, `/restate/send/...`,
 `/restate/scope/{scope}/...`, `/restate/attach/{id}`, `/restate/output/{id}`, `/restate/lookup`),
@@ -663,7 +706,8 @@ catch (RestateIngressException ex)
 ```
 
 It derives from `HttpRequestException`, so existing `catch (HttpRequestException)` blocks keep
-working.
+working. See the [ingress client errors guide](docs/guide/ingress-errors.md) for what each property
+reports, and for the failures the client raises before a request is made.
 
 Reflection-based overloads use camelCase JSON by default. To match an endpoint with different
 JSON conventions, configure the client explicitly:
@@ -693,6 +737,7 @@ The [`samples/`](samples/) directory contains complete working examples:
 | [FanOut](samples/FanOut) | 9087 | Fan-out/fan-in, `RunAsync` + `All`/`Race` combinators |
 | [NativeAotCounter](samples/NativeAotCounter) | 9088 | Virtual object state under NativeAOT, `JsonSerializerContext` wiring |
 | [NativeAotSaga](samples/NativeAotSaga) | 9089 | Saga/compensation pattern under NativeAOT |
+| [ScopedClient](samples/ScopedClient) | 9090 | Scope and limit key, scope-bound `RestateClient`, `RestateIngressException` |
 
 Run any sample:
 
@@ -713,19 +758,24 @@ dotnet run
 | 0.2.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.2.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.3.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+| 0.3.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+| 0.4.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 
 The protocol version is negotiated per invocation from the request content type, so the SDK and the
 server settle on the highest version both support; v5 is the floor, which is why the minimum server
-version has not moved. 0.3.0 is the first release to carry scope and limit key, signals, and
-`RestateIngressException` -- everything else documented here is in 0.2.1.
+version has not moved. 0.3.0 was the first release to carry scope and limit key, signals, and
+`RestateIngressException`; 0.4.0 adds the unnamed signal handle, entry names on state operations,
+and the ingress lookups with their scope-bound client. Everything else documented here is in 0.2.1.
 
-Scope and limit key are protocol v7 fields, so a handler that sets either on a stream the server
-negotiated below v7 fails the call with an `ArgumentException` instead of losing the flow control
-silently; the server has to negotiate v7 for them (restate-server 1.8 does by default, 1.7 only
-with v7 enabled). On the ingress client they are carried in the request URL, so no negotiation
-applies. One feature degrades rather than fails against older servers:
-`RestateIngressException.ErrorSource` and `ErrorCode` are only reported by restate-server 1.7.4 and
-newer. The SDK is tested against restate-server 1.8.
+Individual features can need a newer server than that minimum. Scope and limit key are protocol v7
+fields, so a handler that sets either on a stream the server negotiated below v7 fails the call with
+an `ArgumentException` instead of losing the flow control silently; the server has to negotiate v7
+for them (restate-server 1.8 does by default, 1.7 only with v7 enabled). On the ingress client they
+are carried in the request instead, so no negotiation applies -- but the scoped ingress routes and
+the lookups need restate-server 1.7 or later. One feature degrades rather than fails against older
+servers: `RestateIngressException.ErrorSource` and `ErrorCode` are only reported by restate-server
+1.7.4 and newer. The SDK is tested against restate-server 1.8, the version `docker-compose.yml`
+pins for CI and the Testcontainers harness.
 
 ## Contributing
 

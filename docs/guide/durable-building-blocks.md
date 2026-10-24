@@ -36,13 +36,21 @@ var count = await ctx.Call<int>("CounterObject", "my-key", "Add", 1);
 var txnId = await ctx.Call<string>("PaymentService", "Charge", request,
     CallOptions.WithIdempotencyKey("order-123"));
 
+// Calls in a server-side concurrency scope, optionally narrowed by a limit key
+var quote = await ctx.Call<string>("PricingService", "Quote", request,
+    CallOptions.WithScope("pricing", "tenant-a"));
+
 // One-way sends (fire-and-forget, returns InvocationHandle for tracking)
 InvocationHandle handle = await ctx.Send("EmailService", "SendEmail", request);
 await ctx.Send("ReminderService", "Remind", data, delay: TimeSpan.FromHours(1));
+await ctx.Send("EmailService", "SendEmail", request, SendOptions.WithScope("notifications"));
 
 // Cancel a running invocation
 await ctx.CancelInvocation("inv-id-to-cancel");
 ```
+
+The scope and the limit key cap how many invocations run at once, and they need a server that
+negotiates protocol V7. See [Scope and Limit Key](scope-and-limit-key.md).
 
 ## Timers
 
@@ -79,10 +87,16 @@ var decision = await approval.GetResult();
 // Signals are durable futures, so they compose like any other
 var first = await ctx.Race(ctx.Signal<string>("approved"), ctx.Signal<string>("rejected"));
 
-// Unnamed signal: the handle carries the index this call allocates, which addresses the signal
-var handle = ctx.Signal<string>();
+// Unnamed signal: the returned SignalHandle<T> carries the index this call allocated, and that
+// index — not a fixed number — is what the resolver addresses
+SignalHandle<string> handle = ctx.Signal<string>();
 var unnamed = await handle.GetResult();
 ```
+
+A `SignalHandle<T>` is itself an `IDurableFuture<T>`, so it goes straight into `All`, `Race`, `Any`
+and `AllSettled` without unwrapping `handle.Future`. Its index comes from the same allocator
+awakeables draw from, so publish `handle.Index` — in state, or by calling the resolver — rather
+than assuming which index an invocation allocated.
 
 > Signal an invocation only once it has started. On restate-server 1.8.1 and later a signal sent to
 > an invocation that has not started yet — one waiting out a delayed send, or queued behind another
@@ -131,6 +145,44 @@ waiting again. Signals and awakeables share one index allocator and one notifica
 awakeable is an unnamed signal plus the opaque id that addresses it, so use `ctx.Awakeable<T>()`
 when an external system needs an id to carry around, and `ctx.Signal<T>(name)` when the resolver
 already knows the invocation and a name. Awakeables are unchanged and remain supported.
+
+## Calling from outside the runtime
+
+`RestateClient` invokes the same handlers from outside Restate — from an API gateway, a job, or a
+test. Calls and sends take the same `CallOptions` and `SendOptions` a handler uses, and a scope can
+be bound once to a derived client instead of passed on each invocation:
+
+```csharp
+using var client = new RestateClient("http://localhost:8080");
+
+var greeting = await client.Service("GreeterService").Call<string>("Greet", "World");
+var count = await client.VirtualObject("CounterObject", "my-key").Call<int>("Add", 1);
+var invocationId = await client.Service("EmailService")
+    .Send("SendEmail", request, delay: TimeSpan.FromHours(1));
+
+// Bind the scope once; a per-call scope still wins over the bound one
+var tenant = client.WithScope("pricing");
+var quote = await tenant.Service("PricingService").Call<string>("Quote", request);
+```
+
+A caller that did not keep the invocation id can look the target up — by workflow name and key, or
+by the idempotency key an invocation was submitted with — and then attach to it or read its output:
+
+```csharp
+var signup = await client.LookupWorkflow("SignupWorkflow", "user-1");
+var result = await client.Attach<bool>(signup.InvocationId);
+
+var email = await client.LookupIdempotentInvocation("EmailService", "SendEmail", "order-1");
+var sent = await client.GetOutput<bool>(email.InvocationId);
+```
+
+Both lookups take an optional scope, which defaults to the scope bound by `WithScope`. The ingress
+derives the invocation id from the target instead of reading storage, so a lookup succeeds for a
+target that was never invoked; that absence shows up as a `RestateIngressException` with status 404
+on the following `Attach`. `WithScope` and the lookups need restate-server 1.7 or later.
+
+See [Scope and Limit Key](scope-and-limit-key.md) for the flow-control options and
+[Ingress Client Errors](ingress-errors.md) for what a failed ingress request reports.
 
 ## Futures and Combinators
 
