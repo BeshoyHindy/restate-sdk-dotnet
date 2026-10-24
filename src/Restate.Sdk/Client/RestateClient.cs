@@ -357,7 +357,9 @@ public sealed class RestateClient : IDisposable
     /// <param name="workflowKey">The workflow key — its id, one invocation per key.</param>
     /// <param name="scope">
     ///     The concurrency scope the workflow was invoked in, or null to use the scope bound by
-    ///     <see cref="WithScope" /> — and no scope at all on an unbound client.
+    ///     <see cref="WithScope" /> — and no scope at all on an unbound client. A client bound with
+    ///     <see cref="WithScope" /> therefore looks up only invocations made in that scope; use the
+    ///     unbound client to look up an unscoped invocation.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="ArgumentNullException">
@@ -399,7 +401,9 @@ public sealed class RestateClient : IDisposable
     /// <param name="key">The virtual-object or workflow key, or null for a stateless service.</param>
     /// <param name="scope">
     ///     The concurrency scope the invocation was made in, or null to use the scope bound by
-    ///     <see cref="WithScope" /> — and no scope at all on an unbound client.
+    ///     <see cref="WithScope" /> — and no scope at all on an unbound client. A client bound with
+    ///     <see cref="WithScope" /> therefore looks up only invocations made in that scope; use the
+    ///     unbound client to look up an unscoped invocation.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="ArgumentNullException">

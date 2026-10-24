@@ -113,6 +113,9 @@ var signup = await client.LookupWorkflow("SignupWorkflow", "user-1", "signups");
 var alsoSignup = await client.WithScope("signups").LookupWorkflow("SignupWorkflow", "user-1");
 ```
 
+A bound scope is applied to every lookup, so a scope-bound client finds only invocations made in
+that scope; look an unscoped invocation up through the unbound client.
+
 ## A limit key needs a scope
 
 The server honours a limit key only inside a scope, so a limit key on its own would be silently
