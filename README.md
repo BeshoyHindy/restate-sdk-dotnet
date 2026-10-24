@@ -354,6 +354,15 @@ Signals are durable futures, so they compose with `All`, `Race`, `Any` and `AllS
 other. From outside the runtime, `RestateClient.ResolveSignal` and `RestateClient.RejectSignal`
 complete a signal by id -- the id an invocation hands out with `ctx.Awakeable<T>().Id`.
 
+> Signal an invocation only once it has started. On restate-server 1.8.1 and later a signal sent to
+> an invocation that has not started yet -- one waiting out a delayed send, or queued behind another
+> call to the same virtual-object key -- is dropped, and the handler then waits for a signal that
+> never arrives. Awakeable completions are affected the same way. The operator can change that by
+> setting `experimental-enable-preflight-signal-recording = true` on the server, which records
+> signals for an invocation that has not started. It requires every node to run 1.8.1 or later, and
+> it is one-way: once a partition has it enabled, the cluster can no longer be rolled back below
+> 1.8.1.
+
 ### Error Handling
 
 Restate automatically retries failed handlers. To signal a non-retryable failure (validation errors,

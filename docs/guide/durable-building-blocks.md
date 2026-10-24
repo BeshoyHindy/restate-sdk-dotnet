@@ -82,6 +82,15 @@ var first = await ctx.Race(ctx.Signal<string>("approved"), ctx.Signal<string>("r
 var unnamed = await ctx.Signal<string>().GetResult();
 ```
 
+> Signal an invocation only once it has started. On restate-server 1.8.1 and later a signal sent to
+> an invocation that has not started yet — one waiting out a delayed send, or queued behind another
+> call to the same virtual-object key — is dropped, and the handler then waits for a signal that
+> never arrives. Awakeable completions are affected the same way. The operator can change that by
+> setting `experimental-enable-preflight-signal-recording = true` on the server, which records
+> signals for an invocation that has not started. It requires every node to run 1.8.1 or later, and
+> it is one-way: once a partition has it enabled, the cluster can no longer be rolled back below
+> 1.8.1.
+
 ## Resolving and rejecting signals
 
 The other half of a signal is the side that completes it. From a handler, address the target
