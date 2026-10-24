@@ -777,7 +777,11 @@ internal sealed partial class InvocationStateMachine
 
     // ------- State -------
 
-    public async ValueTask<T?> GetStateAsync<T>(string key, CancellationToken ct)
+    // An entry name is observability only: it is written to the command so the journal and the
+    // UI can label the entry, and is deliberately not part of CommandFields, so renaming a state
+    // operation between attempts is not a journal mismatch.
+
+    public async ValueTask<T?> GetStateAsync<T>(string key, string? entryName, CancellationToken ct)
     {
         EnsureActive();
 
@@ -802,7 +806,7 @@ internal sealed partial class InvocationStateMachine
         if (_initialState is not null && _initialState.TryGetValue(key, out var eager))
         {
             WriteCommand(MessageType.GetEagerStateCommand,
-                ProtobufCodec.CreateGetEagerStateCommand(key, eager));
+                ProtobufCodec.CreateGetEagerStateCommand(key, eager, entryName));
             _journal.Append(JournalEntry.Completed(JournalEntryType.GetState, ReadOnlyMemory<byte>.Empty, key));
             return eager.Length > 0 ? Deserialize<T>(eager) : default;
         }
@@ -810,7 +814,7 @@ internal sealed partial class InvocationStateMachine
         if (!_stateIsPartial)
         {
             WriteCommand(MessageType.GetEagerStateCommand,
-                ProtobufCodec.CreateGetEagerStateCommand(key, null));
+                ProtobufCodec.CreateGetEagerStateCommand(key, null, entryName));
             _journal.Append(JournalEntry.Completed(JournalEntryType.GetState, ReadOnlyMemory<byte>.Empty, key));
             return default;
         }
@@ -823,7 +827,8 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Pending(JournalEntryType.GetState, key));
         var tcs = _completions.GetOrRegister((int)completionId);
 
-        WriteCommand(MessageType.GetLazyStateCommand, ProtobufCodec.CreateGetStateCommand(key, completionId));
+        WriteCommand(MessageType.GetLazyStateCommand,
+            ProtobufCodec.CreateGetStateCommand(key, completionId, entryName));
 
         await FlushAsync(ct).ConfigureAwait(false);
 
@@ -836,7 +841,7 @@ internal sealed partial class InvocationStateMachine
     // State mutation commands write to the pipe buffer without flushing.
     // The next async operation (Call, Run, Sleep, etc.) will flush the buffer.
     // This is safe because state commands are small and Kestrel's pipe buffer is large.
-    public void SetState<T>(string key, T value)
+    public void SetState<T>(string key, T value, string? entryName = null)
     {
         EnsureActive();
 
@@ -848,7 +853,7 @@ internal sealed partial class InvocationStateMachine
 
         var serialized = Serialize(value);
 
-        WriteCommand(MessageType.SetStateCommand, ProtobufCodec.CreateSetStateCommand(key, serialized.Span));
+        WriteCommand(MessageType.SetStateCommand, ProtobufCodec.CreateSetStateCommand(key, serialized.Span, entryName));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.SetState, ReadOnlyMemory<byte>.Empty, key));
 
@@ -856,7 +861,7 @@ internal sealed partial class InvocationStateMachine
         _initialState[key] = CopyToPooled(serialized);
     }
 
-    public void ClearState(string key)
+    public void ClearState(string key, string? entryName = null)
     {
         EnsureActive();
 
@@ -866,14 +871,14 @@ internal sealed partial class InvocationStateMachine
             return;
         }
 
-        WriteCommand(MessageType.ClearStateCommand, ProtobufCodec.CreateClearStateCommand(key));
+        WriteCommand(MessageType.ClearStateCommand, ProtobufCodec.CreateClearStateCommand(key, entryName));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.ClearState, ReadOnlyMemory<byte>.Empty, key));
 
         _initialState?.Remove(key);
     }
 
-    public void ClearAllState()
+    public void ClearAllState(string? entryName = null)
     {
         EnsureActive();
 
@@ -883,7 +888,7 @@ internal sealed partial class InvocationStateMachine
             return;
         }
 
-        WriteCommand(MessageType.ClearAllStateCommand, ProtobufCodec.CreateClearAllStateCommand());
+        WriteCommand(MessageType.ClearAllStateCommand, ProtobufCodec.CreateClearAllStateCommand(entryName));
         _journal.Append(JournalEntry.Completed(JournalEntryType.ClearAllState, ReadOnlyMemory<byte>.Empty));
 
         // After clearing everything, the (empty) local view is definitively complete —
@@ -892,7 +897,7 @@ internal sealed partial class InvocationStateMachine
         _stateIsPartial = false;
     }
 
-    public async ValueTask<string[]> GetStateKeysAsync(CancellationToken ct)
+    public async ValueTask<string[]> GetStateKeysAsync(string? entryName, CancellationToken ct)
     {
         EnsureActive();
 
@@ -926,7 +931,7 @@ internal sealed partial class InvocationStateMachine
             }
 
             WriteCommand(MessageType.GetEagerStateKeysCommand,
-                ProtobufCodec.CreateGetEagerStateKeysCommand(localKeys));
+                ProtobufCodec.CreateGetEagerStateKeysCommand(localKeys, entryName));
             _journal.Append(JournalEntry.Completed(JournalEntryType.GetStateKeys, ReadOnlyMemory<byte>.Empty));
             return localKeys;
         }
@@ -937,7 +942,8 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Pending(JournalEntryType.GetStateKeys));
         var tcs = _completions.GetOrRegister((int)completionId);
 
-        WriteCommand(MessageType.GetLazyStateKeysCommand, ProtobufCodec.CreateGetStateKeysCommand(completionId));
+        WriteCommand(MessageType.GetLazyStateKeysCommand,
+            ProtobufCodec.CreateGetStateKeysCommand(completionId, entryName));
 
         await FlushAsync(ct).ConfigureAwait(false);
 

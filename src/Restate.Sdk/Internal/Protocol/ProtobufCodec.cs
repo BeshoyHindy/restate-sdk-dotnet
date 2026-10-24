@@ -472,70 +472,108 @@ internal static class ProtobufCodec
         };
     }
 
-    public static Gen.GetLazyStateCommandMessage CreateGetStateCommand(string key, uint completionId)
+    /// <summary>
+    ///     Creates a GetLazyStateCommand. The optional entry name (field 12) is omitted entirely
+    ///     when null or empty, so an unnamed read encodes exactly as it did before names existed.
+    /// </summary>
+    public static Gen.GetLazyStateCommandMessage CreateGetStateCommand(string key, uint completionId,
+        string? name = null)
     {
-        return new Gen.GetLazyStateCommandMessage
+        var msg = new Gen.GetLazyStateCommandMessage
         {
             Key = ByteString.CopyFromUtf8(key),
             ResultCompletionId = completionId
         };
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
-    public static Gen.SetStateCommandMessage CreateSetStateCommand(string key, ReadOnlySpan<byte> value)
+    /// <summary>
+    ///     Creates a SetStateCommand. The optional entry name (field 12) is omitted entirely when
+    ///     null or empty.
+    /// </summary>
+    public static Gen.SetStateCommandMessage CreateSetStateCommand(string key, ReadOnlySpan<byte> value,
+        string? name = null)
     {
-        return new Gen.SetStateCommandMessage
+        var msg = new Gen.SetStateCommandMessage
         {
             Key = ByteString.CopyFromUtf8(key),
             Value = new Gen.Value { Content = ByteString.CopyFrom(value) }
         };
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
-    public static Gen.ClearStateCommandMessage CreateClearStateCommand(string key)
+    /// <summary>
+    ///     Creates a ClearStateCommand. The optional entry name (field 12) is omitted entirely
+    ///     when null or empty.
+    /// </summary>
+    public static Gen.ClearStateCommandMessage CreateClearStateCommand(string key, string? name = null)
     {
-        return new Gen.ClearStateCommandMessage
+        var msg = new Gen.ClearStateCommandMessage
         {
             Key = ByteString.CopyFromUtf8(key)
         };
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
-    public static Gen.ClearAllStateCommandMessage CreateClearAllStateCommand()
+    /// <summary>
+    ///     Creates a ClearAllStateCommand. The optional entry name (field 12) is omitted entirely
+    ///     when null or empty.
+    /// </summary>
+    public static Gen.ClearAllStateCommandMessage CreateClearAllStateCommand(string? name = null)
     {
-        return new Gen.ClearAllStateCommandMessage();
+        var msg = new Gen.ClearAllStateCommandMessage();
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
-    public static Gen.GetLazyStateKeysCommandMessage CreateGetStateKeysCommand(uint completionId)
+    /// <summary>
+    ///     Creates a GetLazyStateKeysCommand. The optional entry name (field 12) is omitted
+    ///     entirely when null or empty.
+    /// </summary>
+    public static Gen.GetLazyStateKeysCommandMessage CreateGetStateKeysCommand(uint completionId, string? name = null)
     {
-        return new Gen.GetLazyStateKeysCommandMessage
+        var msg = new Gen.GetLazyStateKeysCommandMessage
         {
             ResultCompletionId = completionId
         };
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
     /// <summary>
     ///     Creates a GetEagerStateCommand recording a state read resolved from the locally known
     ///     state map. The result is embedded in the command itself: the Value oneof when the key
     ///     is present, the Void oneof when it is definitively absent (<paramref name="value" /> null).
+    ///     The optional entry name (field 12) is omitted entirely when null or empty.
     /// </summary>
-    public static Gen.GetEagerStateCommandMessage CreateGetEagerStateCommand(string key, ReadOnlyMemory<byte>? value)
+    public static Gen.GetEagerStateCommandMessage CreateGetEagerStateCommand(string key, ReadOnlyMemory<byte>? value,
+        string? name = null)
     {
         var msg = new Gen.GetEagerStateCommandMessage { Key = ByteString.CopyFromUtf8(key) };
         if (value is not null)
             msg.Value = new Gen.Value { Content = ByteString.CopyFrom(value.Value.Span) };
         else
             msg.Void = new Gen.Void();
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
         return msg;
     }
 
     /// <summary>
     ///     Creates a GetEagerStateKeysCommand recording a state-keys read resolved from the locally
-    ///     known (complete) state map. The keys are embedded in the command itself.
+    ///     known (complete) state map. The keys are embedded in the command itself. The optional
+    ///     entry name (field 12) is omitted entirely when null or empty.
     /// </summary>
-    public static Gen.GetEagerStateKeysCommandMessage CreateGetEagerStateKeysCommand(string[] keys)
+    public static Gen.GetEagerStateKeysCommandMessage CreateGetEagerStateKeysCommand(string[] keys, string? name = null)
     {
         var stateKeys = new Gen.StateKeys();
         for (var i = 0; i < keys.Length; i++)
             stateKeys.Keys.Add(ByteString.CopyFromUtf8(keys[i]));
-        return new Gen.GetEagerStateKeysCommandMessage { Value = stateKeys };
+        var msg = new Gen.GetEagerStateKeysCommandMessage { Value = stateKeys };
+        if (!string.IsNullOrEmpty(name)) msg.Name = name;
+        return msg;
     }
 
     public static Gen.CompleteAwakeableCommandMessage CreateCompleteAwakeableSuccess(string id, ReadOnlySpan<byte> value)
