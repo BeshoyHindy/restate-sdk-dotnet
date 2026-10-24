@@ -11,6 +11,16 @@ namespace Restate.Sdk;
 ///     Provides durable execution primitives: side effects, calls, timers, and awakeables.
 ///     Subclass this to create test doubles (see Restate.Sdk.Testing).
 /// </summary>
+/// <remarks>
+///     A context and the durable futures it hands out must not be used from more than one thread
+///     at a time: concurrent context operations reorder the journal and break replay.
+///     <para>
+///         <c>Task.WhenAny</c> and <c>Task.WhenAll</c> over durable futures bypass the delivery
+///         ordering the combinators provide, so compose futures with <see cref="All{T}" />,
+///         <see cref="Race{T}" />, <see cref="Any{T}" />, <see cref="AllSettled{T}" /> or
+///         <see cref="WaitAll" />.
+///     </para>
+/// </remarks>
 public abstract class Context : IContext
 {
     /// <summary>Replay-safe random number generator seeded by the invocation.</summary>
@@ -37,15 +47,33 @@ public abstract class Context : IContext
     public abstract CancellationToken Aborted { get; }
 
     /// <summary>Executes an async side effect durably. The result is journaled and replayed on retries.</summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract ValueTask<T> Run<T>(string name, Func<Task<T>> action);
 
     /// <summary>Executes an async void side effect durably.</summary>
     public abstract ValueTask Run(string name, Func<Task> action);
 
     /// <summary>Executes a synchronous side effect durably. The result is journaled and replayed on retries.</summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract ValueTask<T> Run<T>(string name, Func<T> action);
 
     /// <summary>Executes an async side effect with a restricted run context. Prevents nested Restate operations.</summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action);
 
     /// <summary>Executes an async void side effect with a restricted run context.</summary>
@@ -55,6 +83,12 @@ public abstract class Context : IContext
     ///     Executes an async side effect durably with a custom retry policy.
     ///     The SDK retries locally with exponential backoff before propagating failures.
     /// </summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy);
 
     /// <summary>
@@ -66,6 +100,12 @@ public abstract class Context : IContext
     ///     Executes a synchronous side effect durably with a custom retry policy.
     ///     The SDK retries locally with exponential backoff before propagating failures.
     /// </summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy);
 
     /// <summary>Calls a handler on a stateless service and awaits its response.</summary>
@@ -228,6 +268,12 @@ public abstract class Context : IContext
     ///     The action runs immediately but the returned future resolves when the server acknowledges the result.
     ///     Use with <see cref="All{T}" /> or <see cref="Race{T}" /> for concurrent task patterns.
     /// </summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     public abstract IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action);
 
     /// <summary>

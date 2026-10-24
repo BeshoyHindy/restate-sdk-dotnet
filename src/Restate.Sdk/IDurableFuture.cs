@@ -4,6 +4,17 @@ namespace Restate.Sdk;
 ///     A durable future representing the result of a non-blocking Restate operation.
 ///     Used with combinators like <see cref="Context.All{T}" /> and <see cref="Context.Race{T}" />.
 /// </summary>
+/// <remarks>
+///     A context and the futures it hands out must not be used from more than one thread at a
+///     time: concurrent context operations reorder the journal and break replay.
+///     <para>
+///         <c>Task.WhenAny</c> and <c>Task.WhenAll</c> over durable futures bypass the delivery
+///         ordering the combinators provide, so compose futures with
+///         <see cref="Context.All{T}" />, <see cref="Context.Race{T}" />,
+///         <see cref="Context.Any{T}" />, <see cref="Context.AllSettled{T}" /> or
+///         <see cref="Context.WaitAll" />.
+///     </para>
+/// </remarks>
 public interface IDurableFuture
 {
     /// <summary>
