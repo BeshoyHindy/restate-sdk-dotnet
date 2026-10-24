@@ -311,12 +311,18 @@ public abstract class Context : IContext
 
     /// <summary>
     ///     Awaits all futures and returns their results in order.
-    ///     If any future fails, the first failure in input order is thrown, once every future
-    ///     has settled.
+    ///     If any future fails, the first failure in delivery order is thrown as soon as it is
+    ///     delivered, without waiting for the futures still pending; the operations behind them
+    ///     stay journaled and complete there.
     ///     <para>
     ///         Inputs are deserialized lazily: each one is decoded as the runtime's delivery for
     ///         it is taken, in delivery order, so the decoding order is the one the journal
     ///         recorded rather than the one the thread pool happens to produce.
+    ///     </para>
+    ///     <para>
+    ///         A future pending when the invocation suspends is not a failure — the suspension
+    ///         propagates instead, unless another future was delivered a failure, which is thrown
+    ///         in its place because the journal replays it on the next attempt.
     ///     </para>
     /// </summary>
     public virtual ValueTask<T[]> All<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
@@ -328,34 +334,30 @@ public abstract class Context : IContext
             var completions = CompletionsOf(inputs);
             var taken = new bool[inputs.Length];
             var results = new T[inputs.Length];
-            Exception?[]? failures = null;
+            SuspensionException? suspension = null;
 
             for (var remaining = inputs.Length; remaining > 0; remaining--)
             {
                 var next = await TakeNextSettled(inputs, completions, taken).ConfigureAwait(false);
                 if (completions[next].Failure is { } delivered)
                 {
-                    failures ??= new Exception?[inputs.Length];
-                    failures[next] = delivered;
-                    continue;
+                    // A poisoned input is the invocation suspending, not a failed operation, and
+                    // it must not mask a failure another input was delivered: hold it and keep
+                    // taking the inputs that settled, then suspend if none of them failed.
+                    if (FindSuspension(delivered) is { } poisoned)
+                    {
+                        suspension ??= poisoned;
+                        continue;
+                    }
+
+                    ExceptionDispatchInfo.Capture(delivered).Throw();
                 }
 
-                try
-                {
-                    results[next] = await inputs[next].GetResult().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    failures ??= new Exception?[inputs.Length];
-                    failures[next] = ex;
-                }
+                results[next] = await inputs[next].GetResult().ConfigureAwait(false);
             }
 
-            // Every input has settled; the first failure in input order is the one thrown.
-            if (failures is not null)
-                foreach (var failure in failures)
-                    if (failure is not null)
-                        ExceptionDispatchInfo.Capture(failure).Throw();
+            if (suspension is not null)
+                throw suspension;
 
             return results;
         }

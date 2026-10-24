@@ -90,6 +90,36 @@ public class CombinatorTests
         await Assert.ThrowsAsync<TerminalException>(() => ctx.All(f1, f2).AsTask());
     }
 
+    [Fact]
+    public async Task All_FirstInputFailed_ThrowsWhileTheSecondIsPending()
+    {
+        var ctx = new BareContext();
+        var (failed, failedTcs) = PendingFuture<int>();
+        var (neverCompletes, _) = PendingFuture<int>();
+
+        failedTcs.SetResult(CompletionResult.Failure(500, "boom"));
+
+        var failure = await Assert.ThrowsAsync<TerminalException>(
+            () => ctx.All(failed, neverCompletes).AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("boom", failure.Message);
+    }
+
+    [Fact]
+    public async Task All_SecondInputFailed_ThrowsWhileTheFirstIsPending()
+    {
+        var ctx = new BareContext();
+        var (neverCompletes, _) = PendingFuture<int>();
+        var (failed, failedTcs) = PendingFuture<int>();
+
+        failedTcs.SetResult(CompletionResult.Failure(500, "boom"));
+
+        var failure = await Assert.ThrowsAsync<TerminalException>(
+            () => ctx.All(neverCompletes, failed).AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("boom", failure.Message);
+    }
+
     // ── Race ──
 
     [Fact]
@@ -445,6 +475,35 @@ public class CombinatorTests
         var result = await ctx.Any(f1, f2);
 
         Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public async Task All_PoisonedFuture_PropagatesSuspension()
+    {
+        var ctx = new BareContext();
+        var f1 = CompletedFuture(1);
+        var (f2, tcs2) = PendingFuture<int>();
+
+        tcs2.SetException(new SuspensionException());
+
+        await Assert.ThrowsAsync<SuspensionException>(
+            () => ctx.All(f1, f2).AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact]
+    public async Task All_PoisonedFuture_DoesNotMaskADeliveredFailure()
+    {
+        var ctx = new BareContext();
+        var (poisoned, poisonedTcs) = PendingFuture<int>();
+        var (failed, failedTcs) = PendingFuture<int>();
+
+        poisonedTcs.SetException(new SuspensionException());
+        failedTcs.SetResult(CompletionResult.Failure(500, "boom"));
+
+        var failure = await Assert.ThrowsAsync<TerminalException>(
+            () => ctx.All(poisoned, failed).AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("boom", failure.Message);
     }
 
     [Fact]
