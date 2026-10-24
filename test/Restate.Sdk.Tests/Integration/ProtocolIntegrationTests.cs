@@ -199,7 +199,9 @@ public class CallThenSleepService
     [Handler]
     public async Task<string> Orchestrate(Context ctx, string input)
     {
-        var downstream = await ctx.Call<string>("Downstream", "Get", input);
+        // Cast: with three string arguments the keyed overload (service, key, handler) wins, and
+        // this call is to a stateless service — the journal below records it unkeyed.
+        var downstream = await ctx.Call<string>("Downstream", "Get", (object?)input);
         await ctx.Sleep(TimeSpan.FromMinutes(5));
         return $"{downstream}-done";
     }
@@ -304,11 +306,13 @@ public class FanOutGreeterService
 [Service(Name = "CombinatorGreeter")]
 public class CombinatorGreeterService
 {
+    // Casts throughout: with three string arguments the keyed overload (service, key, handler)
+    // wins, and these calls are to a stateless service — the journals below record them unkeyed.
     [Handler]
     public async Task<string> Race(Context ctx, string name)
     {
-        var first = ctx.CallFuture<string>("Downstream", "A", name);
-        var second = ctx.CallFuture<string>("Downstream", "B", name);
+        var first = ctx.CallFuture<string>("Downstream", "A", (object?)name);
+        var second = ctx.CallFuture<string>("Downstream", "B", (object?)name);
 
         return await ctx.Race(first, second);
     }
@@ -316,8 +320,8 @@ public class CombinatorGreeterService
     [Handler]
     public async Task<string> Any(Context ctx, string name)
     {
-        var first = ctx.CallFuture<string>("Downstream", "A", name);
-        var second = ctx.CallFuture<string>("Downstream", "B", name);
+        var first = ctx.CallFuture<string>("Downstream", "A", (object?)name);
+        var second = ctx.CallFuture<string>("Downstream", "B", (object?)name);
 
         return await ctx.Any(first, second);
     }
@@ -325,7 +329,7 @@ public class CombinatorGreeterService
     [Handler]
     public async Task<string> Wait(Context ctx, string name)
     {
-        var call = ctx.CallFuture<string>("Downstream", "Get", name);
+        var call = ctx.CallFuture<string>("Downstream", "Get", (object?)name);
         var timer = ctx.Timer(TimeSpan.FromMinutes(5));
 
         var order = new List<string>();
@@ -849,19 +853,21 @@ public class ProtocolIntegrationTests
     }
 
     /// <summary>
-    ///     Replays a journal of Input + RunCommand into a handler that sleeps instead of running
-    ///     a side effect, so the replayed prefix no longer matches what the handler does, and
-    ///     returns the raw response bytes.
+    ///     Replays a journal of Input + one command into a handler that does something else, so
+    ///     the replayed prefix no longer matches, and returns the raw response bytes. The command
+    ///     defaults to the RunCommand the kind-mismatch tests replay into sleeping handlers.
     /// </summary>
     private static async Task<byte[]> RunMismatchingReplayAsync<TService>(
-        ServiceProtocolVersion version, Func<TService> factory)
+        ServiceProtocolVersion version, Func<TService> factory,
+        MessageType commandType = MessageType.RunCommand, byte[]? commandPayload = null,
+        string handlerName = "Greet")
         where TService : class
     {
         var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
 
         var startPayload = BuildStartMessagePayload("mismatch-inv-1", 2, "test-key", 7);
         var inputCommandPayload = BuildInputCommandPayload(inputJson);
-        var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
+        commandPayload ??= ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
 
         // A pipe rather than a MemoryStream: the request stream stays open, so no EOF can
         // unpark the handler. Before the mismatch check, replaying the wrong command made the
@@ -870,13 +876,13 @@ public class ProtocolIntegrationTests
         var requestBuffer = new MemoryStream();
         WriteFramedMessage(requestBuffer, MessageType.Start, startPayload);
         WriteFramedMessage(requestBuffer, MessageType.InputCommand, inputCommandPayload);
-        WriteFramedMessage(requestBuffer, MessageType.RunCommand, runCommandPayload);
+        WriteFramedMessage(requestBuffer, commandType, commandPayload);
         await request.Writer.WriteAsync(requestBuffer.ToArray());
 
         var responseStream = new MemoryStream();
 
         var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TService))!;
-        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == handlerName);
 
         var handleTask = new InvocationHandler().HandleAsync(
             request.Reader,
@@ -973,6 +979,46 @@ public class ProtocolIntegrationTests
             ServiceProtocolVersion.V7, () => new FailingSleeperService());
 
         AssertJournalMismatchResponse(responseData);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRunOfAnotherName_FailsWithRetryableJournalMismatch()
+    {
+        // Same command kind, different side effect: the journal recorded a run named "charge",
+        // the deployed handler runs "effect". Without the field check the handler would be
+        // handed the charge's recorded result.
+        var responseData = await RunMismatchingReplayAsync(
+            ServiceProtocolVersion.V7, () => new RunGreeterService(),
+            MessageType.RunCommand, ProtobufCodec.CreateRunCommand("charge", 1).ToByteArray());
+
+        var error = AssertJournalMismatchResponse(responseData);
+
+        Assert.Contains("the Run command differs on name", error.Message);
+        Assert.Contains("recorded 'charge', attempted 'effect'", error.Message);
+        Assert.Equal(1u, error.RelatedCommandIndex);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedCallToAnotherHandler_FailsWithRetryableJournalMismatch()
+    {
+        // The journal recorded a call to Downstream/Fetch; the deployed handler calls
+        // Downstream/Get.
+        var journaledCall = new Gen.CallCommandMessage
+        {
+            ServiceName = "Downstream",
+            HandlerName = "Fetch",
+            InvocationIdNotificationIdx = 1,
+            ResultCompletionId = 2
+        }.ToByteArray();
+
+        var responseData = await RunMismatchingReplayAsync(
+            ServiceProtocolVersion.V7, () => new CallThenSleepService(),
+            MessageType.CallCommand, journaledCall, "Orchestrate");
+
+        var error = AssertJournalMismatchResponse(responseData);
+
+        Assert.Contains("the Call command differs on handler_name", error.Message);
+        Assert.Contains("recorded 'Fetch', attempted 'Get'", error.Message);
     }
 
     [Fact]

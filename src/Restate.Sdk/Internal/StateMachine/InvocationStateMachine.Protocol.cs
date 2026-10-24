@@ -314,9 +314,15 @@ internal sealed partial class InvocationStateMachine
     ///     Consumes the next replayed command entry (staged during the StartAsync drain), checks
     ///     it against the operation the handler is performing, and transitions to Processing when
     ///     the replay boundary is reached. Fails the attempt with a retryable journal-mismatch
-    ///     error when the recorded command is of another kind, or when the replayed prefix ran out.
+    ///     error when the recorded command is of another kind, when it targets something else
+    ///     (<paramref name="attempted" />), or when the replayed prefix ran out.
     /// </summary>
-    private JournalEntry TakeReplayEntry(JournalEntryType expected)
+    /// <param name="expected">The kind of operation the handler is performing.</param>
+    /// <param name="attempted">
+    ///     The identifying fields of that operation, as the journal would have recorded them.
+    ///     <see cref="CommandFields.None" /> for commands that have none.
+    /// </param>
+    private JournalEntry TakeReplayEntry(JournalEntryType expected, in CommandFields attempted)
     {
         var index = _journal.Count;
 
@@ -325,6 +331,10 @@ internal sealed partial class InvocationStateMachine
 
         if (entry.Type != expected)
             ThrowJournalMismatch(index, expected, $"{entry.Type} ({entry.CommandType})");
+
+        var recorded = ProtobufCodec.ParseCommandFields(entry.CommandType, entry.Result.Span);
+        if (CommandFields.FindDifference(entry.CommandType, recorded, attempted) is { } difference)
+            ThrowFieldMismatch(index, expected, difference);
 
         if (!_journal.IsReplaying)
         {
@@ -338,9 +348,9 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Skips over a replayed non-completable command (e.g. SetState) that produces no result.
     /// </summary>
-    private void AdvanceReplayIndex(JournalEntryType expected)
+    private void AdvanceReplayIndex(JournalEntryType expected, in CommandFields attempted)
     {
-        _ = TakeReplayEntry(expected);
+        _ = TakeReplayEntry(expected, attempted);
     }
 
     /// <summary>
@@ -362,6 +372,28 @@ internal sealed partial class InvocationStateMachine
 
         JournalMismatch ??= mismatch;
         throw mismatch;
+    }
+
+    /// <summary>
+    ///     Records and throws a journal mismatch for a replayed command of the right kind that
+    ///     targets something else — another service, another state key, another promise. Without
+    ///     it the handler would be handed the recorded result of an operation it never performed.
+    ///     The value the journal holds is labelled recorded and the one this attempt uses
+    ///     attempted; the message never swaps the two.
+    /// </summary>
+    [DoesNotReturn]
+    private void ThrowFieldMismatch(int index, JournalEntryType expected, in CommandFieldDifference difference)
+    {
+        var mismatch = new JournalMismatchException(index,
+            $"journal mismatch (RT0016) at journal index {index}: the {expected} command differs on " +
+            $"{difference.Field}: recorded {Display(difference.Recorded)}, attempted " +
+            $"{Display(difference.Attempted)}. Either the handler code changed without deploying " +
+            "a new deployment version, or the handler is non-deterministic.");
+
+        JournalMismatch ??= mismatch;
+        throw mismatch;
+
+        static string Display(string? value) => string.IsNullOrEmpty(value) ? "<empty>" : $"'{value}'";
     }
 
     /// <summary>

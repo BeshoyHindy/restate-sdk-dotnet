@@ -186,3 +186,19 @@ The v7 `awaiting_on` future is emitted as a flat FIRST_COMPLETED leaf: a spuriou
 **Alternatives:**
 - Keep the terminal failure: rejected — redeploying the handler code the journal was written by could no longer recover the invocation
 - `PAUSE` behavior: rejected for now — V5 and V6 cannot express it, and `RETRY` already gives an operator time to redeploy; revisit alongside a deeper mismatch check
+
+**Which fields a mismatch is detected on (added with the per-command comparison):** replay compares
+the identifying fields of each command — `name` for Run and Sleep; service, handler, key, scope and
+limit key for Call and OneWayCall; the key for state reads and writes and for promise commands; the
+awakeable id; the target invocation of Attach, GetInvocationOutput and SendSignal, plus the signal
+id. The set is the shared core's (`CommandMessageHeaderDiff` in `sdk-shared-core`
+`src/service_protocol/messages.rs`) minus three groups. Request parameters and state values are not
+compared, matching the shared core's `ignore_payload_equality` mode, because a payload that
+serializes differently between attempts (dictionary order, a nested timestamp) is a far more common
+source of false positives than of real divergence. Fields this SDK derives from the clock — a
+sleep's wake-up time, a delayed send's invoke time — are not compared, because a correct replay at
+another wall-clock time records a different value; the shared core ignores the same two. Completion
+ids and notification indexes are not compared either: they are allocated by the SDK from the journal
+position, so the kind and field checks already cover the divergence that would change them. The
+idempotency key is left out because the handler supplies it and the SDK cannot tell a stable one
+from a per-attempt one; it does not change which operation the call targets.

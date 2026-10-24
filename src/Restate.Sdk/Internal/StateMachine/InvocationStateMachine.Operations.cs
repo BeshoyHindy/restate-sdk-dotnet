@@ -16,18 +16,18 @@ internal sealed partial class InvocationStateMachine
     // replayed notification was already stored (or a live one will land).
 
     /// <summary>Replays a completable command whose result is required (Run, Call, Attach, GetPromise).</summary>
-    private async ValueTask<T> ReplayResultAsync<T>(JournalEntryType expected)
+    private async ValueTask<T> ReplayResultAsync<T>(JournalEntryType expected, CommandFields attempted)
     {
-        var replay = TakeReplayEntry(expected);
+        var replay = TakeReplayEntry(expected, attempted);
         var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
         completion.ThrowIfFailure();
         return Deserialize<T>(completion.Value);
     }
 
     /// <summary>Replays a one-way call; the result is the target invocation id notification.</summary>
-    private async ValueTask<InvocationHandle> ReplaySendAsync()
+    private async ValueTask<InvocationHandle> ReplaySendAsync(CommandFields attempted)
     {
-        var replay = TakeReplayEntry(JournalEntryType.OneWayCall);
+        var replay = TakeReplayEntry(JournalEntryType.OneWayCall, attempted);
         var completion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
         var invocationId = completion.StringValue ?? Encoding.UTF8.GetString(completion.Value.Span);
         return new InvocationHandle(invocationId);
@@ -41,13 +41,15 @@ internal sealed partial class InvocationStateMachine
     // re-executing the closure and proposing its result again. Awaiting would suspend forever.
 
     /// <summary>
-    ///     Takes the next replayed entry as a Run command. Returns <see langword="true" /> when
-    ///     the replayed prefix stored a genuine completion for it; <see langword="false" /> when
-    ///     the closure must be re-executed and its result proposed for <paramref name="completionId" />.
+    ///     Takes the next replayed entry as a Run command named <paramref name="name" />. Returns
+    ///     <see langword="true" /> when the replayed prefix stored a genuine completion for it;
+    ///     <see langword="false" /> when the closure must be re-executed and its result proposed
+    ///     for <paramref name="completionId" />.
     /// </summary>
-    private bool TryTakeReplayedRunResult(out TaskCompletionSource<CompletionResult> tcs, out uint completionId)
+    private bool TryTakeReplayedRunResult(string name, out TaskCompletionSource<CompletionResult> tcs,
+        out uint completionId)
     {
-        var replay = TakeReplayEntry(JournalEntryType.Run);
+        var replay = TakeReplayEntry(JournalEntryType.Run, new CommandFields { Name = name });
         completionId = ProtobufCodec.ParseCommandCompletionId(replay.CommandType, replay.Result.Span);
         Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         tcs = _completions.GetOrRegister((int)completionId);
@@ -152,7 +154,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            return TryTakeReplayedRunResult(out var replayTcs, out var replayId)
+            return TryTakeReplayedRunResult(name, out var replayTcs, out var replayId)
                 ? AwaitRunResultAsync<T>(replayTcs)
                 : ReExecuteRunSyncAsync(name, action, replayId, replayTcs, ct);
         }
@@ -218,7 +220,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            return TryTakeReplayedRunResult(out var replayTcs, out var replayId)
+            return TryTakeReplayedRunResult(name, out var replayTcs, out var replayId)
                 ? await AwaitRunResultAsync<T>(replayTcs).ConfigureAwait(false)
                 : await ReExecuteRunAsync(name, action, replayId, replayTcs, ct, retryPolicy).ConfigureAwait(false);
         }
@@ -252,7 +254,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            if (TryTakeReplayedRunResult(out var replayTcs, out var replayId))
+            if (TryTakeReplayedRunResult(name, out var replayTcs, out var replayId))
                 _ = await replayTcs.Task.ConfigureAwait(false);
             else
                 await ReExecuteRunAsync(name, action, replayId, replayTcs, ct, retryPolicy).ConfigureAwait(false);
@@ -407,7 +409,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            if (TryTakeReplayedRunResult(out var replayTcs, out var replayId))
+            if (TryTakeReplayedRunResult(name, out var replayTcs, out var replayId))
             {
                 var replayCompletion = await replayTcs.Task.ConfigureAwait(false);
                 replayCompletion.ThrowIfFailure();
@@ -533,6 +535,24 @@ internal sealed partial class InvocationStateMachine
         return new InvocationHandle(invocationId);
     }
 
+    /// <summary>
+    ///     What a call or a send targets, as the journal records it. Neither the request payload
+    ///     nor a delayed send's invoke time is part of it: the first is not compared on replay,
+    ///     the second is read from the clock and differs on every attempt.
+    /// </summary>
+    private static CommandFields InvocationTarget(string service, string handler, string? key,
+        string? scope, string? limitKey)
+    {
+        return new CommandFields
+        {
+            ServiceName = service,
+            HandlerName = handler,
+            Key = key,
+            Scope = scope,
+            LimitKey = limitKey
+        };
+    }
+
     /// <summary>Calls a handler, serializing the request as an untyped object.</summary>
     public ValueTask<TResponse> CallAsync<TResponse>(
         string service, string? key, string handler, object? request, CallOptions options, CancellationToken ct)
@@ -542,7 +562,8 @@ internal sealed partial class InvocationStateMachine
         FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
-            return ReplayResultAsync<TResponse>(JournalEntryType.Call);
+            return ReplayResultAsync<TResponse>(JournalEntryType.Call,
+                InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
 
         return CallCoreAsync<TResponse>(service, key, handler, SerializeObject(request), options, ct);
     }
@@ -556,7 +577,8 @@ internal sealed partial class InvocationStateMachine
         FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
-            return ReplayResultAsync<TResponse>(JournalEntryType.Call);
+            return ReplayResultAsync<TResponse>(JournalEntryType.Call,
+                InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
 
         return CallCoreAsync<TResponse>(service, key, handler, Serialize(request), options, ct);
     }
@@ -583,7 +605,7 @@ internal sealed partial class InvocationStateMachine
         FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
-            return ReplaySendAsync();
+            return ReplaySendAsync(InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
 
         return SendCoreAsync(service, key, handler, SerializeObject(request), options, ct);
     }
@@ -597,7 +619,7 @@ internal sealed partial class InvocationStateMachine
         FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
-            return ReplaySendAsync();
+            return ReplaySendAsync(InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
 
         return SendCoreAsync(service, key, handler, Serialize(request), options, ct);
     }
@@ -613,7 +635,8 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.Call);
+            var replay = TakeReplayEntry(JournalEntryType.Call,
+                InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
             return new ValueTask<TaskCompletionSource<CompletionResult>>(RegisterReplayCompletion(in replay));
         }
 
@@ -636,7 +659,9 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.Sleep);
+            // A sleep is identified by its entry name, which this SDK never writes; the wake-up
+            // time is read from the clock and never compared, so a replay at another time matches.
+            var replay = TakeReplayEntry(JournalEntryType.Sleep, CommandFields.None);
             return RegisterReplayCompletion(in replay);
         }
 
@@ -661,7 +686,8 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<TResponse>(JournalEntryType.AttachInvocation).ConfigureAwait(false);
+            return await ReplayResultAsync<TResponse>(JournalEntryType.AttachInvocation,
+                new CommandFields { Target = invocationId }).ConfigureAwait(false);
 
         var completionId = NextCompletionId();
 
@@ -686,7 +712,8 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.GetInvocationOutput);
+            var replay = TakeReplayEntry(JournalEntryType.GetInvocationOutput,
+                new CommandFields { Target = invocationId });
             var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             replayCompletion.ThrowIfFailure();
             return replayCompletion.Value.IsEmpty ? default : Deserialize<TResponse>(replayCompletion.Value);
@@ -719,7 +746,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.GetState);
+            var replay = TakeReplayEntry(JournalEntryType.GetState, new CommandFields { Key = key });
             if (replay.CommandType == MessageType.GetEagerStateCommand)
             {
                 // Eager-state commands embed the result in the command payload itself.
@@ -778,7 +805,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SetState);
+            AdvanceReplayIndex(JournalEntryType.SetState, new CommandFields { Key = key });
             return;
         }
 
@@ -798,7 +825,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.ClearState);
+            AdvanceReplayIndex(JournalEntryType.ClearState, new CommandFields { Key = key });
             return;
         }
 
@@ -815,7 +842,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.ClearAllState);
+            AdvanceReplayIndex(JournalEntryType.ClearAllState, CommandFields.None);
             return;
         }
 
@@ -834,7 +861,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.GetStateKeys);
+            var replay = TakeReplayEntry(JournalEntryType.GetStateKeys, CommandFields.None);
             if (replay.CommandType == MessageType.GetEagerStateKeysCommand)
             {
                 // Eager-state-keys commands embed the result in the command payload itself.
@@ -891,7 +918,9 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.Sleep);
+            // A sleep is identified by its entry name, which this SDK never writes; the wake-up
+            // time is read from the clock and never compared, so a replay at another time matches.
+            var replay = TakeReplayEntry(JournalEntryType.Sleep, CommandFields.None);
             _ = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return;
         }
@@ -982,7 +1011,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
+            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable, new CommandFields { Target = id });
             return;
         }
 
@@ -998,7 +1027,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable);
+            AdvanceReplayIndex(JournalEntryType.CompleteAwakeable, new CommandFields { Target = id });
             return;
         }
 
@@ -1015,7 +1044,8 @@ internal sealed partial class InvocationStateMachine
         EnsureActive();
 
         if (State == InvocationState.Replaying)
-            return await ReplayResultAsync<T>(JournalEntryType.GetPromise).ConfigureAwait(false);
+            return await ReplayResultAsync<T>(JournalEntryType.GetPromise,
+                new CommandFields { Key = name }).ConfigureAwait(false);
 
         var completionId = NextCompletionId();
 
@@ -1039,7 +1069,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            var replay = TakeReplayEntry(JournalEntryType.PeekPromise);
+            var replay = TakeReplayEntry(JournalEntryType.PeekPromise, new CommandFields { Key = name });
             var replayCompletion = await AwaitReplayCompletionAsync(replay).ConfigureAwait(false);
             return replayCompletion.Value.IsEmpty ? default : Deserialize<T>(replayCompletion.Value);
         }
@@ -1065,7 +1095,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompletePromise);
+            AdvanceReplayIndex(JournalEntryType.CompletePromise, new CommandFields { Key = name });
             return;
         }
 
@@ -1084,7 +1114,7 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.CompletePromise);
+            AdvanceReplayIndex(JournalEntryType.CompletePromise, new CommandFields { Key = name });
             return;
         }
 
@@ -1104,7 +1134,8 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            AdvanceReplayIndex(JournalEntryType.SendSignal,
+                new CommandFields { Target = targetInvocationId, SignalIndex = (uint)CancelSignalIndex });
             return;
         }
 
@@ -1131,7 +1162,14 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            AdvanceReplayIndex(JournalEntryType.SendSignal,
+                new CommandFields
+                {
+                    Target = targetInvocationId,
+                    SignalName = name,
+                    // The live path addresses the signal by name when it has one, index otherwise.
+                    SignalIndex = name is null ? index : null
+                });
             return ValueTask.CompletedTask;
         }
 
@@ -1150,7 +1188,14 @@ internal sealed partial class InvocationStateMachine
 
         if (State == InvocationState.Replaying)
         {
-            AdvanceReplayIndex(JournalEntryType.SendSignal);
+            AdvanceReplayIndex(JournalEntryType.SendSignal,
+                new CommandFields
+                {
+                    Target = targetInvocationId,
+                    SignalName = name,
+                    // The live path addresses the signal by name when it has one, index otherwise.
+                    SignalIndex = name is null ? index : null
+                });
             return ValueTask.CompletedTask;
         }
 

@@ -980,11 +980,14 @@ public class InvocationStateMachineTests : IDisposable
 
     /// <summary>
     ///     Starts the state machine on a resumed journal holding the input command plus a single
-    ///     replayed command, so the matching handler operation re-traverses it.
+    ///     replayed command, so the matching handler operation re-traverses it. A replayed command
+    ///     carrying a scope or a limit key needs <paramref name="negotiatedVersion" /> at V7, the
+    ///     version those fields require on the wire.
     /// </summary>
-    private async Task<InvocationStateMachine> StartReplayingAsync(MessageType commandType, byte[] commandPayload)
+    private async Task<InvocationStateMachine> StartReplayingAsync(MessageType commandType, byte[] commandPayload,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
     {
-        var sm = CreateSm();
+        var sm = CreateSm(negotiatedVersion);
 
         var start = new Gen.StartMessage
         {
@@ -1275,6 +1278,347 @@ public class InvocationStateMachineTests : IDisposable
         Assert.False(typeof(TerminalException).IsAssignableFrom(typeof(JournalMismatchException)));
         Assert.True(typeof(Exception).IsAssignableFrom(typeof(JournalMismatchException)));
         Assert.Equal(570, JournalMismatchException.ErrorCode);
+    }
+
+    // ------- Journal mismatch: what the command targets -------
+    //
+    // A replayed command of the right kind can still belong to another operation — a call to a
+    // different service, a read of a different state key. Replay compares the identifying fields
+    // of each command, and nothing the SDK derives from the clock, so a correct replay at another
+    // wall-clock time still matches.
+
+    /// <summary>
+    ///     Replays <paramref name="journaled" /> into an operation that disagrees with it and
+    ///     returns the journal mismatch it must raise.
+    /// </summary>
+    private async Task<JournalMismatchException> AssertReplayMismatchAsync(
+        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
+    {
+        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray(), negotiatedVersion);
+
+        // The timeout keeps a regression honest: an undetected mismatch leaves the operation
+        // waiting for a completion the runtime will never send, which would hang the test run.
+        var ex = await Assert.ThrowsAsync<JournalMismatchException>(
+            () => handlerDoes(sm).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(1, ex.JournalIndex);
+        Assert.Contains("journal mismatch", ex.Message);
+        Assert.Same(ex, sm.JournalMismatch);
+        return ex;
+    }
+
+    /// <summary>
+    ///     Asserts the mismatch names the differing field and labels the journal's value recorded
+    ///     and this attempt's value attempted — swapping them would send an operator looking at
+    ///     the wrong code.
+    /// </summary>
+    private static void AssertDifference(
+        JournalMismatchException ex, string field, string? recorded, string? attempted)
+    {
+        Assert.Contains(
+            $"differs on {field}: recorded {Display(recorded)}, attempted {Display(attempted)}", ex.Message);
+
+        static string Display(string? value) => string.IsNullOrEmpty(value) ? "<empty>" : $"'{value}'";
+    }
+
+    /// <summary>
+    ///     Replays <paramref name="journaled" /> into the operation it recorded: the entry is
+    ///     consumed, no mismatch is raised, and the replay boundary is reached.
+    /// </summary>
+    private async Task AssertReplaysWithoutMismatchAsync(
+        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
+    {
+        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray(), negotiatedVersion);
+
+        var operation = handlerDoes(sm);
+
+        // A durable wait whose completion never arrives stays pending for the rest of the test;
+        // observing it keeps the dropped task from raising UnobservedTaskException later.
+        _ = operation.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
+
+        if (operation.IsFaulted)
+            throw operation.Exception!.InnerException!;
+
+        Assert.Null(sm.JournalMismatch);
+        Assert.Equal(InvocationState.Processing, sm.State);
+    }
+
+    [Fact]
+    public async Task ReplayedRunWithAnotherName_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.RunCommand,
+            ProtobufCodec.CreateRunCommand("charge", 1),
+            sm => sm.RunAsync("refund", () => Task.FromResult(1), CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "name", "charge", "refund");
+    }
+
+    [Fact]
+    public async Task ReplayedRunWithTheSameName_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.RunCommand,
+            ProtobufCodec.CreateRunCommand("charge", 1),
+            sm => sm.RunAsync("charge", () => Task.FromResult(1), CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedSleepWithAnotherName_FailsWithJournalMismatch()
+    {
+        // This SDK writes no entry name on a sleep, so a journaled one was written by code that
+        // did something else at this index.
+        var ex = await AssertReplayMismatchAsync(MessageType.SleepCommand,
+            new Gen.SleepCommandMessage { WakeUpTime = 123_456UL, ResultCompletionId = 1, Name = "cooldown" },
+            sm => sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "name", "cooldown", null);
+    }
+
+    [Fact]
+    public async Task ReplayedSleepAtAnotherWallClockTime_ReplaysWithoutMismatch()
+    {
+        // The journaled wake-up time is the previous attempt's clock reading; comparing it would
+        // fail every correct replay.
+        await AssertReplaysWithoutMismatchAsync(MessageType.SleepCommand,
+            ProtobufCodec.CreateSleepCommand(123_456UL, 1),
+            sm => sm.SleepFutureAsync(TimeSpan.FromMinutes(5), CancellationToken.None).AsTask());
+    }
+
+    [Theory]
+    [InlineData("Billing", "Refund", "cust-1", "service_name", "Billing", "Payments")]
+    [InlineData("Payments", "Capture", "cust-1", "handler_name", "Capture", "Refund")]
+    [InlineData("Payments", "Refund", "cust-2", "key", "cust-2", "cust-1")]
+    public async Task ReplayedCallToAnotherTarget_FailsWithJournalMismatch(
+        string service, string handler, string key, string field, string recorded, string attempted)
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.CallCommand,
+            ProtobufCodec.CreateCallCommand(service, handler, key, ReadOnlySpan<byte>.Empty, 2, 1),
+            sm => sm.CallAsync<string>("Payments", "cust-1", "Refund", null, default, CancellationToken.None)
+                .AsTask());
+
+        AssertDifference(ex, field, recorded, attempted);
+    }
+
+    [Fact]
+    public async Task ReplayedCallWithAnotherScope_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.CallCommand,
+            ProtobufCodec.CreateCallCommand("Payments", "Refund", null, ReadOnlySpan<byte>.Empty, 2, 1,
+                scope: "tenant-b"),
+            sm => sm.CallAsync<string>("Payments", null, "Refund", null, CallOptions.WithScope("tenant-a"),
+                CancellationToken.None).AsTask(),
+            ServiceProtocolVersion.V7);
+
+        AssertDifference(ex, "scope", "tenant-b", "tenant-a");
+    }
+
+    [Fact]
+    public async Task ReplayedCallToTheSameTarget_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.CallCommand,
+            ProtobufCodec.CreateCallCommand("Payments", "Refund", "cust-1", ReadOnlySpan<byte>.Empty, 2, 1,
+                scope: "tenant-a"),
+            sm => sm.CallFutureAsync("Payments", "cust-1", "Refund", null, CallOptions.WithScope("tenant-a"),
+                CancellationToken.None).AsTask(),
+            ServiceProtocolVersion.V7);
+    }
+
+    [Theory]
+    [InlineData("Billing", "Notify", "cust-1", "service_name", "Billing", "Payments")]
+    [InlineData("Payments", "Remind", "cust-1", "handler_name", "Remind", "Notify")]
+    [InlineData("Payments", "Notify", "cust-2", "key", "cust-2", "cust-1")]
+    public async Task ReplayedSendToAnotherTarget_FailsWithJournalMismatch(
+        string service, string handler, string key, string field, string recorded, string attempted)
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.OneWayCallCommand,
+            ProtobufCodec.CreateSendCommand(service, handler, key, ReadOnlySpan<byte>.Empty, 0UL, null, 1),
+            sm => sm.SendAsync("Payments", "cust-1", "Notify", (object?)null, default, CancellationToken.None).AsTask());
+
+        AssertDifference(ex, field, recorded, attempted);
+    }
+
+    [Fact]
+    public async Task ReplayedDelayedSendAtAnotherWallClockTime_ReplaysWithoutMismatch()
+    {
+        // Like a sleep's wake-up time, a delayed send's invoke time comes from the clock of the
+        // attempt that wrote it and must not be compared.
+        await AssertReplaysWithoutMismatchAsync(MessageType.OneWayCallCommand,
+            ProtobufCodec.CreateSendCommand("Payments", "Notify", "cust-1", ReadOnlySpan<byte>.Empty,
+                123_456UL, null, 1),
+            sm => sm.SendAsync("Payments", "cust-1", "Notify", (object?)null, SendOptions.AfterDelay(TimeSpan.FromHours(1)),
+                CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedStateReadOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.GetLazyStateCommand,
+            ProtobufCodec.CreateGetStateCommand("balance", 1),
+            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "key", "balance", "count");
+    }
+
+    [Fact]
+    public async Task ReplayedEagerStateReadOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.GetEagerStateCommand,
+            ProtobufCodec.CreateGetEagerStateCommand("balance", JsonSerializer.SerializeToUtf8Bytes(1)),
+            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "key", "balance", "count");
+    }
+
+    [Fact]
+    public async Task ReplayedEagerStateReadOfTheSameKey_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.GetEagerStateCommand,
+            ProtobufCodec.CreateGetEagerStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(7)),
+            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedStateWriteOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.SetStateCommand,
+            ProtobufCodec.CreateSetStateCommand("balance", JsonSerializer.SerializeToUtf8Bytes(1)),
+            sm =>
+            {
+                sm.SetState("count", 1);
+                return Task.CompletedTask;
+            });
+
+        AssertDifference(ex, "key", "balance", "count");
+    }
+
+    [Fact]
+    public async Task ReplayedStateClearOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.ClearStateCommand,
+            ProtobufCodec.CreateClearStateCommand("balance"),
+            sm =>
+            {
+                sm.ClearState("count");
+                return Task.CompletedTask;
+            });
+
+        AssertDifference(ex, "key", "balance", "count");
+    }
+
+    [Fact]
+    public async Task ReplayedPromiseReadOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.GetPromiseCommand,
+            ProtobufCodec.CreateGetPromiseCommand("shipped", 1),
+            sm => sm.GetPromiseAsync<string>("approved", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "key", "shipped", "approved");
+    }
+
+    [Fact]
+    public async Task ReplayedPromiseReadOfTheSameKey_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.GetPromiseCommand,
+            ProtobufCodec.CreateGetPromiseCommand("approved", 1),
+            sm => sm.GetPromiseAsync<string>("approved", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedPromisePeekOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.PeekPromiseCommand,
+            ProtobufCodec.CreatePeekPromiseCommand("shipped", 1),
+            sm => sm.PeekPromiseAsync<string>("approved", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "key", "shipped", "approved");
+    }
+
+    [Fact]
+    public async Task ReplayedPromiseResolutionOfAnotherKey_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.CompletePromiseCommand,
+            ProtobufCodec.CreateCompletePromiseSuccess("shipped", JsonSerializer.SerializeToUtf8Bytes("ok"), 1),
+            sm =>
+            {
+                sm.ResolvePromise("approved", "ok");
+                return Task.CompletedTask;
+            });
+
+        AssertDifference(ex, "key", "shipped", "approved");
+    }
+
+    [Fact]
+    public async Task ReplayedAwakeableResolutionOfAnotherId_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.CompleteAwakeableCommand,
+            ProtobufCodec.CreateCompleteAwakeableSuccess("sign_1other", ReadOnlySpan<byte>.Empty),
+            sm =>
+            {
+                sm.ResolveAwakeable("sign_1mine", ReadOnlyMemory<byte>.Empty);
+                return Task.CompletedTask;
+            });
+
+        AssertDifference(ex, "awakeable_id", "sign_1other", "sign_1mine");
+    }
+
+    [Fact]
+    public async Task ReplayedAttachToAnotherInvocation_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.AttachInvocationCommand,
+            ProtobufCodec.CreateAttachInvocationCommand("inv-other", 1),
+            sm => sm.AttachInvocationAsync<string>("inv-mine", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "target", "inv-other", "inv-mine");
+    }
+
+    [Fact]
+    public async Task ReplayedAttachToTheSameInvocation_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.AttachInvocationCommand,
+            ProtobufCodec.CreateAttachInvocationCommand("inv-mine", 1),
+            sm => sm.AttachInvocationAsync<string>("inv-mine", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedOutputReadOfAnotherInvocation_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.GetInvocationOutputCommand,
+            ProtobufCodec.CreateGetInvocationOutputCommand("inv-other", 1),
+            sm => sm.GetInvocationOutputAsync<string>("inv-mine", CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "target", "inv-other", "inv-mine");
+    }
+
+    [Fact]
+    public async Task ReplayedSignalToAnotherInvocation_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.SendSignalCommand,
+            ProtobufCodec.CreateResolveSignalCommand("inv-other", "approval", null, ReadOnlySpan<byte>.Empty),
+            sm => sm.ResolveSignalAsync("inv-mine", "approval", null, ReadOnlyMemory<byte>.Empty,
+                CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "target_invocation_id", "inv-other", "inv-mine");
+    }
+
+    [Fact]
+    public async Task ReplayedSignalOfAnotherName_FailsWithJournalMismatch()
+    {
+        var ex = await AssertReplayMismatchAsync(MessageType.SendSignalCommand,
+            ProtobufCodec.CreateResolveSignalCommand("inv-mine", "rejection", null, ReadOnlySpan<byte>.Empty),
+            sm => sm.ResolveSignalAsync("inv-mine", "approval", null, ReadOnlyMemory<byte>.Empty,
+                CancellationToken.None).AsTask());
+
+        AssertDifference(ex, "signal_id", "rejection", "approval");
+    }
+
+    [Fact]
+    public async Task ReplayedSignalToTheSameTarget_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.SendSignalCommand,
+            ProtobufCodec.CreateResolveSignalCommand("inv-mine", "approval", null, ReadOnlySpan<byte>.Empty),
+            sm => sm.ResolveSignalAsync("inv-mine", "approval", null, ReadOnlyMemory<byte>.Empty,
+                CancellationToken.None).AsTask());
     }
 
     // ------- Resolving signals on other invocations -------
