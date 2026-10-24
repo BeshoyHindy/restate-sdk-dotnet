@@ -5,6 +5,19 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.3.0...v0.3.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* compare command name, target and key when replaying ([#117](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/117)) ([1e9f5e6](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/1e9f5e699fe22b65635bba0c1c41a85db32b52eb))
+* honour journaled completion order when combinators replay ([#116](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/116)) ([12c64e9](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/12c64e9dcf001720ef2751cbcb0a10a3d1bfe150))
+* pin restate-server 1.8 and derive the harness image from docker-compose.yml ([#118](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/118)) ([a2ff7f2](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/a2ff7f201110c4ca1eaff98fa1221e7f0eb970f5))
+* reject scope and limit key below protocol v7 ([#114](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/114)) ([e930c2a](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/e930c2a825fa957c1ecaa91c1f941e8b462f15b1))
+* report journal mismatch as retryable error 570 ([#115](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/115)) ([1c754df](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/1c754df2f671d4321270c557d5119c3fcdf52370))
+* seed durable random from the invocation id on protocol v5 ([#113](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/113)) ([9185888](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/91858889b0e4ce7eda004fe5e054c2e24270562f))
+* use the canonical ingress routes and escape path segments in the ingress client ([#112](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/112)) ([d3ef311](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/d3ef311530c951ff7038326ae04d37157fdadff0))
+
 ## [0.3.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.2.1...v0.3.0) (2026-09-15)
 
 
