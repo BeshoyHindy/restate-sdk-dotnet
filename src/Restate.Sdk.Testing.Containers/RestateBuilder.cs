@@ -52,8 +52,8 @@ public sealed class RestateBuilder : ContainerBuilder<RestateBuilder, RestateCon
     ///     <see cref="RestateImage" /> for the default.
     /// </param>
     /// <remarks>
-    ///     The server releases and the image tags they publish are listed at
-    ///     <see href="https://github.com/restatedev/restate/releases" />, and
+    ///     The latest server release and the image tag it publishes are at
+    ///     <see href="https://github.com/restatedev/restate/releases/latest" />, and
     ///     <see href="https://restate.dev/get-restate/" /> names the same
     ///     <c>docker.restate.dev/restatedev/restate</c> image.
     /// </remarks>
