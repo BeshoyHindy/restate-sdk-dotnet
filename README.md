@@ -686,6 +686,21 @@ The handler's pending operation then fails with a terminal cancellation error, s
 ends in failure instead of returning a result. Without an `AdminAddress`, `Cancel` throws
 `InvalidOperationException` rather than sending a request no server version answers.
 
+#### Operating invocations
+
+`Cancel` is the only admin operation the SDK wraps. The other invocation operations restate-server
+1.8 serves are `PATCH {admin}/invocations/{id}/{kill|purge|purge-journal|pause|resume|restart-as-new}`;
+deployments are removed with `POST {admin}/deployments/bulk-delete` and a body of
+`{"deployment_ids": ["..."], "force": true}`. Address them directly on the admin listener:
+
+```bash
+curl -X PATCH http://localhost:9070/invocations/<id>/kill
+```
+
+`DELETE /invocations/{id}?mode=` still answers, but it is deprecated in favour of the named
+operations above. The [admin API reference](https://docs.restate.dev/admin-api) documents the
+parameters and responses of each one.
+
 Any non-success ingress response throws a `RestateIngressException`:
 
 ```csharp
