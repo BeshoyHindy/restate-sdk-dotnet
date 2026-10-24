@@ -8,9 +8,10 @@ namespace Restate.Sdk;
 ///     From service protocol V6 the seed is the <c>random_seed</c> the server sends on the
 ///     StartMessage. That field does not exist below V6, so on a V5 stream the seed is derived
 ///     from the invocation id instead: SHA-256 of the raw invocation id, read as a big-endian
-///     64-bit integer, which is the same fallback <c>sdk-shared-core</c> applies for the SDKs
-///     built on it. The seed is folded to 32 bits for the underlying generator, so sequences
-///     still differ between SDKs even where the 64-bit seed agrees.
+///     64-bit integer. That derivation is the <c>sha2_random_seed</c> feature of
+///     <c>sdk-shared-core</c>, which is off by default and enabled by the Python, Rust and Ruby
+///     SDKs but not by TypeScript. The seed is folded to 32 bits for the underlying generator,
+///     so sequences still differ between SDKs even where the 64-bit seed agrees.
 /// </remarks>
 public sealed class DurableRandom
 {

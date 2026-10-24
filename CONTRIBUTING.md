@@ -90,7 +90,8 @@ The repository uses trunk-based development (GitHub Flow):
 
 - Follow existing code patterns and naming conventions
 - Add XML doc comments for public API surface
-- Use `file` access modifier for test-only types
+- Use the `file` access modifier for test-only types, except service classes the source generator
+  registers, which stay `public`
 - Keep the public API minimal — use `internal` by default
 - Source generator changes require `dotnet clean` + rebuild (stale artifacts)
 
