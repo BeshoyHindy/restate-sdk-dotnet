@@ -1,0 +1,74 @@
+name: Dependabot Rebase
+
+# Required checks on `main` are strict, so an armed Dependabot pull request whose head is
+# behind `main` never merges until something rebases it, and Dependabot rebases on its own
+# only on a version change, a reopen, a retarget or a conflict — never for a conflict-free
+# branch that is merely behind. A `push` trigger cannot cover the gap either: the auto-merge
+# runs with `GITHUB_TOKEN`, and events raised by `GITHUB_TOKEN` start no workflow runs. A
+# schedule always runs.
+on:
+  schedule:
+    # Every two hours. Dependabot opens its pull requests on Mondays, and the leap-frog that
+    # strands one (an actions bump merging while the NuGet group pull request is open) is
+    # resolved within one interval.
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+
+jobs:
+  rebase:
+    name: Rebase pull requests behind main
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ask Dependabot to rebase armed pull requests that are behind main
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          prs="$(gh pr list --author app/dependabot --state open \
+            --json number,mergeStateStatus,autoMergeRequest)"
+
+          echo "Open Dependabot pull requests considered:"
+          echo "$prs" | jq -r '
+            if length == 0 then "  none"
+            else
+              .[] | "  #\(.number): merge state \(.mergeStateStatus), auto-merge " +
+                (if .autoMergeRequest == null then "off" else "armed" end)
+            end'
+
+          # An unarmed pull request is one a maintainer is holding (a major bump, say): leave
+          # it alone. A merge state other than BEHIND is nothing this job can help with; it is
+          # also UNKNOWN until GitHub has computed mergeability, which the next run picks up.
+          behind="$(echo "$prs" | jq -r '
+            .[] | select(.mergeStateStatus == "BEHIND" and .autoMergeRequest != null) | .number')"
+
+          if [ -z "$behind" ]; then
+            echo "Nothing to do: no armed Dependabot pull request is behind main."
+            exit 0
+          fi
+
+          nudged=0
+          for pr in $behind; do
+            details="$(gh pr view "$pr" --json commits,comments)"
+            head_commit="$(echo "$details" | jq -r '[.commits[].committedDate] | max')"
+            asked="$(echo "$details" | jq -r '
+              [.comments[] | select(.body | contains("@dependabot rebase")) | .createdAt] | max // ""')"
+
+            # A rebase pushes a new head commit, so a request newer than the head commit is one
+            # Dependabot has not acted on yet. Asking again would only spam the pull request.
+            if [ -n "$asked" ] && [[ "$asked" > "$head_commit" ]]; then
+              echo "#$pr: rebase already requested at $asked, after its head commit ($head_commit); waiting."
+              continue
+            fi
+
+            echo "#$pr: behind main, head commit $head_commit; asking Dependabot to rebase."
+            gh pr comment "$pr" --body '@dependabot rebase'
+            nudged=$((nudged + 1))
+          done
+
+          echo "Nudged $nudged of the pull requests considered."
