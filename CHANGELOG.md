@@ -5,6 +5,23 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.3.1...v0.4.0) (2026-10-24)
+
+
+### Features
+
+* add workflow lookup and a scope-bound client to RestateClient ([#128](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/128)) ([1b79e77](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/1b79e77f2eac9ebc33599ff72998b73dacc36f38))
+* add optional entry names to state operations ([#130](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/130)) ([6c52b19](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/6c52b19e40a8331cbe89171c15d2386d84c40de2))
+* cancel invocations through the admin API ([#127](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/127)) ([9a9ef23](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/9a9ef23e8fe7ac6b14707bbb258430c028e386b3))
+* unnamed signals return a handle carrying their index ([#129](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/129)) ([3164af4](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/3164af415936b1ca2dbfd2514a7a0b53870b36f7))
+
+
+### Bug Fixes
+
+* **generator:** report IRunContext handler parameters as their own error ([#126](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/126)) ([e549b88](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/e549b885fddcb60d0befc28175359e1362de1cc6))
+* report the invocation id on call futures ([#125](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/125)) ([2cc87c6](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/2cc87c64e9add1a2cfc9df5bac3c111f735000cb))
+* validate and record flow-control options in MockContext ([#124](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/124)) ([dd5f400](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/dd5f40083c93753d8d249fa0891e1e1561b0a6fa))
+
 ## [0.3.1](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.3.0...v0.3.1) (2026-10-24)
 
 
