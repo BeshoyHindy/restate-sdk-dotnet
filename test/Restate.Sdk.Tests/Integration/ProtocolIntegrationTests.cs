@@ -115,6 +115,81 @@ public class SignalResolverService
 }
 
 /// <summary>
+///     A sleeping service whose durable sleep is guarded by a saga-style compensation —
+///     used to verify that a journal mismatch is not catchable as a <see cref="TerminalException" />.
+/// </summary>
+[Service(Name = "CompensatingSleeper")]
+public class CompensatingSleeperService
+{
+    /// <summary>True once the compensation block ran, which a journal mismatch must never trigger.</summary>
+    public bool CompensationRan { get; private set; }
+
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        try
+        {
+            await ctx.Sleep(TimeSpan.FromMinutes(5));
+        }
+        catch (TerminalException)
+        {
+            CompensationRan = true;
+            return "compensated";
+        }
+
+        return $"Rested hello, {name}!";
+    }
+}
+
+/// <summary>
+///     A sleeping service that swallows every exception around its durable sleep — unsupported
+///     in handler code, and used to verify that the recorded journal mismatch still decides the
+///     outcome of the attempt.
+/// </summary>
+[Service(Name = "SwallowingSleeper")]
+public class SwallowingSleeperService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        try
+        {
+            await ctx.Sleep(TimeSpan.FromMinutes(5));
+        }
+        catch (Exception)
+        {
+            return $"swallowed hello, {name}!";
+        }
+
+        return $"Rested hello, {name}!";
+    }
+}
+
+/// <summary>
+///     A sleeping service that swallows every exception around its durable sleep and then fails
+///     terminally — unsupported in handler code, and used to verify that the recorded journal
+///     mismatch still wins over the terminal failure the handler reports instead.
+/// </summary>
+[Service(Name = "FailingSleeper")]
+public class FailingSleeperService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        try
+        {
+            await ctx.Sleep(TimeSpan.FromMinutes(5));
+        }
+        catch (Exception)
+        {
+            throw new TerminalException($"gave up on {name}", 409);
+        }
+
+        return $"Rested hello, {name}!";
+    }
+}
+
+/// <summary>
 ///     A service that calls a downstream service and then sleeps — used to verify that
 ///     completion ids allocated after a resumed replay do not collide with replayed ids.
 /// </summary>
@@ -733,13 +808,17 @@ public class ProtocolIntegrationTests
         Assert.Equal(responseData.Length, offset);
     }
 
-    [Fact]
-    public async Task HandleAsync_ReplayedCommandTypeMismatch_FailsWithJournalMismatch()
+    /// <summary>
+    ///     Replays a journal of Input + RunCommand into a handler that sleeps instead of running
+    ///     a side effect, so the replayed prefix no longer matches what the handler does, and
+    ///     returns the raw response bytes.
+    /// </summary>
+    private static async Task<byte[]> RunMismatchingReplayAsync<TService>(
+        ServiceProtocolVersion version, Func<TService> factory)
+        where TService : class
     {
         var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
 
-        // Resumed journal: Input + a RunCommand. The handler deployed now sleeps instead of
-        // running a side effect, so the replayed prefix no longer matches what it does.
         var startPayload = BuildStartMessagePayload("mismatch-inv-1", 2, "test-key", 7);
         var inputCommandPayload = BuildInputCommandPayload(inputJson);
         var runCommandPayload = ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray();
@@ -756,41 +835,104 @@ public class ProtocolIntegrationTests
 
         var responseStream = new MemoryStream();
 
-        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(SleepyGreeterService))!;
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(TService))!;
         var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
 
-        var handler = new InvocationHandler();
-
-        var handleTask = handler.HandleAsync(
+        var handleTask = new InvocationHandler().HandleAsync(
             request.Reader,
             PipeWriter.Create(responseStream),
             serviceDef,
             handlerDef,
-            new FuncServiceProvider(_ => new SleepyGreeterService()),
-            ServiceProtocolVersion.V6,
+            new FuncServiceProvider(_ => factory()),
+            version,
             CancellationToken.None);
 
         await handleTask.WaitAsync(TimeSpan.FromSeconds(30));
         await request.Writer.CompleteAsync();
 
-        var responseData = responseStream.ToArray();
+        return responseStream.ToArray();
+    }
+
+    /// <summary>
+    ///     Asserts that the response is exactly a journal-mismatch ErrorMessage followed by End —
+    ///     consuming every byte proves no OutputCommand was written — and returns the error.
+    /// </summary>
+    private static Gen.ErrorMessage AssertJournalMismatchResponse(byte[] responseData)
+    {
         var offset = 0;
 
-        // The mismatch reaches the runtime as a terminal failure, not a retryable error.
-        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        var (errorHeader, errorPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Error, errorHeader.Type);
 
-        var msg = Gen.OutputCommandMessage.Parser.ParseFrom(outputPayload);
-        Assert.Equal(Gen.OutputCommandMessage.ResultOneofCase.Failure, msg.ResultCase);
-        Assert.Equal(570u, msg.Failure.Code);
-        Assert.Contains("journal mismatch", msg.Failure.Message);
-        Assert.Contains("journal index 1", msg.Failure.Message);
-        Assert.Contains("Sleep", msg.Failure.Message);
-        Assert.Contains("Run (RunCommand)", msg.Failure.Message);
+        var error = Gen.ErrorMessage.Parser.ParseFrom(errorPayload);
+        Assert.Equal(570u, error.Code);
+        Assert.Equal(Gen.ErrorBehavior.Retry, error.Behavior);
+        Assert.Contains("journal mismatch", error.Message);
+        Assert.Contains("journal index 1", error.Message);
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);
         Assert.Equal(responseData.Length, offset);
+
+        return error;
+    }
+
+    [Theory]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task HandleAsync_ReplayedCommandTypeMismatch_FailsWithRetryableJournalMismatch(int protocolVersion)
+    {
+        var responseData = await RunMismatchingReplayAsync(
+            (ServiceProtocolVersion)protocolVersion, () => new SleepyGreeterService());
+
+        // The mismatch reaches the runtime as a retryable ErrorMessage, not a terminal
+        // OutputCommand failure: redeploying the handler code the journal was written by has to
+        // be able to recover the invocation.
+        var error = AssertJournalMismatchResponse(responseData);
+
+        // Which side is which, pinned: the handler "expects" the operation this attempt issued,
+        // the journal "recorded" what the previous execution wrote. Swapping the two would send
+        // an operator looking at the wrong code.
+        Assert.Contains("the handler expects Sleep", error.Message);
+        Assert.Contains("previous execution recorded Run (RunCommand)", error.Message);
+        Assert.Equal(1u, error.RelatedCommandIndex);
+    }
+
+    [Fact]
+    public async Task HandleAsync_JournalMismatch_IsNotCaughtByHandlerCompensation()
+    {
+        var service = new CompensatingSleeperService();
+
+        var responseData = await RunMismatchingReplayAsync(ServiceProtocolVersion.V7, () => service);
+
+        AssertJournalMismatchResponse(responseData);
+        Assert.False(service.CompensationRan, "A journal mismatch must not surface as a TerminalException");
+    }
+
+    [Fact]
+    public async Task HandleAsync_JournalMismatchSwallowedByHandler_StillFailsTheAttempt()
+    {
+        // The handler catches every exception around its durable sleep and returns normally.
+        // The mismatch recorded on the state machine still decides the outcome, so the attempt
+        // ends with the 570 ErrorMessage instead of journaling an output against a journal the
+        // handler no longer matches.
+        var responseData = await RunMismatchingReplayAsync(
+            ServiceProtocolVersion.V7, () => new SwallowingSleeperService());
+
+        AssertJournalMismatchResponse(responseData);
+    }
+
+    [Fact]
+    public async Task HandleAsync_JournalMismatchSwallowedThenTerminalFailure_StillFailsTheAttemptAsMismatch()
+    {
+        // The handler catches every exception around its durable sleep and throws a
+        // TerminalException instead. The recorded mismatch still decides the outcome: a terminal
+        // OutputCommand would end the invocation for good, and redeploying the code the journal
+        // was written by could no longer recover it.
+        var responseData = await RunMismatchingReplayAsync(
+            ServiceProtocolVersion.V7, () => new FailingSleeperService());
+
+        AssertJournalMismatchResponse(responseData);
     }
 
     [Fact]

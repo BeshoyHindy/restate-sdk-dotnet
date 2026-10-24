@@ -14,8 +14,12 @@ internal readonly record struct StartInfo(
 
 internal sealed partial class InvocationStateMachine
 {
-    /// <summary>Error code for a journal mismatch, matching the shared core's <c>JOURNAL_MISMATCH</c>.</summary>
-    private const ushort JournalMismatchCode = 570;
+    /// <summary>
+    ///     The first journal mismatch this attempt hit, or null. Recorded when the exception is
+    ///     thrown, so the attempt still ends with the mismatch error even when handler code
+    ///     swallows it in a bare <c>catch</c>.
+    /// </summary>
+    public JournalMismatchException? JournalMismatch { get; private set; }
 
     public async Task<StartInfo> StartAsync(CancellationToken ct)
     {
@@ -309,7 +313,7 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Consumes the next replayed command entry (staged during the StartAsync drain), checks
     ///     it against the operation the handler is performing, and transitions to Processing when
-    ///     the replay boundary is reached. Fails the invocation with a journal-mismatch terminal
+    ///     the replay boundary is reached. Fails the attempt with a retryable journal-mismatch
     ///     error when the recorded command is of another kind, or when the replayed prefix ran out.
     /// </summary>
     private JournalEntry TakeReplayEntry(JournalEntryType expected)
@@ -340,19 +344,24 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Fails the invocation because the replayed journal does not match what the handler is
-    ///     doing. Code 570 is <c>JOURNAL_MISMATCH</c> in the shared core behind the Rust,
-    ///     TypeScript and Python SDKs; the server reports the same condition as <c>RT0016</c>.
-    ///     Terminal, because re-running the same handler code replays the same divergence.
+    ///     Records and throws a journal mismatch: the replayed journal does not match what the
+    ///     handler is doing. Retryable rather than terminal — the usual cause is a deploy that
+    ///     changed handler code under in-flight invocations, and redeploying the previous code
+    ///     has to be able to recover them.
+    ///     <paramref name="expected" /> is the operation this attempt's handler issues,
+    ///     <paramref name="recorded" /> the command the previous execution journaled; the message
+    ///     never swaps the two.
     /// </summary>
     [DoesNotReturn]
-    private static void ThrowJournalMismatch(int index, JournalEntryType expected, string recorded)
+    private void ThrowJournalMismatch(int index, JournalEntryType expected, string recorded)
     {
-        throw new TerminalException(
-            $"journal mismatch (RT0016) at journal index {index}: the handler performed {expected} " +
-            $"but the journal recorded {recorded}. Either the handler code changed without deploying " +
-            "a new deployment version, or the handler is non-deterministic.",
-            JournalMismatchCode);
+        var mismatch = new JournalMismatchException(index,
+            $"journal mismatch (RT0016) at journal index {index}: the handler expects {expected} " +
+            $"but the previous execution recorded {recorded}. Either the handler code changed without " +
+            "deploying a new deployment version, or the handler is non-deterministic.");
+
+        JournalMismatch ??= mismatch;
+        throw mismatch;
     }
 
     /// <summary>

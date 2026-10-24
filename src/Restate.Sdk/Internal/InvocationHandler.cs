@@ -9,6 +9,7 @@ using Restate.Sdk.Internal.Context;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.Serde;
 using Restate.Sdk.Internal.StateMachine;
+using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Internal;
 
@@ -91,10 +92,16 @@ internal sealed class InvocationHandler
             var serviceInstance = service.Factory(serviceProvider);
             var result = await handler.Invoker(serviceInstance, context, input, handlerToken).ConfigureAwait(false);
 
-            // Defensive: never write Output/End after a SuspensionMessage. Catching Exception
-            // around durable awaits in user code is unsupported (same caveat as other SDKs) —
-            // if the SuspensionException was swallowed there, the invocation state still wins.
-            if (sm.State != InvocationState.Suspended)
+            // Defensive: never write Output/End after a SuspensionMessage or a journal mismatch.
+            // Catching Exception around durable awaits in user code is unsupported (same caveat
+            // as other SDKs) — if the SuspensionException or the JournalMismatchException was
+            // swallowed there, the recorded invocation state still wins.
+            if (sm.JournalMismatch is { } swallowedMismatch)
+            {
+                outcome = InvocationOutcome.Error;
+                await ReportJournalMismatchAsync(sm, swallowedMismatch, logger, activity).ConfigureAwait(false);
+            }
+            else if (sm.State != InvocationState.Suspended)
             {
                 var output = result is not null
                     ? sm.SerializeObject(result)
@@ -109,6 +116,13 @@ internal sealed class InvocationHandler
                 outcome = InvocationOutcome.Suspended;
             }
         }
+        catch (TerminalException) when (sm.JournalMismatch is { } swallowedMismatch)
+        {
+            // The handler swallowed the mismatch and failed terminally in its place. The recorded
+            // mismatch still wins: an OutputCommand failure would end the invocation for good.
+            outcome = InvocationOutcome.Error;
+            await ReportJournalMismatchAsync(sm, swallowedMismatch, logger, activity).ConfigureAwait(false);
+        }
         catch (TerminalException ex)
         {
             outcome = InvocationOutcome.TerminalError;
@@ -116,6 +130,14 @@ internal sealed class InvocationHandler
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             try { await sm.FailTerminalAsync(ex.Code, ex.Message, CancellationToken.None).ConfigureAwait(false); }
             catch { /* Stream already broken — nothing more we can do */ }
+        }
+        catch (JournalMismatchException ex)
+        {
+            // Retryable, not terminal: the journal no longer matches the deployed handler code,
+            // and redeploying the code the journal was written by must recover the invocation —
+            // which an OutputCommand failure would forbid.
+            outcome = InvocationOutcome.Error;
+            await ReportJournalMismatchAsync(sm, ex, logger, activity).ConfigureAwait(false);
         }
         catch (SuspensionException)
         {
@@ -202,6 +224,30 @@ internal sealed class InvocationHandler
                 }
 
             try { reader.Complete(); } catch { /* already completed or broken */ }
+        }
+    }
+
+    /// <summary>
+    ///     Reports a journal mismatch to the runtime as an ErrorMessage with the
+    ///     <c>JOURNAL_MISMATCH</c> code and RETRY behavior, naming the journal index it was
+    ///     detected at. No OutputCommand is written: the invocation keeps its journal and a
+    ///     deployment of the handler code that wrote it can still complete it.
+    /// </summary>
+    private static async Task ReportJournalMismatchAsync(
+        InvocationStateMachine sm, JournalMismatchException mismatch, ILogger logger, Activity? activity)
+    {
+        Log.JournalMismatch(logger, sm.InvocationId, mismatch.JournalIndex, mismatch.Message);
+        activity?.SetStatus(ActivityStatusCode.Error, mismatch.Message);
+
+        try
+        {
+            await sm.FailAsync(
+                JournalMismatchException.ErrorCode, mismatch.Message, Gen.ErrorBehavior.Retry,
+                (uint)mismatch.JournalIndex, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            /* Stream already broken — nothing more we can do */
         }
     }
 

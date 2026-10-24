@@ -177,3 +177,12 @@ The v7 `awaiting_on` future is emitted as a flat FIRST_COMPLETED leaf: a spuriou
 - Keep `all` and demote NU1901-NU1904 to warnings: rejected — direct-dependency advisories would stop failing the build too
 - Keep `all` as errors and bump promptly: rejected — a fix may not exist upstream for days or weeks, and main is red meanwhile
 
+## 17. Journal Mismatch Is a Retryable Protocol Error (570)
+
+**Decision:** A journal mismatch is reported to the runtime as an `ErrorMessage` with code 570 (`JOURNAL_MISMATCH`) and `RETRY` behavior, carrying the journal index in `related_command_index`; no `OutputCommand` is written. It is raised as an internal exception outside the `TerminalException` hierarchy, so handler code cannot catch it as a terminal failure, and it is also recorded on the state machine, so an attempt whose handler swallows it in a bare `catch (Exception)` still ends with the 570 error. The message names the operation the current handler issues ("expects") and the command the journal holds ("recorded"), never the other way round.
+
+**Context:** The mismatch used to be a `TerminalException`, which the invocation handler turned into an `OutputCommand` failure. That made the invocation fail permanently for the usual cause of a mismatch — a deploy that changed handler code under in-flight invocations — and a saga's `catch (TerminalException)` compensation block swallowed it and kept running against a journal it no longer matched.
+
+**Alternatives:**
+- Keep the terminal failure: rejected — redeploying the handler code the journal was written by could no longer recover the invocation
+- `PAUSE` behavior: rejected for now — V5 and V6 cannot express it, and `RETRY` already gives an operator time to redeploy; revisit alongside a deeper mismatch check

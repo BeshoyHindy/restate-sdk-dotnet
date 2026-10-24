@@ -491,16 +491,23 @@ internal static class ProtobufCodec
     ///     Creates an ErrorMessage. <paramref name="behavior" /> (V7, field 9) tells the runtime
     ///     what to do with the failed invocation; the default RETRY is wire value 0 — it is not
     ///     serialized and matches the behavior of all previous protocol versions.
+    ///     <paramref name="relatedCommandIndex" /> (field 4), when given, names the journal
+    ///     command the failure belongs to.
     /// </summary>
     public static Gen.ErrorMessage CreateErrorMessage(uint code, string message,
-        Gen.ErrorBehavior behavior = Gen.ErrorBehavior.Retry)
+        Gen.ErrorBehavior behavior = Gen.ErrorBehavior.Retry, uint? relatedCommandIndex = null)
     {
-        return new Gen.ErrorMessage
+        var msg = new Gen.ErrorMessage
         {
             Code = code,
             Message = message,
             Behavior = behavior
         };
+
+        if (relatedCommandIndex is { } index)
+            msg.RelatedCommandIndex = index;
+
+        return msg;
     }
 
     /// <summary>

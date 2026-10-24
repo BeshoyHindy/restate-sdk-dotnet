@@ -1216,14 +1216,26 @@ internal sealed partial class InvocationStateMachine
     ///     wire value 0 (not serialized) and matches the semantics of every previous protocol
     ///     version, so it is always safe to send.
     /// </summary>
-    public async ValueTask FailAsync(ushort code, string message, Gen.ErrorBehavior behavior, CancellationToken ct)
+    public ValueTask FailAsync(ushort code, string message, Gen.ErrorBehavior behavior, CancellationToken ct)
+    {
+        return FailAsync(code, message, behavior, null, ct);
+    }
+
+    /// <summary>
+    ///     Sends an error as an ErrorMessage, naming the journal command the failure belongs to.
+    ///     <paramref name="relatedCommandIndex" /> (field 4) points the runtime's error report at
+    ///     that command; it is left unset when the failure belongs to no particular command.
+    /// </summary>
+    public async ValueTask FailAsync(ushort code, string message, Gen.ErrorBehavior behavior,
+        uint? relatedCommandIndex, CancellationToken ct)
     {
         if (State is InvocationState.Closed or InvocationState.Suspended)
             return;
 
         State = InvocationState.Closed;
 
-        WriteCommand(MessageType.Error, ProtobufCodec.CreateErrorMessage(code, message, behavior));
+        WriteCommand(MessageType.Error,
+            ProtobufCodec.CreateErrorMessage(code, message, behavior, relatedCommandIndex));
 
         _writer.WriteHeaderOnly(MessageType.End);
         await FlushAsync(ct).ConfigureAwait(false);
