@@ -260,6 +260,70 @@ public class InvocationStateMachineTests : IDisposable
         await AssertWaitFailedTerminallyAsync(replayedWait);
     }
 
+    [Fact]
+    public async Task RunAsync_ExhaustedRetries_ProposesTheRunFailureAndThrowsTerminal()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var attempts = 0;
+        var alwaysFails = new Func<Task<int>>(() =>
+        {
+            attempts++;
+            throw new InvalidOperationException("permanent");
+        });
+
+        var terminal = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", alwaysFails, CancellationToken.None, TwoAttempts));
+
+        Assert.Equal(2, attempts);
+        AssertExhaustedRunFailure(terminal, await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_Void_ExhaustedRetries_ProposesTheRunFailureAndThrowsTerminal()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var attempts = 0;
+        var alwaysFails = new Func<Task>(() =>
+        {
+            attempts++;
+            throw new InvalidOperationException("permanent");
+        });
+
+        var terminal = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", alwaysFails, CancellationToken.None, TwoAttempts));
+
+        Assert.Equal(2, attempts);
+        AssertExhaustedRunFailure(terminal, await DrainOutboundAsync());
+    }
+
+    /// <summary>
+    ///     Asserts that a run whose retries ran out on the live path wrote its RunCommand followed
+    ///     by exactly the failure proposal for that command's completion id, and threw a terminal
+    ///     500 carrying the same message. Both Run overloads share the retry loop, so both are held
+    ///     to the same bytes here.
+    /// </summary>
+    private static void AssertExhaustedRunFailure(TerminalException terminal,
+        List<(MessageType Type, byte[] Payload)> frames)
+    {
+        Assert.Equal("Run 'effect' failed after 2 attempt(s): permanent", terminal.Message);
+        Assert.Equal(500, terminal.Code);
+
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.RunCommand, frames[0].Type);
+        var command = Gen.RunCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("effect", command.Name);
+
+        Assert.Equal(MessageType.ProposeRunCompletion, frames[1].Type);
+        var expected = ProtobufCodec
+            .CreateRunProposalFailure(command.ResultCompletionId, 500, terminal.Message)
+            .ToByteArray();
+        Assert.Equal(expected, frames[1].Payload);
+    }
+
     /// <summary>
     ///     Asserts the re-executed run wrote nothing but a failure proposal for the replayed
     ///     completion id. A second RunCommand would duplicate the journaled entry, and a proposal

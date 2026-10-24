@@ -212,13 +212,15 @@ internal sealed class LazyTimerFuture : IDurableFuture, IArrivalOrderedFuture
 }
 
 /// <summary>
-///     Lazy wrapper for CallFuture operations where the state machine setup is async.
+///     Lazy wrapper for a future whose result arrives as a runtime notification and whose state
+///     machine setup is async: a call future and a signal, both of which flush the buffered
+///     commands before the wait they hand back can resolve.
 /// </summary>
 [UnconditionalSuppressMessage("AOT", "IL2026:RequiresUnreferencedCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
-internal sealed class LazyCallFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
+internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
 {
     // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
     // to two combinators or awaited again by the handler. Preserve() materialises the underlying
@@ -228,7 +230,7 @@ internal sealed class LazyCallFuture<T> : IDurableFuture<T>, IArrivalOrderedFutu
     private readonly InvocationIdSlot _invocationId;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    internal LazyCallFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
+    internal LazyNotificationFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
         JsonSerializerOptions jsonOptions, InvocationIdSlot invocationId = default)
     {
         _initTask = initTask.Preserve();

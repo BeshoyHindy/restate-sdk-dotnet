@@ -4,6 +4,12 @@ namespace Restate.Sdk;
 ///     Configures retry behavior for <see cref="IContext.Run{T}(string, Func{Task{T}}, RetryPolicy?)" /> side effects.
 ///     When a side effect throws a non-terminal exception, the SDK retries it locally
 ///     with exponential backoff according to this policy before propagating the failure.
+///     <para>
+///         When the retries run out — <see cref="MaxAttempts" /> or <see cref="MaxDuration" /> is
+///         reached — the failure is recorded in the journal as a terminal run failure with code
+///         500 and the message <c>Run '&lt;name&gt;' failed after N attempt(s)</c>, the handler
+///         sees a <see cref="TerminalException" />, and the run is not retried again on replay.
+///     </para>
 /// </summary>
 public sealed record RetryPolicy
 {
@@ -22,12 +28,18 @@ public sealed record RetryPolicy
     /// <summary>
     ///     Maximum number of retry attempts before the failure is propagated.
     ///     <c>null</c> means unlimited attempts (bounded only by <see cref="MaxDuration" />).
+    ///     Reaching it records the run as a terminal failure with code 500 and the message
+    ///     <c>Run '&lt;name&gt;' failed after N attempt(s)</c>; the handler sees a
+    ///     <see cref="TerminalException" /> and the run is not retried again on replay.
     /// </summary>
     public int? MaxAttempts { get; init; }
 
     /// <summary>
     ///     Maximum total duration across all retry attempts.
     ///     <c>null</c> means unlimited duration (bounded only by <see cref="MaxAttempts" />).
+    ///     Reaching it records the run as a terminal failure with code 500 and the message
+    ///     <c>Run '&lt;name&gt;' failed after N attempt(s)</c>; the handler sees a
+    ///     <see cref="TerminalException" /> and the run is not retried again on replay.
     /// </summary>
     public TimeSpan? MaxDuration { get; init; }
 
@@ -37,7 +49,9 @@ public sealed record RetryPolicy
     public static RetryPolicy Default { get; } = new();
 
     /// <summary>
-    ///     No retries — the side effect failure is immediately propagated as a run completion failure.
+    ///     No retries — the first failure exhausts the policy, so it is recorded as a terminal run
+    ///     failure with code 500 and reaches the handler as a <see cref="TerminalException" />
+    ///     wrapping the original message, rather than as the exception the side effect threw.
     /// </summary>
     public static RetryPolicy None { get; } = new() { MaxAttempts = 0 };
 
