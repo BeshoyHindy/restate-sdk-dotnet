@@ -191,6 +191,25 @@ internal sealed class CompletionManager<TKey> where TKey : notnull
         return earlyTcs;
     }
 
+    /// <summary>
+    ///     Reads a result the runtime already delivered to a slot nothing is waiting on, leaving
+    ///     the slot as it is. Returns false while the slot is empty, holds a registered wait, or
+    ///     holds a failure. Peeking registers nothing, so the notification it reads is never
+    ///     advertised in the SuspensionMessage and is never poisoned on EOF — which is what a
+    ///     call's invocation-id notification needs, since no wait is ever registered for it.
+    /// </summary>
+    public bool TryPeekResult(TKey entryIndex, out CompletionResult result)
+    {
+        if (_slots.TryGetValue(entryIndex, out var slot) && slot.Kind == CompletionSlot.SlotKind.Result)
+        {
+            result = slot.Result;
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+
     public bool TryComplete(TKey entryIndex, CompletionResult result)
     {
         // Stamped before the wait is resolved, so a handler woken by it already observes the

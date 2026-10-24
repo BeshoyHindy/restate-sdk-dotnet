@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Restate.Sdk.Internal.Journal;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Internal;
 
@@ -16,6 +17,31 @@ internal interface IArrivalOrderedFuture
     long ArrivalOrder { get; }
 }
 
+/// <summary>
+///     Where a future started by a call reads the invocation id of that call: the completion slot
+///     the runtime delivers the invocation-id notification to. Reading is a peek — it neither
+///     blocks nor registers a wait, so the slot stays out of the <c>SuspensionMessage</c> — and
+///     yields null until the notification arrives. The default value belongs to futures that
+///     started no invocation (timers, runs, signals) and always reads as null.
+/// </summary>
+internal readonly struct InvocationIdSlot
+{
+    private readonly InvocationStateMachine? _stateMachine;
+    private readonly uint _notificationIndex;
+
+    internal InvocationIdSlot(InvocationStateMachine stateMachine, uint notificationIndex)
+    {
+        _stateMachine = stateMachine;
+        _notificationIndex = notificationIndex;
+    }
+
+    /// <summary>The invocation id the runtime delivered, or null while it has not arrived.</summary>
+    internal string? Read()
+    {
+        return _stateMachine?.TryReadInvocationId(_notificationIndex);
+    }
+}
+
 [UnconditionalSuppressMessage("AOT", "IL2026:RequiresUnreferencedCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
@@ -23,16 +49,17 @@ internal interface IArrivalOrderedFuture
 internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
 {
     private readonly T? _completedValue;
+    private readonly InvocationIdSlot _invocationId;
     private readonly bool _isPreCompleted;
     private readonly JsonSerializerOptions? _jsonOptions;
     private readonly TaskCompletionSource<CompletionResult>? _tcs;
 
     internal DurableFuture(TaskCompletionSource<CompletionResult> tcs, JsonSerializerOptions jsonOptions,
-        string? invocationId = null)
+        InvocationIdSlot invocationId = default)
     {
         _tcs = tcs;
         _jsonOptions = jsonOptions;
-        InvocationId = invocationId;
+        _invocationId = invocationId;
     }
 
     private DurableFuture(T value)
@@ -46,7 +73,7 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
 
     public long ArrivalOrder => (_tcs as CompletionSource)?.ArrivalOrder ?? 0;
 
-    public string? InvocationId { get; }
+    public string? InvocationId => _invocationId.Read();
 
     public async ValueTask<T> GetResult()
     {
@@ -198,13 +225,15 @@ internal sealed class LazyCallFuture<T> : IDurableFuture<T>, IArrivalOrderedFutu
     // Task when the operation is still in flight (the async state machine already allocated it,
     // so this costs nothing extra) and is a no-op for one that completed synchronously.
     private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
+    private readonly InvocationIdSlot _invocationId;
     private readonly JsonSerializerOptions _jsonOptions;
 
     internal LazyCallFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions, InvocationIdSlot invocationId = default)
     {
         _initTask = initTask.Preserve();
         _jsonOptions = jsonOptions;
+        _invocationId = invocationId;
     }
 
     // The wait only exists once the operation was set up; until then nothing can have arrived.
@@ -212,7 +241,10 @@ internal sealed class LazyCallFuture<T> : IDurableFuture<T>, IArrivalOrderedFutu
         ? (_initTask.Result as CompletionSource)?.ArrivalOrder ?? 0
         : 0;
 
-    public string? InvocationId => null;
+    // Read from the completion slot, not from the pending setup: the slot index is known before
+    // the command is flushed, so a lazily created call future reports the same id an eagerly
+    // created one does. Null for a signal future, which started no invocation.
+    public string? InvocationId => _invocationId.Read();
 
     public async ValueTask<T> GetResult()
     {

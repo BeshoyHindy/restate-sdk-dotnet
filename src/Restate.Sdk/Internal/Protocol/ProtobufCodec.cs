@@ -216,6 +216,16 @@ internal static class ProtobufCodec
     }
 
     /// <summary>
+    ///     Extracts <c>invocation_id_notification_idx</c> (field 10) from a replayed
+    ///     <c>CallCommand</c> payload: the completion id the invocation id of the called
+    ///     invocation was — or will be — delivered under.
+    /// </summary>
+    public static uint ParseCallInvocationIdIndex(ReadOnlySpan<byte> payload)
+    {
+        return Gen.CallCommandMessage.Parser.ParseFrom(payload).InvocationIdNotificationIdx;
+    }
+
+    /// <summary>
     ///     Extracts the embedded state value from a replayed <c>GetEagerStateCommand</c> payload.
     ///     Returns <c>null</c> when the command recorded a void result (state key absent).
     /// </summary>

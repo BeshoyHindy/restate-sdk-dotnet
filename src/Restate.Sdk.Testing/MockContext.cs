@@ -310,12 +310,18 @@ public sealed class MockContext : Context
         return new ValueTask<TResponse>(default(TResponse)!);
     }
 
-    /// <summary>Records a call and hands its result back as an already-completed future.</summary>
+    /// <summary>
+    ///     Records a call and hands its result back as an already-completed future carrying a
+    ///     deterministic invocation id, minted from the same counter as the mock's sends, so a
+    ///     handler that reads <see cref="IDurableFuture{T}.InvocationId" /> sees a non-null id
+    ///     under test as it does in production.
+    /// </summary>
     private IDurableFuture<TResponse> RecordCallFuture<TResponse>(string service, string? key, string handler,
         object? request, CallOptions options)
     {
         var call = RecordCall<TResponse>(service, key, handler, request, options);
-        return new CompletedFuture<TResponse>(call.IsCompletedSuccessfully ? call.Result : default!);
+        return new CompletedFuture<TResponse>(call.IsCompletedSuccessfully ? call.Result : default!,
+            $"mock-inv-{Interlocked.Increment(ref _invocationCounter)}");
     }
 
     /// <summary>Records a send, validating the flow-control options as the handler paths do.</summary>
@@ -634,9 +640,10 @@ public sealed class MockContext : Context
     {
         private readonly T _value;
 
-        public CompletedFuture(T value)
+        public CompletedFuture(T value, string? invocationId = null)
         {
             _value = value;
+            InvocationId = invocationId;
         }
 
         public ValueTask<T> GetResult()
@@ -649,7 +656,11 @@ public sealed class MockContext : Context
             return new ValueTask<object?>(_value);
         }
 
-        public string? InvocationId => null;
+        /// <summary>
+        ///     The deterministic id the mock minted for a call future, or null for a signal
+        ///     future, which starts no invocation — the same split the real context makes.
+        /// </summary>
+        public string? InvocationId { get; }
     }
 
     private sealed class EagerFuture<T> : IDurableFuture<T>

@@ -1420,7 +1420,7 @@ public class InvocationStateMachineTests : IDisposable
             ProtobufCodec.CreateCallCommand("Payments", "Refund", "cust-1", ReadOnlySpan<byte>.Empty, 2, 1,
                 scope: "tenant-a"),
             sm => sm.CallFutureAsync("Payments", "cust-1", "Refund", null, CallOptions.WithScope("tenant-a"),
-                CancellationToken.None).AsTask(),
+                CancellationToken.None).Pending.AsTask(),
             ServiceProtocolVersion.V7);
     }
 
