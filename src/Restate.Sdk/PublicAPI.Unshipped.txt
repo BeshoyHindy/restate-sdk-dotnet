@@ -1,3 +1,6 @@
 #nullable enable
+Restate.Sdk.Client.RestateClient.LookupIdempotentInvocation(string! service, string! handler, string! idempotencyKey, string? key = null, string? scope = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.InvocationHandle>!
+Restate.Sdk.Client.RestateClient.LookupWorkflow(string! workflowName, string! workflowKey, string? scope = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.InvocationHandle>!
+Restate.Sdk.Client.RestateClient.WithScope(string! scope) -> Restate.Sdk.Client.RestateClient!
 Restate.Sdk.Client.RestateClientOptions.AdminAddress.get -> System.Uri?
 Restate.Sdk.Client.RestateClientOptions.AdminAddress.set -> void

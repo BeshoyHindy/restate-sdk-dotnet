@@ -595,13 +595,28 @@ var quote = await client.Service("PricingService")
     .Call<string>("Quote", request, CallOptions.WithScope("tenant-a", "customer-7"));
 await client.Service("EmailService")
     .Send("SendEmail", request, SendOptions.WithScope("tenant-a"));
+
+// Bind the scope once instead of passing it on every call; a per-call scope still wins
+var tenant = client.WithScope("tenant-a");
+var tenantQuote = await tenant.Service("PricingService").Call<string>("Quote", request);
+
+// Re-attach without having kept the invocation ID: look the target up by name and key
+var signup = await client.LookupWorkflow("SignupWorkflow", "user-1");
+var result = await client.Attach<bool>(signup.InvocationId);
+
+// ... or by the idempotency key an invocation was submitted with
+var email = await client.LookupIdempotentInvocation("EmailService", "SendEmail", "order-1");
+var sent = await client.GetOutput<bool>(email.InvocationId);
 ```
 
 > New in 0.3.0: the scoped ingress paths above, and the typed exception below.
+> The lookups and `WithScope` require restate-server 1.7 or later. A lookup derives the
+> invocation ID from the target rather than reading storage, so it answers for a target that was
+> never invoked too; the absence shows up as a 404 on `Attach`.
 
 The client addresses the versioned ingress routes (`/restate/call/...`, `/restate/send/...`,
-`/restate/scope/{scope}/...`, `/restate/attach/{id}`, `/restate/output/{id}`), and escapes every
-service name, key, handler name, scope and invocation id it puts in a path, so a
+`/restate/scope/{scope}/...`, `/restate/attach/{id}`, `/restate/output/{id}`, `/restate/lookup`),
+and escapes every service name, key, handler name, scope and invocation id it puts in a path, so a
 virtual-object key such as `a/b c?d` addresses the key rather than a different route.
 
 > On restate-server 1.8 the ingress silently drops every client-supplied `x-restate-*` request

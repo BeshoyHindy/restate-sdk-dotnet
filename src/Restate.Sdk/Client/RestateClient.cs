@@ -32,11 +32,18 @@ public sealed class RestateClient : IDisposable
     /// </summary>
     private const string LimitKeyHeader = "x-restate-limit-key";
 
+    /// <summary>
+    ///     The ingress route that resolves an invocation target — a workflow, or an idempotent
+    ///     invocation — to its invocation id (restate-server 1.7 and newer).
+    /// </summary>
+    private const string LookupPath = "/restate/lookup";
+
     private static JsonSerializerOptions? s_reflectionJsonOptions;
     private readonly Uri? _adminAddress;
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
     private readonly JsonSerializerOptions? _reflectionJsonOptions;
+    private readonly string? _scope;
 
     /// <summary>
     ///     Creates a new Restate ingress client pointing at the given base URL.
@@ -124,6 +131,26 @@ public sealed class RestateClient : IDisposable
         _reflectionJsonOptions = options.JsonSerializerOptions;
         _adminAddress = options.AdminAddress;
     }
+
+    /// <summary>
+    ///     Creates the derived client <see cref="WithScope" /> hands out: the same ingress and the
+    ///     same JSON configuration, with one concurrency scope bound. It shares the
+    ///     <see cref="HttpClient" /> of the client it came from without owning it, so disposing the
+    ///     derived client leaves the original — and the connections it pools — usable.
+    /// </summary>
+    private RestateClient(RestateClient source, string scope)
+    {
+        _http = source._http;
+        _ownsClient = false;
+        _reflectionJsonOptions = source._reflectionJsonOptions;
+        _scope = scope;
+    }
+
+    /// <summary>
+    ///     The concurrency scope bound by <see cref="WithScope" />, which every call, send and
+    ///     lookup made through this client falls back to. Null on an unbound client.
+    /// </summary>
+    internal string? BoundScope => _scope;
 
     /// <summary>
     ///     Throws a <see cref="RestateIngressException" /> when the ingress returned a non-success
@@ -242,6 +269,31 @@ public sealed class RestateClient : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Returns a client bound to the server-side concurrency scope <paramref name="scope" />:
+    ///     every call, send and lookup it makes runs in that scope, instead of the scope being
+    ///     passed on each one through <see cref="CallOptions.Scope" /> or
+    ///     <see cref="SendOptions.Scope" />. A per-call scope still wins over the bound one, and a
+    ///     per-call limit key narrows the bound scope — on a bound client it no longer needs a
+    ///     per-call scope beside it.
+    ///     <para>
+    ///         The derived client shares this client's <see cref="HttpClient" /> but never owns it:
+    ///         disposing the derived client leaves this one usable, and disposing this one still
+    ///         releases the HttpClient when this client owns it.
+    ///     </para>
+    ///     <para>
+    ///         Requires restate-server 1.7 or later, which serves the scoped ingress routes.
+    ///     </para>
+    /// </summary>
+    /// <param name="scope">The name of the concurrency scope to bind.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="scope" /> is empty.</exception>
+    public RestateClient WithScope(string scope)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        return new RestateClient(this, scope);
+    }
+
     /// <summary>Gets a service handle for invoking handlers on a stateless service.</summary>
     public ServiceHandle Service(string serviceName)
     {
@@ -258,6 +310,112 @@ public sealed class RestateClient : IDisposable
     public ServiceHandle Workflow(string serviceName, string key)
     {
         return new ServiceHandle(this, serviceName, key);
+    }
+
+    /// <summary>
+    ///     Looks up the invocation of a workflow by its name and key, for a caller that did not
+    ///     keep the invocation id: pass the returned invocation handle's
+    ///     <see cref="InvocationHandle.InvocationId" /> to <see cref="Attach{TResponse}(string,CancellationToken)" />
+    ///     or <see cref="GetOutput{TResponse}(string,CancellationToken)" />.
+    ///     <para>
+    ///         The ingress derives the id from the target rather than reading it from storage, so
+    ///         the lookup answers whether or not that workflow key has ever been invoked: a handle
+    ///         for a key with no invocation reports its absence on attach, as a
+    ///         <see cref="RestateIngressException" /> with status 404, not here.
+    ///     </para>
+    ///     <para>
+    ///         Requires restate-server 1.7 or later, which introduced the lookup route.
+    ///     </para>
+    /// </summary>
+    /// <param name="workflowName">The name of the workflow service.</param>
+    /// <param name="workflowKey">The workflow key — its id, one invocation per key.</param>
+    /// <param name="scope">
+    ///     The concurrency scope the workflow was invoked in, or null to use the scope bound by
+    ///     <see cref="WithScope" /> — and no scope at all on an unbound client.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="workflowName" /> or <paramref name="workflowKey" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="workflowName" /> or <paramref name="workflowKey" /> is empty.
+    /// </exception>
+    /// <exception cref="RestateIngressException">The ingress rejected the lookup.</exception>
+    public async Task<InvocationHandle> LookupWorkflow(string workflowName, string workflowKey,
+        string? scope = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(workflowName);
+        ArgumentException.ThrowIfNullOrEmpty(workflowKey);
+
+        var request = new WorkflowLookupRequest(workflowName, workflowKey, scope ?? _scope);
+        using var content = JsonContent.Create(request, RestateClientJsonContext.Default.WorkflowLookupRequest);
+        return await LookupAsync(content, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Looks up the invocation an idempotency key addresses on a handler, for a caller that did
+    ///     not keep the invocation id: pass the returned invocation handle's
+    ///     <see cref="InvocationHandle.InvocationId" /> to <see cref="Attach{TResponse}(string,CancellationToken)" />
+    ///     or <see cref="GetOutput{TResponse}(string,CancellationToken)" />.
+    ///     <para>
+    ///         The ingress derives the id from the target rather than reading it from storage, so
+    ///         the lookup answers whether or not that idempotency key has ever been used: a handle
+    ///         for a key with no invocation reports its absence on attach, as a
+    ///         <see cref="RestateIngressException" /> with status 404, not here.
+    ///     </para>
+    ///     <para>
+    ///         Requires restate-server 1.7 or later, which introduced the lookup route.
+    ///     </para>
+    /// </summary>
+    /// <param name="service">The name of the invoked service.</param>
+    /// <param name="handler">The name of the invoked handler.</param>
+    /// <param name="idempotencyKey">The idempotency key the invocation was submitted with.</param>
+    /// <param name="key">The virtual-object or workflow key, or null for a stateless service.</param>
+    /// <param name="scope">
+    ///     The concurrency scope the invocation was made in, or null to use the scope bound by
+    ///     <see cref="WithScope" /> — and no scope at all on an unbound client.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="service" />, <paramref name="handler" /> or
+    ///     <paramref name="idempotencyKey" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="service" />, <paramref name="handler" /> or
+    ///     <paramref name="idempotencyKey" /> is empty.
+    /// </exception>
+    /// <exception cref="RestateIngressException">The ingress rejected the lookup.</exception>
+    public async Task<InvocationHandle> LookupIdempotentInvocation(string service, string handler,
+        string idempotencyKey, string? key = null, string? scope = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(service);
+        ArgumentException.ThrowIfNullOrEmpty(handler);
+        ArgumentException.ThrowIfNullOrEmpty(idempotencyKey);
+
+        var request = new IdempotentInvocationLookupRequest(service, handler, idempotencyKey, key, scope ?? _scope);
+        using var content = JsonContent.Create(request,
+            RestateClientJsonContext.Default.IdempotentInvocationLookupRequest);
+        return await LookupAsync(content, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Posts a lookup body and reads the invocation id out of the response. Both the request
+    ///     and the response are the client's own wire records, serialized through
+    ///     <see cref="RestateClientJsonContext" />, so a lookup needs no
+    ///     <see cref="JsonTypeInfo{T}" /> overload to stay Native AOT safe.
+    /// </summary>
+    private async Task<InvocationHandle> LookupAsync(HttpContent content, CancellationToken ct)
+    {
+        using var response = await _http.PostAsync(LookupPath, content, ct).ConfigureAwait(false);
+        await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
+
+        var body = await response.Content
+            .ReadFromJsonAsync(RestateClientJsonContext.Default.LookupResponse, ct).ConfigureAwait(false);
+        var invocationId = body?.InvocationId;
+        if (string.IsNullOrWhiteSpace(invocationId))
+            throw new JsonException("Restate ingress lookup response did not contain a non-empty invocationId.");
+
+        return new InvocationHandle(invocationId);
     }
 
     /// <summary>
@@ -602,7 +760,7 @@ public readonly record struct ServiceHandle
     public Task<TResponse> Call<TResponse>(string handler, object? request, CallOptions options,
         CancellationToken ct = default)
     {
-        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.CallAsync<TResponse>(BuildPath(handler, options.Scope, false), request,
             options.IdempotencyKey, options.LimitKey, ct);
     }
@@ -642,7 +800,7 @@ public readonly record struct ServiceHandle
     {
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.CallAsync(BuildPath(handler, options.Scope, false), request, requestTypeInfo,
             responseTypeInfo, options.IdempotencyKey, options.LimitKey, ct);
     }
@@ -672,7 +830,7 @@ public readonly record struct ServiceHandle
         CallOptions options, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.CallAsync(BuildPath(handler, options.Scope, false), responseTypeInfo,
             options.IdempotencyKey, options.LimitKey, ct);
     }
@@ -697,7 +855,7 @@ public readonly record struct ServiceHandle
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<string> Send(string handler, object? request, SendOptions options, CancellationToken ct = default)
     {
-        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.SendAsync(BuildPath(handler, options.Scope, true), request, options.Delay,
             options.IdempotencyKey, options.LimitKey, ct);
     }
@@ -728,7 +886,7 @@ public readonly record struct ServiceHandle
         SendOptions options, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
-        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.SendAsync(BuildPath(handler, options.Scope, true), request, requestTypeInfo, options.Delay,
             options.IdempotencyKey, options.LimitKey, ct);
     }
@@ -745,9 +903,15 @@ public readonly record struct ServiceHandle
     ///         handler or scope containing <c>/</c>, <c>?</c>, <c>#</c>, <c>%</c> or a space
     ///         cannot address a different route.
     ///     </para>
+    ///     <para>
+    ///         A null <paramref name="scope" /> falls back to the scope bound on the client by
+    ///         <see cref="RestateClient.WithScope" />, so a bound client scopes every invocation it
+    ///         makes while a per-call scope still wins.
+    ///     </para>
     /// </summary>
     private string BuildPath(string handler, string? scope, bool send)
     {
+        scope ??= _client.BoundScope;
         var verb = send ? "send" : "call";
         var target = _key is not null
             ? $"{Uri.EscapeDataString(_service)}/{Uri.EscapeDataString(_key)}/{Uri.EscapeDataString(handler)}"
@@ -763,9 +927,48 @@ public readonly record struct ServiceHandle
 internal sealed record SendResponse(string InvocationId);
 
 /// <summary>
+///     Request body that asks the ingress for the invocation of a workflow key. The ingress reads
+///     the <c>target</c> discriminator first and the rest of the body according to it; an absent
+///     <c>scope</c> means the workflow was invoked outside any concurrency scope.
+/// </summary>
+internal sealed record WorkflowLookupRequest(
+    string WorkflowName,
+    string WorkflowKey,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Scope)
+{
+    /// <summary>The target discriminator for a workflow lookup.</summary>
+    public string Target => "workflow";
+}
+
+/// <summary>
+///     Request body that asks the ingress for the invocation an idempotency key addresses on a
+///     handler. An absent <c>key</c> addresses a stateless service, and an absent <c>scope</c>
+///     means the invocation was made outside any concurrency scope.
+/// </summary>
+internal sealed record IdempotentInvocationLookupRequest(
+    string Service,
+    string Handler,
+    string IdempotencyKey,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Key,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Scope)
+{
+    /// <summary>The target discriminator for an idempotent-invocation lookup.</summary>
+    public string Target => "idempotentInvocation";
+}
+
+/// <summary>Response body returned by the ingress lookup route.</summary>
+internal sealed record LookupResponse(string InvocationId);
+
+/// <summary>
 ///     Source-generated JSON context for the ingress client's own wire types.
 ///     Keeps invocation-ID parsing reflection-free so the AOT-safe overloads work under Native AOT.
 /// </summary>
 [JsonSerializable(typeof(SendResponse))]
+[JsonSerializable(typeof(WorkflowLookupRequest))]
+[JsonSerializable(typeof(IdempotentInvocationLookupRequest))]
+[JsonSerializable(typeof(LookupResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class RestateClientJsonContext : JsonSerializerContext;

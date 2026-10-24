@@ -684,6 +684,258 @@ public class RestateClientTests
         Assert.Null(handler.LastRequest);
     }
 
+    // ── Target lookup ──
+
+    [Fact]
+    public async Task LookupWorkflow_PostsTheWorkflowTargetToTheLookupRoute()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv_1workflow"}""";
+
+        var found = await client.LookupWorkflow("SignupWorkflow", "user-1");
+
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal("http://localhost:8080/restate/lookup", handler.LastRequest.RequestUri!.AbsoluteUri);
+        Assert.Equal("""{"workflowName":"SignupWorkflow","workflowKey":"user-1","target":"workflow"}""",
+            handler.LastRequestBody);
+        Assert.Equal(new InvocationHandle("inv_1workflow"), found);
+    }
+
+    [Fact]
+    public async Task LookupWorkflow_WithScope_CarriesTheScopeInTheBody()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv_1scoped"}""";
+
+        var found = await client.LookupWorkflow("SignupWorkflow", "user-1", "tenant-a");
+
+        // The lookup route takes the scope in the body, not as a path prefix.
+        Assert.Equal("/restate/lookup", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal(
+            """{"workflowName":"SignupWorkflow","workflowKey":"user-1","scope":"tenant-a","target":"workflow"}""",
+            handler.LastRequestBody);
+        Assert.Equal("inv_1scoped", found.InvocationId);
+    }
+
+    [Fact]
+    public async Task LookupIdempotentInvocation_PostsTheIdempotentTargetToTheLookupRoute()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv_1idem"}""";
+
+        var found = await client.LookupIdempotentInvocation("Greeter", "Greet", "key-42");
+
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal("/restate/lookup", handler.LastRequest.RequestUri!.AbsolutePath);
+        Assert.Equal(
+            """{"service":"Greeter","handler":"Greet","idempotencyKey":"key-42","target":"idempotentInvocation"}""",
+            handler.LastRequestBody);
+        Assert.Equal("inv_1idem", found.InvocationId);
+    }
+
+    [Fact]
+    public async Task LookupIdempotentInvocation_WithKeyAndScope_CarriesBothInTheBody()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv_1keyed"}""";
+
+        var found = await client.LookupIdempotentInvocation("Counter", "Add", "key-42", "ada", "tenant-a");
+
+        Assert.Equal(
+            """
+            {"service":"Counter","handler":"Add","idempotencyKey":"key-42","key":"ada","scope":"tenant-a","target":"idempotentInvocation"}
+            """,
+            handler.LastRequestBody);
+        Assert.Equal("inv_1keyed", found.InvocationId);
+    }
+
+    [Fact]
+    public async Task Lookup_ErrorStatus_ThrowsTypedIngressException()
+    {
+        var (client, handler) = CreateClient();
+
+        // The ingress derives the invocation id from the target instead of reading storage, so a
+        // target that has never been invoked still answers 200. A failure here means the request
+        // itself was rejected — a malformed scope, or a server before 1.7 with no lookup route.
+        handler.ResponseStatusCode = HttpStatusCode.NotFound;
+        handler.ResponseBody = """{"code":404,"message":"not found"}""";
+
+        var workflow = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.LookupWorkflow("SignupWorkflow", "user-1"));
+        Assert.Equal(HttpStatusCode.NotFound, workflow.StatusCode);
+
+        var idempotent = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.LookupIdempotentInvocation("Greeter", "Greet", "key-42"));
+        Assert.Equal(HttpStatusCode.NotFound, idempotent.StatusCode);
+    }
+
+    [Fact]
+    public async Task Lookup_OfATargetWithNoInvocation_ReportsItOnAttach()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv_1never-ran"}""";
+
+        var found = await client.LookupWorkflow("SignupWorkflow", "never-ran");
+        Assert.Equal("inv_1never-ran", found.InvocationId);
+
+        handler.ResponseStatusCode = HttpStatusCode.NotFound;
+        handler.ResponseBody = """{"code":404,"message":"invocation not found"}""";
+
+        var ex = await Assert.ThrowsAsync<RestateIngressException>(
+            () => client.Attach(found.InvocationId, ClientTestJsonContext.Default.GreetResponse));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        Assert.Equal("invocation not found", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"invocationId":""}""")]
+    public async Task Lookup_MissingInvocationId_ThrowsJsonException(string responseBody)
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = responseBody;
+
+        await Assert.ThrowsAsync<JsonException>(() => client.LookupWorkflow("SignupWorkflow", "user-1"));
+    }
+
+    [Fact]
+    public async Task Lookup_NullOrEmptyArguments_ThrowWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.LookupWorkflow(null!, "user-1"));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.LookupWorkflow("SignupWorkflow", ""));
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => client.LookupIdempotentInvocation("Greeter", null!, "key-42"));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => client.LookupIdempotentInvocation("Greeter", "Greet", ""));
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    // ── Scope-bound client ──
+
+    [Fact]
+    public async Task WithScope_CallAndSend_UseTheScopedRoute()
+    {
+        var (client, handler) = CreateClient();
+        var scoped = client.WithScope("tenant-a");
+
+        handler.ResponseBody = """{"message":"hello"}""";
+        await scoped.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("/restate/scope/tenant-a/call/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+        await scoped.VirtualObject("Counter", "ada").Send("Add", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest);
+        Assert.Equal("/restate/scope/tenant-a/send/Counter/ada/Add",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task WithScope_PerCallScope_OverridesTheBoundScope()
+    {
+        var (client, handler) = CreateClient();
+        var scoped = client.WithScope("tenant-a");
+
+        handler.ResponseBody = """{"message":"hello"}""";
+        await scoped.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse,
+            CallOptions.WithScope("tenant-b"));
+        Assert.Equal("/restate/scope/tenant-b/call/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+        await scoped.Service("Greeter").Send("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, SendOptions.WithScope("tenant-b"));
+        Assert.Equal("/restate/scope/tenant-b/send/Greeter/Greet",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task WithScope_Lookups_CarryTheBoundScope_UnlessOneIsPassed()
+    {
+        var (client, handler) = CreateClient();
+        var scoped = client.WithScope("tenant-a");
+        handler.ResponseBody = """{"invocationId":"inv_1scoped"}""";
+
+        await scoped.LookupWorkflow("SignupWorkflow", "user-1");
+        Assert.Equal(
+            """{"workflowName":"SignupWorkflow","workflowKey":"user-1","scope":"tenant-a","target":"workflow"}""",
+            handler.LastRequestBody);
+
+        await scoped.LookupIdempotentInvocation("Greeter", "Greet", "key-42");
+        Assert.Equal(
+            """
+            {"service":"Greeter","handler":"Greet","idempotencyKey":"key-42","scope":"tenant-a","target":"idempotentInvocation"}
+            """,
+            handler.LastRequestBody);
+
+        await scoped.LookupWorkflow("SignupWorkflow", "user-1", "tenant-b");
+        Assert.Equal(
+            """{"workflowName":"SignupWorkflow","workflowKey":"user-1","scope":"tenant-b","target":"workflow"}""",
+            handler.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task WithScope_LimitKeyWithoutAPerCallScope_NarrowsTheBoundScope()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello"}""";
+
+        // The bound scope is the scope the limit key needs, so the rule that rejects a limit key
+        // without one is satisfied without repeating the scope on every call.
+        await client.WithScope("tenant-a").Service("Greeter").Call(
+            "Greet", ClientTestJsonContext.Default.GreetResponse, new CallOptions { LimitKey = "customer-7" });
+
+        Assert.Equal("/restate/scope/tenant-a/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("customer-7", handler.LastRequest.Headers.GetValues("x-restate-limit-key").Single());
+    }
+
+    [Fact]
+    public async Task WithScope_LeavesTheClientItCameFromUnscoped()
+    {
+        var (client, handler) = CreateClient();
+        _ = client.WithScope("tenant-a");
+
+        handler.ResponseBody = """{"message":"hello"}""";
+        await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("/restate/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+
+        handler.ResponseBody = """{"invocationId":"inv_1unscoped"}""";
+        await client.LookupWorkflow("SignupWorkflow", "user-1");
+        Assert.Equal("""{"workflowName":"SignupWorkflow","workflowKey":"user-1","target":"workflow"}""",
+            handler.LastRequestBody);
+    }
+
+    [Fact]
+    public async Task WithScope_DisposingTheDerivedClient_LeavesTheOriginalUsable()
+    {
+        var handler = new StubHandler();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8080") };
+        var client = new RestateClient(http);
+
+        client.WithScope("tenant-a").Dispose();
+
+        // The derived client shares the HttpClient without owning it, so both are still live.
+        handler.ResponseBody = """{"message":"hello"}""";
+        await client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("/restate/call/Greeter/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+
+        using var direct = await http.GetAsync(new Uri("http://localhost:8080/restate/health"));
+        Assert.Equal(HttpStatusCode.OK, direct.StatusCode);
+    }
+
+    [Fact]
+    public void WithScope_NullOrEmptyScope_Throws()
+    {
+        var (client, _) = CreateClient();
+
+        Assert.Throws<ArgumentNullException>(() => client.WithScope(null!));
+        Assert.Throws<ArgumentException>(() => client.WithScope(""));
+    }
+
     // ── Signals ──
 
     [Fact]
