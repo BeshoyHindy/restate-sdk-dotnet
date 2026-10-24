@@ -5,6 +5,13 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.4.0...v0.4.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* pull the Restate image from docker.restate.dev ([#135](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/135)) ([7bfc3f3](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/7bfc3f33ac6752bf8f1c08b3cafb23d054cd9edf))
+
 ## [0.4.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.3.1...v0.4.0) (2026-10-24)
 
 
