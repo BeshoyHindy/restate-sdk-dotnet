@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk;
@@ -282,7 +283,7 @@ public abstract class Context : IContext
         var tasks = new Task<T>[futures.Length];
         for (var i = 0; i < futures.Length; i++)
             tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitRace(tasks);
+        return AwaitRace(InArrivalOrder(tasks, futures));
 
         static async ValueTask<T> AwaitRace(Task<T>[] tasks)
         {
@@ -308,11 +309,13 @@ public abstract class Context : IContext
         var tasks = new Task<T>[futures.Length];
         for (var i = 0; i < futures.Length; i++)
             tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitAny(tasks);
+        return AwaitAny(tasks, InArrivalOrder(tasks, futures));
 
-        static async ValueTask<T> AwaitAny(Task<T>[] tasks)
+        // The aggregate lists failures in input order, so the arrival-ordered array is only
+        // used to decide which success wins.
+        static async ValueTask<T> AwaitAny(Task<T>[] tasks, Task<T>[] byArrival)
         {
-            await foreach (var completed in Task.WhenEach(tasks).ConfigureAwait(false))
+            await foreach (var completed in Task.WhenEach(byArrival).ConfigureAwait(false))
                 if (completed.IsCompletedSuccessfully)
                     return await completed.ConfigureAwait(false);
 
@@ -384,13 +387,68 @@ public abstract class Context : IContext
             taskToFuture[task] = futures[i];
         }
 
-        await foreach (var completedTask in Task.WhenEach(tasks).ConfigureAwait(false))
+        await foreach (var completedTask in Task.WhenEach(InArrivalOrder(tasks, futures)).ConfigureAwait(false))
         {
             ThrowIfSuspension(completedTask);
             var future = taskToFuture[completedTask];
             var error = completedTask.IsFaulted ? completedTask.Exception?.InnerException : null;
             yield return (future, error);
         }
+    }
+
+    /// <summary>
+    ///     Returns <paramref name="tasks" /> reordered so that the futures the runtime has
+    ///     already settled come in the order it delivered their results, which is the order the
+    ///     journal recorded. On replay every journaled completion is settled before the handler
+    ///     resumes, so <c>Task.WhenAny</c> and <c>Task.WhenEach</c> would otherwise pick the
+    ///     first future in argument order and the attempt could take a branch the original one
+    ///     did not. Futures with no delivered result — still pending, or resolved locally by a
+    ///     re-executed Run — keep their position, and the array is returned unchanged when fewer
+    ///     than two futures carry an arrival position, which is the live case.
+    /// </summary>
+    private static TTask[] InArrivalOrder<TTask, TFuture>(TTask[] tasks, ReadOnlySpan<TFuture> futures)
+        where TTask : Task
+        where TFuture : class, IDurableFuture
+    {
+        var settled = 0;
+        for (var i = 0; i < futures.Length; i++)
+            if (ArrivalOrderOf(futures[i]) > 0)
+                settled++;
+
+        if (settled < 2)
+            return tasks;
+
+        // The slots the settled futures occupy, in argument order, and the position at which
+        // each one's result was delivered.
+        var slots = new int[settled];
+        var arrivals = new long[settled];
+        var found = 0;
+        for (var i = 0; i < futures.Length; i++)
+        {
+            var arrival = ArrivalOrderOf(futures[i]);
+            if (arrival == 0)
+                continue;
+            slots[found] = i;
+            arrivals[found] = arrival;
+            found++;
+        }
+
+        // Sorting by arrival position turns the copy into the slots in delivery order; writing
+        // those tasks back into the slots the settled futures occupied leaves every future with
+        // no delivered result exactly where the caller put it.
+        var byArrival = (int[])slots.Clone();
+        Array.Sort(arrivals, byArrival);
+
+        var reordered = (TTask[])tasks.Clone();
+        for (var i = 0; i < settled; i++)
+            reordered[slots[i]] = tasks[byArrival[i]];
+
+        return reordered;
+    }
+
+    private static long ArrivalOrderOf(IDurableFuture future)
+    {
+        return future is IArrivalOrderedFuture ordered ? ordered.ArrivalOrder : 0;
     }
 
     /// <summary>

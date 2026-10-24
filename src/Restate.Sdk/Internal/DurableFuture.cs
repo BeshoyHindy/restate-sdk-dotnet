@@ -4,11 +4,23 @@ using Restate.Sdk.Internal.Journal;
 
 namespace Restate.Sdk.Internal;
 
+/// <summary>
+///     A durable future that knows where the runtime's delivery of its result sits in the
+///     invocation's completion order (see <see cref="ArrivalClock" />). The combinators rank
+///     already-settled futures by it, so a replayed invocation takes the branch the original
+///     attempt took instead of the one argument order happens to favour.
+/// </summary>
+internal interface IArrivalOrderedFuture
+{
+    /// <summary>The arrival position of the delivered result, or 0 when none was delivered.</summary>
+    long ArrivalOrder { get; }
+}
+
 [UnconditionalSuppressMessage("AOT", "IL2026:RequiresUnreferencedCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
-internal sealed class DurableFuture<T> : IDurableFuture<T>
+internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
 {
     private readonly T? _completedValue;
     private readonly bool _isPreCompleted;
@@ -31,6 +43,8 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>
 
     /// <summary>Internal access to the underlying task for combinator implementations.</summary>
     internal Task<CompletionResult>? Task => _tcs?.Task;
+
+    public long ArrivalOrder => (_tcs as CompletionSource)?.ArrivalOrder ?? 0;
 
     public string? InvocationId { get; }
 
@@ -61,7 +75,7 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>
 /// <summary>
 ///     A non-generic void future for operations that complete without a value (e.g., Sleep/Timer).
 /// </summary>
-internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
+internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture, IArrivalOrderedFuture
 {
     private static readonly VoidDurableFuture CachedCompleted = CreateCompleted();
     private readonly TaskCompletionSource<CompletionResult> _tcs;
@@ -73,6 +87,8 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
 
     /// <summary>Internal access to the underlying task for combinator implementations.</summary>
     internal Task<CompletionResult> Task => _tcs.Task;
+
+    public long ArrivalOrder => (_tcs as CompletionSource)?.ArrivalOrder ?? 0;
 
     public string? InvocationId => null;
 
@@ -106,7 +122,7 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture
 ///     Lazy wrapper for RunAsync futures where the state machine operation itself is async.
 ///     Awaits the state machine's ValueTask, then provides the result as a completed future.
 /// </summary>
-internal sealed class LazyRunFuture<T> : IDurableFuture<T>
+internal sealed class LazyRunFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
 {
     // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
     // to two combinators or awaited again by the handler. Preserve() materialises the underlying
@@ -118,6 +134,11 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>
     {
         _initTask = initTask.Preserve();
     }
+
+    // The wait only exists once the operation was set up; until then nothing can have arrived.
+    public long ArrivalOrder => _initTask.IsCompletedSuccessfully
+        ? (_initTask.Result.Tcs as CompletionSource)?.ArrivalOrder ?? 0
+        : 0;
 
     public string? InvocationId => null;
 
@@ -136,7 +157,7 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>
 /// <summary>
 ///     Lazy wrapper for Timer (non-blocking sleep) futures.
 /// </summary>
-internal sealed class LazyTimerFuture : IDurableFuture
+internal sealed class LazyTimerFuture : IDurableFuture, IArrivalOrderedFuture
 {
     // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
     // to two combinators or awaited again by the handler. Preserve() materialises the underlying
@@ -148,6 +169,11 @@ internal sealed class LazyTimerFuture : IDurableFuture
     {
         _initTask = initTask.Preserve();
     }
+
+    // The wait only exists once the operation was set up; until then nothing can have arrived.
+    public long ArrivalOrder => _initTask.IsCompletedSuccessfully
+        ? (_initTask.Result as CompletionSource)?.ArrivalOrder ?? 0
+        : 0;
 
     public async ValueTask<object?> GetResult()
     {
@@ -165,7 +191,7 @@ internal sealed class LazyTimerFuture : IDurableFuture
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:RequiresDynamicCode",
     Justification = "JSON deserialization is AOT-safe when users register a source-generated JsonSerializerContext.")]
-internal sealed class LazyCallFuture<T> : IDurableFuture<T>
+internal sealed class LazyCallFuture<T> : IDurableFuture<T>, IArrivalOrderedFuture
 {
     // Preserved at construction: a ValueTask may only be awaited once, but a future can be handed
     // to two combinators or awaited again by the handler. Preserve() materialises the underlying
@@ -180,6 +206,11 @@ internal sealed class LazyCallFuture<T> : IDurableFuture<T>
         _initTask = initTask.Preserve();
         _jsonOptions = jsonOptions;
     }
+
+    // The wait only exists once the operation was set up; until then nothing can have arrived.
+    public long ArrivalOrder => _initTask.IsCompletedSuccessfully
+        ? (_initTask.Result as CompletionSource)?.ArrivalOrder ?? 0
+        : 0;
 
     public string? InvocationId => null;
 

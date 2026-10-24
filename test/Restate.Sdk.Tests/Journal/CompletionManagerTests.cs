@@ -235,6 +235,56 @@ public class CompletionManagerTests
     }
 
     [Fact]
+    public void TryComplete_NumbersArrivalsInDeliveryOrder()
+    {
+        var manager = new CompletionManager<int>();
+        var first = manager.Register(1);
+        var second = manager.Register(2);
+
+        // The runtime delivers the second wait's result first — the arrival positions must
+        // record that, since the combinators replay the journaled completion order from them.
+        manager.TryComplete(2, CompletionResult.Success(new byte[] { 2 }));
+        manager.TryComplete(1, CompletionResult.Success(new byte[] { 1 }));
+
+        Assert.True(second.ArrivalOrder < first.ArrivalOrder);
+        Assert.True(second.ArrivalOrder > 0);
+    }
+
+    [Fact]
+    public void GetOrRegister_EarlyCompletion_KeepsItsArrivalOrder()
+    {
+        var manager = new CompletionManager<int>();
+
+        // Both results arrive during the resume drain, before the handler registers anything.
+        manager.TryComplete(2, CompletionResult.Success(new byte[] { 2 }));
+        manager.TryFail(1, 500, "boom");
+
+        var first = manager.GetOrRegister(1);
+        var second = manager.GetOrRegister(2);
+
+        Assert.True(second.ArrivalOrder < first.ArrivalOrder);
+        Assert.True(second.ArrivalOrder > 0);
+    }
+
+    [Fact]
+    public void SharedArrivalClock_NumbersResultsAcrossManagers()
+    {
+        // A combinator may be handed waits from different managers (a call raced against a
+        // signal), so one invocation numbers all of its arrivals on a single clock.
+        var arrivals = new ArrivalClock();
+        var completions = new CompletionManager<int>(arrivals);
+        var signals = new CompletionManager<string>(arrivals);
+
+        var signal = signals.Register("approval");
+        var completion = completions.Register(1);
+
+        signals.TryComplete("approval", CompletionResult.Success(new byte[] { 1 }));
+        completions.TryComplete(1, CompletionResult.Success(new byte[] { 2 }));
+
+        Assert.True(signal.ArrivalOrder < completion.ArrivalOrder);
+    }
+
+    [Fact]
     public void CollectPendingIds_ExcludesResolvedWaits()
     {
         var manager = new CompletionManager<int>();
