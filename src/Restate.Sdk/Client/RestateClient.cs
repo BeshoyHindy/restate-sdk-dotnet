@@ -297,20 +297,44 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>Gets a service handle for invoking handlers on a stateless service.</summary>
+    /// <param name="serviceName">The name of the service.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="serviceName" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="serviceName" /> is empty.</exception>
     public ServiceHandle Service(string serviceName)
     {
+        ArgumentException.ThrowIfNullOrEmpty(serviceName);
         return new ServiceHandle(this, serviceName, null);
     }
 
     /// <summary>Gets an object handle for invoking handlers on a virtual object with the given key.</summary>
+    /// <param name="serviceName">The name of the virtual object.</param>
+    /// <param name="key">The virtual-object key — the object instance the handlers run on.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="serviceName" /> or <paramref name="key" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="serviceName" /> or <paramref name="key" /> is empty.
+    /// </exception>
     public ServiceHandle VirtualObject(string serviceName, string key)
     {
+        ArgumentException.ThrowIfNullOrEmpty(serviceName);
+        ArgumentException.ThrowIfNullOrEmpty(key);
         return new ServiceHandle(this, serviceName, key);
     }
 
     /// <summary>Gets a workflow handle for invoking handlers on a workflow with the given key.</summary>
+    /// <param name="serviceName">The name of the workflow service.</param>
+    /// <param name="key">The workflow key — its id, one invocation per key.</param>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="serviceName" /> or <paramref name="key" /> is <see langword="null" />.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="serviceName" /> or <paramref name="key" /> is empty.
+    /// </exception>
     public ServiceHandle Workflow(string serviceName, string key)
     {
+        ArgumentException.ThrowIfNullOrEmpty(serviceName);
+        ArgumentException.ThrowIfNullOrEmpty(key);
         return new ServiceHandle(this, serviceName, key);
     }
 
@@ -750,10 +774,13 @@ public readonly record struct ServiceHandle
     }
 
     /// <summary>Calls a handler and returns the response.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="handler" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="handler" /> is empty.</exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<TResponse> Call<TResponse>(string handler, object? request = null, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call<TResponse>(handler, request, default(CallOptions), ct);
     }
 
@@ -761,14 +788,17 @@ public readonly record struct ServiceHandle
     ///     Calls a handler with call options (idempotency key, scope, limit key) and returns the
     ///     response.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="handler" /> is <see langword="null" />.</exception>
     /// <exception cref="ArgumentException">
-    ///     <paramref name="options" /> carries a limit key without a scope.
+    ///     <paramref name="handler" /> is empty, or <paramref name="options" /> carries a limit key
+    ///     without a scope.
     /// </exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<TResponse> Call<TResponse>(string handler, object? request, CallOptions options,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.CallAsync<TResponse>(BuildPath(handler, options.Scope, false), request,
             options.IdempotencyKey, options.LimitKey, ct);
@@ -780,12 +810,15 @@ public readonly record struct ServiceHandle
     ///     <see cref="JsonTypeInfo{T}" /> instances.
     /// </summary>
     /// <exception cref="ArgumentNullException">
-    ///     <paramref name="requestTypeInfo" /> or <paramref name="responseTypeInfo" /> is null.
+    ///     <paramref name="handler" />, <paramref name="requestTypeInfo" /> or
+    ///     <paramref name="responseTypeInfo" /> is null.
     /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="handler" /> is empty.</exception>
     public Task<TResponse> Call<TRequest, TResponse>(string handler, TRequest? request,
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call(handler, request, requestTypeInfo, responseTypeInfo, default(CallOptions), ct);
     }
 
@@ -795,15 +828,18 @@ public readonly record struct ServiceHandle
     ///     provided <see cref="JsonTypeInfo{T}" /> instances.
     /// </summary>
     /// <exception cref="ArgumentNullException">
-    ///     <paramref name="requestTypeInfo" /> or <paramref name="responseTypeInfo" /> is null.
+    ///     <paramref name="handler" />, <paramref name="requestTypeInfo" /> or
+    ///     <paramref name="responseTypeInfo" /> is null.
     /// </exception>
     /// <exception cref="ArgumentException">
-    ///     <paramref name="options" /> carries a limit key without a scope.
+    ///     <paramref name="handler" /> is empty, or <paramref name="options" /> carries a limit key
+    ///     without a scope.
     /// </exception>
     public Task<TResponse> Call<TRequest, TResponse>(string handler, TRequest? request,
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo, CallOptions options,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
@@ -815,10 +851,14 @@ public readonly record struct ServiceHandle
     ///     Calls a handler that takes no request payload and returns the response.
     ///     AOT-safe: deserializes the response using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="handler" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="handler" /> is empty.</exception>
     public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call(handler, responseTypeInfo, default(CallOptions), ct);
     }
 
@@ -827,13 +867,17 @@ public readonly record struct ServiceHandle
     ///     scope, limit key). AOT-safe: deserializes the response using the provided
     ///     <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="responseTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="handler" /> or <paramref name="responseTypeInfo" /> is null.
+    /// </exception>
     /// <exception cref="ArgumentException">
-    ///     <paramref name="options" /> carries a limit key without a scope.
+    ///     <paramref name="handler" /> is empty, or <paramref name="options" /> carries a limit key
+    ///     without a scope.
     /// </exception>
     public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
         CallOptions options, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         ArgumentNullException.ThrowIfNull(responseTypeInfo);
         FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.CallAsync(BuildPath(handler, options.Scope, false), responseTypeInfo,
@@ -841,11 +885,14 @@ public readonly record struct ServiceHandle
     }
 
     /// <summary>Sends a one-way invocation and returns the invocation ID.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="handler" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException"><paramref name="handler" /> is empty.</exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<string> Send(string handler, object? request = null, TimeSpan? delay = null,
         string? idempotencyKey = null, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Send(handler, request, new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }
 
@@ -853,13 +900,16 @@ public readonly record struct ServiceHandle
     ///     Sends a one-way invocation with send options (delay, idempotency key, scope, limit key)
     ///     and returns the invocation ID.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="handler" /> is <see langword="null" />.</exception>
     /// <exception cref="ArgumentException">
-    ///     <paramref name="options" /> carries a limit key without a scope.
+    ///     <paramref name="handler" /> is empty, or <paramref name="options" /> carries a limit key
+    ///     without a scope.
     /// </exception>
     [RequiresUnreferencedCode(ReflectionJsonMessage)]
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<string> Send(string handler, object? request, SendOptions options, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.SendAsync(BuildPath(handler, options.Scope, true), request, options.Delay,
             options.IdempotencyKey, options.LimitKey, ct);
@@ -869,10 +919,14 @@ public readonly record struct ServiceHandle
     ///     Sends a one-way invocation and returns the invocation ID.
     ///     AOT-safe: serializes the request using the provided <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="requestTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="handler" /> or <paramref name="requestTypeInfo" /> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException"><paramref name="handler" /> is empty.</exception>
     public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
         TimeSpan? delay = null, string? idempotencyKey = null, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Send(handler, request, requestTypeInfo,
             new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }
@@ -882,13 +936,17 @@ public readonly record struct ServiceHandle
     ///     and returns the invocation ID. AOT-safe: serializes the request using the provided
     ///     <see cref="JsonTypeInfo{T}" />.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="requestTypeInfo" /> is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    ///     <paramref name="handler" /> or <paramref name="requestTypeInfo" /> is null.
+    /// </exception>
     /// <exception cref="ArgumentException">
-    ///     <paramref name="options" /> carries a limit key without a scope.
+    ///     <paramref name="handler" /> is empty, or <paramref name="options" /> carries a limit key
+    ///     without a scope.
     /// </exception>
     public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
         SendOptions options, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(handler);
         ArgumentNullException.ThrowIfNull(requestTypeInfo);
         FlowControl.Validate(options.Scope ?? _client.BoundScope, options.LimitKey, nameof(options));
         return _client.SendAsync(BuildPath(handler, options.Scope, true), request, requestTypeInfo, options.Delay,
