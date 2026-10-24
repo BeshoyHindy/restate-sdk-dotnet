@@ -34,6 +34,10 @@ jobs:
                { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] ||
                  [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; }; then
             low_risk=true
+          elif [ "$ECOSYSTEM" = "docker_compose" ] &&
+               { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] ||
+                 [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; }; then
+            low_risk=true
           fi
 
           echo "low-risk=$low_risk" >> "$GITHUB_OUTPUT"

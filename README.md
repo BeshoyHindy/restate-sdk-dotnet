@@ -525,8 +525,8 @@ Assert.Equal("inv-123", ctx.Cancellations[0]);
 #### Integration testing with Testcontainers
 
 `Restate.Sdk.Testing.Containers` runs handlers against a real Restate server in Docker.
-`RestateTestHarness.StartAsync` hosts the endpoint, starts the pinned
-`docker.io/restatedev/restate:1.7` container, registers the deployment and exposes an ingress client:
+`RestateTestHarness.StartAsync` hosts the endpoint, starts a container of the pinned image
+(`RestateBuilder.RestateImage`), registers the deployment and exposes an ingress client:
 
 ```csharp
 using Restate.Sdk.Testing.Containers;
@@ -674,15 +674,16 @@ dotnet run
 
 The protocol version is negotiated per invocation from the request content type, so the SDK and the
 server settle on the highest version both support; v5 is the floor, which is why the minimum server
-version has not moved. 0.3.0 is the release being cut from `main`: it is the first to carry scope and
-limit key, signals, and `RestateIngressException` -- everything else documented here is in 0.2.1.
+version has not moved. 0.3.0 is the first release to carry scope and limit key, signals, and
+`RestateIngressException` -- everything else documented here is in 0.2.1.
 
 Scope and limit key are protocol v7 fields, so a handler that sets either on a stream the server
 negotiated below v7 fails the call with an `ArgumentException` instead of losing the flow control
-silently; the server has to negotiate v7 for them (restate-server 1.8 does by default). On the
-ingress client they are carried in the request URL, so no negotiation applies. One feature degrades
-rather than fails against older servers: `RestateIngressException.ErrorSource` and `ErrorCode` are
-only reported by restate-server 1.7.4 and newer.
+silently; the server has to negotiate v7 for them (restate-server 1.8 does by default, 1.7 only
+with v7 enabled). On the ingress client they are carried in the request URL, so no negotiation
+applies. One feature degrades rather than fails against older servers:
+`RestateIngressException.ErrorSource` and `ErrorCode` are only reported by restate-server 1.7.4 and
+newer. The SDK is tested against restate-server 1.8.
 
 ## Contributing
 

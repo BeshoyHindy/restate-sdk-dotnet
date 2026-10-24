@@ -31,4 +31,54 @@
         <AdditionalFiles Include="PublicAPI.Unshipped.txt"/>
     </ItemGroup>
 
+    <!-- The Restate server image is pinned once, in docker-compose.yml at the repository root.
+         RestateBuilder.RestateImage reads the generated constant below, so a bump of the compose
+         file is the whole change. The compose file is an input of the build, never a packed file. -->
+    <PropertyGroup>
+        <RestateComposeFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../docker-compose.yml'))</RestateComposeFile>
+    </PropertyGroup>
+
+    <Target Name="GenerateRestateImagePin">
+        <Error Condition="!Exists('$(RestateComposeFile)')"
+               Text="RestateBuilder.RestateImage is derived from the Restate image pin in $(RestateComposeFile), which does not exist."/>
+
+        <ReadLinesFromFile File="$(RestateComposeFile)">
+            <Output TaskParameter="Lines" ItemName="RestateComposeLine"/>
+        </ReadLinesFromFile>
+
+        <PropertyGroup>
+            <RestateComposeText>@(RestateComposeLine)</RestateComposeText>
+            <RestateImagePinSource>$(IntermediateOutputPath)RestateImagePin.g.cs</RestateImagePinSource>
+        </PropertyGroup>
+        <PropertyGroup>
+            <RestateImagePin>$([System.Text.RegularExpressions.Regex]::Match($(RestateComposeText), 'docker\.io/restatedev/restate:[^\s";]+').Value)</RestateImagePin>
+        </PropertyGroup>
+
+        <Error Condition="'$(RestateImagePin)' == ''"
+               Text="No 'image: docker.io/restatedev/restate:&lt;tag&gt;' line in $(RestateComposeFile); RestateBuilder.RestateImage is derived from it."/>
+
+        <ItemGroup>
+            <RestateImagePinLine Include="// &lt;auto-generated/&gt;"/>
+            <RestateImagePinLine Include="namespace Restate.Sdk.Testing.Containers%3B"/>
+            <RestateImagePinLine Include="internal static class RestateImagePin"/>
+            <RestateImagePinLine Include="{"/>
+            <RestateImagePinLine Include="%20%20%20%20public const string Image = &quot;$(RestateImagePin)&quot;%3B"/>
+            <RestateImagePinLine Include="}"/>
+        </ItemGroup>
+
+        <WriteLinesToFile File="$(RestateImagePinSource)"
+                          Lines="@(RestateImagePinLine)"
+                          Overwrite="true"
+                          WriteOnlyWhenDifferent="true"/>
+    </Target>
+
+    <Target Name="IncludeRestateImagePin"
+            BeforeTargets="BeforeCompile;CoreCompile"
+            DependsOnTargets="GenerateRestateImagePin">
+        <ItemGroup>
+            <Compile Include="$(RestateImagePinSource)"/>
+            <FileWrites Include="$(RestateImagePinSource)"/>
+        </ItemGroup>
+    </Target>
+
 </Project>

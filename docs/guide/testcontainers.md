@@ -90,14 +90,14 @@ await using var harness = await RestateTestHarness.StartAsync(
     b => b.AddService<GreeterService>(),
     new RestateTestHarnessOptions
     {
-        Image = "docker.io/restatedev/restate:1.7",
+        Image = "docker.io/restatedev/restate:<tag>",
         StartupTimeout = TimeSpan.FromMinutes(5),
     });
 ```
 
-`Image` defaults to `RestateBuilder.RestateImage` — currently `docker.io/restatedev/restate:1.7`,
-pinned to a minor version rather than `latest` so a server release cannot turn a green suite red
-overnight. Set it explicitly, as above, when your suite wants to pin a version of its own.
+`Image` defaults to `RestateBuilder.RestateImage`, the image pinned in the repository's
+`docker-compose.yml` — a minor version rather than `latest`, so a server release cannot turn a green
+suite red overnight. Set it explicitly, as above, when your suite wants to pin a version of its own.
 
 `StartupTimeout` defaults to two minutes and covers the whole startup — Endpoint, container, and
 deployment registration. Overrunning it throws `TimeoutException`, and everything already started

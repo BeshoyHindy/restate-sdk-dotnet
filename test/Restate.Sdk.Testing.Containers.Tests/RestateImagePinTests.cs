@@ -3,19 +3,22 @@ using System.Text.RegularExpressions;
 namespace Restate.Sdk.Testing.Containers.Tests;
 
 /// <summary>
-///     The Restate server image is pinned once, in <see cref="RestateBuilder.RestateImage" />.
-///     <c>.github/scripts/integration-test.sh</c> reads that constant out of the source file;
-///     <c>docker-compose.yml</c> cannot (it is consumed by <c>docker compose up</c> directly) and
-///     repeats the literal. These tests fail as soon as either consumer drifts from the constant.
-///     They only compare files, so they need no Docker daemon.
+///     <c>docker-compose.yml</c> is the single source of truth for the Restate server image:
+///     <see cref="RestateBuilder.RestateImage" /> is generated from its <c>image:</c> line at build
+///     time, and <c>.github/scripts/integration-test.sh</c> greps the same line. These tests fail as
+///     soon as a consumer carries a version of its own again. They only read files, so they need no
+///     Docker daemon.
 /// </summary>
 public sealed class RestateImagePinTests
 {
     /// <summary>Matches a pinned Restate image; mirrors the pattern the CI script greps with.</summary>
     private const string ImagePattern = "docker\\.io/restatedev/restate:[^\"\\s]+";
 
+    /// <summary>Matches a Restate image literal that names a version.</summary>
+    private const string VersionedImagePattern = "restatedev/restate:[0-9]";
+
     [Fact]
-    public void DockerCompose_names_the_pinned_image()
+    public void Builder_image_comes_from_docker_compose()
     {
         var compose = File.ReadAllText(Path.Combine(RepoRoot(), "docker-compose.yml"));
         var match = Regex.Match(compose, ImagePattern);
@@ -25,23 +28,47 @@ public sealed class RestateImagePinTests
     }
 
     [Fact]
-    public void IntegrationTestScript_reads_the_pin_from_the_builder()
+    public void IntegrationTestScript_reads_the_pin_from_docker_compose()
     {
         var script = File.ReadAllText(
             Path.Combine(RepoRoot(), ".github", "scripts", "integration-test.sh"));
 
         Assert.False(
-            Regex.IsMatch(script, "restatedev/restate:[0-9]"),
-            "integration-test.sh pins a Restate version of its own; it must read RestateBuilder.RestateImage.");
-        Assert.Contains("RestateBuilder.cs", script, StringComparison.Ordinal);
+            Regex.IsMatch(script, VersionedImagePattern),
+            "integration-test.sh pins a Restate version of its own; it must read docker-compose.yml.");
+        Assert.Contains("docker-compose.yml", script, StringComparison.Ordinal);
+    }
 
-        // The value the script greps for has to be the constant it claims to read.
-        var builderSource = File.ReadAllText(
-            Path.Combine(RepoRoot(), "src", "Restate.Sdk.Testing.Containers", "RestateBuilder.cs"));
-        var match = Regex.Match(builderSource, ImagePattern);
+    [Fact]
+    public void PublicApiListing_records_no_server_version()
+    {
+        var listing = Path.Combine(RepoRoot(), "src", "Restate.Sdk.Testing.Containers");
+        var shipped = File.ReadAllText(Path.Combine(listing, "PublicAPI.Shipped.txt"));
+        var unshipped = File.ReadAllText(Path.Combine(listing, "PublicAPI.Unshipped.txt"));
 
-        Assert.True(match.Success, "RestateBuilder.cs no longer spells the image out; the script cannot read it.");
-        Assert.Equal(RestateBuilder.RestateImage, match.Value);
+        // The analyzer records a const's value, so listing RestateImage would make every
+        // server bump a public API edit and fail a compose-only Dependabot pull request.
+        Assert.False(
+            Regex.IsMatch(shipped + unshipped, VersionedImagePattern),
+            "The public API listing records the server version; a compose bump would then have to edit it too.");
+    }
+
+    [Fact]
+    public void Workflows_and_guides_name_no_version_of_their_own()
+    {
+        var root = RepoRoot();
+        var files = Directory
+            .EnumerateFiles(Path.Combine(root, ".github"), "*", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "docs", "guide"), "*", SearchOption.AllDirectories));
+
+        var offenders = files
+            .Where(file => Regex.IsMatch(File.ReadAllText(file), VersionedImagePattern))
+            .Select(file => Path.GetRelativePath(root, file))
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            $"These files name a Restate server version instead of deferring to the pin: {string.Join(", ", offenders)}");
     }
 
     private static string RepoRoot()

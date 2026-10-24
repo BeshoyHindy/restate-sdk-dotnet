@@ -27,6 +27,5 @@ Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.StartupTimeout.get -> S
 Restate.Sdk.Testing.Containers.RestateTestHarnessOptions.StartupTimeout.set -> void
 const Restate.Sdk.Testing.Containers.RestateBuilder.AdminPort = 9070 -> ushort
 const Restate.Sdk.Testing.Containers.RestateBuilder.IngressPort = 8080 -> ushort
-const Restate.Sdk.Testing.Containers.RestateBuilder.RestateImage = "docker.io/restatedev/restate:1.7" -> string!
 override Restate.Sdk.Testing.Containers.RestateBuilder.Build() -> Restate.Sdk.Testing.Containers.RestateContainer!
 static Restate.Sdk.Testing.Containers.RestateTestHarness.StartAsync(System.Action<Restate.Sdk.Hosting.RestateHostBuilder!>! configure, Restate.Sdk.Testing.Containers.RestateTestHarnessOptions? options = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.Testing.Containers.RestateTestHarness!>!
