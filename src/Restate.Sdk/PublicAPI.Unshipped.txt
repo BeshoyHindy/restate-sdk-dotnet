@@ -1,1 +1,3 @@
 #nullable enable
+Restate.Sdk.Client.RestateClientOptions.AdminAddress.get -> System.Uri?
+Restate.Sdk.Client.RestateClientOptions.AdminAddress.set -> void

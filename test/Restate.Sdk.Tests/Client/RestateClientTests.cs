@@ -18,12 +18,23 @@ internal sealed partial class ClientTestJsonContext : JsonSerializerContext;
 
 public class RestateClientTests
 {
+    private static readonly Uri AdminAddress = new("http://localhost:9070");
+
     private static (RestateClient Client, StubHandler Handler) CreateClient(RestateClientOptions? options = null)
     {
         var handler = new StubHandler();
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8080") };
         var client = options is null ? new RestateClient(http) : new RestateClient(http, options);
         return (client, handler);
+    }
+
+    /// <summary>
+    ///     A client that can reach the admin API, which is what the operations the ingress does
+    ///     not serve — currently cancellation — require.
+    /// </summary>
+    private static (RestateClient Client, StubHandler Handler) CreateAdminCapableClient()
+    {
+        return CreateClient(new RestateClientOptions { AdminAddress = AdminAddress });
     }
 
     // ── AOT-safe (JsonTypeInfo) overloads ──
@@ -295,14 +306,43 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task Cancel_DeletesInvocation()
+    public async Task Cancel_PatchesTheAdminCancelRoute()
     {
-        var (client, handler) = CreateClient();
+        var (client, handler) = CreateAdminCapableClient();
 
         await client.Cancel("inv-5");
 
-        Assert.Equal(HttpMethod.Delete, handler.LastRequest!.Method);
-        Assert.Equal("/restate/invocation/inv-5", handler.LastRequest.RequestUri!.AbsolutePath);
+        Assert.Equal(HttpMethod.Patch, handler.LastRequest!.Method);
+        Assert.Equal("http://localhost:9070/invocations/inv-5/cancel", handler.LastRequest.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task Cancel_WithoutAnAdminAddress_ThrowsWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        // The ingress serves no cancel route, so a client that cannot reach the admin API must
+        // say so rather than send a request every server version answers with an error.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.Cancel("inv-5"));
+
+        Assert.Contains(nameof(RestateClientOptions.AdminAddress), ex.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task Cancel_AdminAddressWithAPathPrefix_KeepsThePrefix()
+    {
+        // An admin API behind a reverse proxy keeps its prefix, whether or not the configured
+        // address ends in a slash: dropping it would address a route on the proxy itself.
+        foreach (var address in new[] { "http://gateway/restate-admin", "http://gateway/restate-admin/" })
+        {
+            var (client, handler) = CreateClient(new RestateClientOptions { AdminAddress = new Uri(address) });
+
+            await client.Cancel("inv-6");
+
+            Assert.Equal("http://gateway/restate-admin/invocations/inv-6/cancel",
+                handler.LastRequest!.RequestUri!.AbsoluteUri);
+        }
     }
 
     [Fact]
@@ -326,8 +366,10 @@ public class RestateClientTests
         await client.GetOutput<GreetResponse>("inv-output");
         Assert.True(handler.LastResponseContent!.IsDisposed);
 
-        await client.Cancel("inv-cancel");
-        Assert.True(handler.LastResponseContent!.IsDisposed);
+        // Cancellation goes to the admin API, so it needs a client that can reach it.
+        var (adminClient, adminHandler) = CreateAdminCapableClient();
+        await adminClient.Cancel("inv-cancel");
+        Assert.True(adminHandler.LastResponseContent!.IsDisposed);
     }
 
     // ── Argument validation ──
@@ -364,6 +406,24 @@ public class RestateClientTests
     }
 
     [Fact]
+    public void ClientOptions_RelativeAdminAddress_ThrowsAndNullIsAccepted()
+    {
+        var options = new RestateClientOptions();
+
+        // A relative address cannot name a host, so it would compose a request URI that only
+        // fails once sent; and null is the default, meaning "no admin API configured".
+        var ex = Assert.Throws<ArgumentException>(
+            () => options.AdminAddress = new Uri("/invocations", UriKind.Relative));
+        Assert.Equal("value", ex.ParamName);
+
+        Assert.Null(options.AdminAddress);
+        options.AdminAddress = AdminAddress;
+        Assert.Equal(AdminAddress, options.AdminAddress);
+        options.AdminAddress = null;
+        Assert.Null(options.AdminAddress);
+    }
+
+    [Fact]
     public async Task InvocationOperations_NullOrEmptyInvocationId_ThrowWithoutSending()
     {
         var (client, handler) = CreateClient();
@@ -377,6 +437,8 @@ public class RestateClientTests
         await Assert.ThrowsAsync<ArgumentException>(() => client.GetOutput<GreetResponse>(""));
         await Assert.ThrowsAsync<ArgumentException>(
             () => client.GetOutput("", ClientTestJsonContext.Default.GreetResponse));
+        // Cancel checks its argument before it checks for an admin address, so an empty id
+        // reports the caller's mistake rather than the missing configuration.
         await Assert.ThrowsAsync<ArgumentException>(() => client.Cancel(""));
 
         Assert.Null(handler.LastRequest);
@@ -493,9 +555,9 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task ErrorResponse_EveryIngressEntryPoint_ThrowsTypedException()
+    public async Task ErrorResponse_EveryClientEntryPoint_ThrowsTypedException()
     {
-        var (client, handler) = CreateClient();
+        var (client, handler) = CreateAdminCapableClient();
         handler.ResponseStatusCode = HttpStatusCode.ServiceUnavailable;
         handler.ResponseHeaders["x-restate-error-source"] = "ingress";
         handler.ResponseBody = """{"message":"unavailable","code":"RT0002"}""";
@@ -506,6 +568,8 @@ public class RestateClientTests
             () => client.Attach("inv-1", ClientTestJsonContext.Default.GreetResponse),
             () => client.GetOutput<GreetResponse>("inv-1"),
             () => client.GetOutput("inv-1", ClientTestJsonContext.Default.GreetResponse),
+            // Cancel addresses the admin API rather than the ingress, and reports a failure
+            // from it the same way.
             () => client.Cancel("inv-1"),
             () => client.Service("Greeter").Call<GreetResponse>("Greet", new GreetRequest("Ada")),
             () => client.Service("Greeter").Call("Greet", ClientTestJsonContext.Default.GreetResponse),
@@ -765,9 +829,9 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task InvocationRoutes_AttachAndOutputAreCanonical_CancelStaysOnTheInvocationRoute()
+    public async Task InvocationRoutes_AttachAndOutputAreCanonical_CancelGoesToTheAdminApi()
     {
-        var (client, handler) = CreateClient();
+        var (client, handler) = CreateAdminCapableClient();
         handler.ResponseBody = """{"message":"done"}""";
 
         await client.Attach("inv-9", ClientTestJsonContext.Default.GreetResponse);
@@ -782,9 +846,10 @@ public class RestateClientTests
         await client.GetOutput<GreetResponse>("inv-9");
         Assert.Equal("http://localhost:8080/restate/output/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
 
-        // The ingress serves no cancel verb, so cancel keeps the invocation route.
+        // The ingress serves no cancel verb, so cancel addresses the admin API instead — on its
+        // own base address, leaving the ingress one untouched.
         await client.Cancel("inv-9");
-        Assert.Equal("http://localhost:8080/restate/invocation/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
+        Assert.Equal("http://localhost:9070/invocations/inv-9/cancel", handler.LastRequest!.RequestUri!.AbsoluteUri);
     }
 
     [Fact]
@@ -834,7 +899,7 @@ public class RestateClientTests
     [Fact]
     public async Task ReservedCharactersInInvocationIds_StayInsideTheirSegment()
     {
-        var (client, handler) = CreateClient();
+        var (client, handler) = CreateAdminCapableClient();
         handler.ResponseBody = """{"message":"done"}""";
 
         await client.Attach(Reserved, ClientTestJsonContext.Default.GreetResponse);
@@ -847,8 +912,11 @@ public class RestateClientTests
             handler.LastRequest!.RequestUri!.AbsoluteUri);
 
         await client.Cancel(Reserved);
-        Assert.Equal($"http://localhost:8080/restate/invocation/{ReservedEscaped}",
+        Assert.Equal($"http://localhost:9070/invocations/{ReservedEscaped}/cancel",
             handler.LastRequest!.RequestUri!.AbsoluteUri);
+        // "/invocations/{id}/cancel": the id opened no segment of its own and started no query.
+        Assert.Equal(4, handler.LastRequest.RequestUri.Segments.Length);
+        Assert.Equal("", handler.LastRequest.RequestUri.Query);
     }
 
     [Fact]
