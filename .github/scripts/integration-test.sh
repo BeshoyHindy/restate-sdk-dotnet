@@ -239,6 +239,13 @@ echo ""
 sleep 2
 
 # 5. Run tests
+# Requests go through the versioned ingress API, the routes RestateClient sends:
+#   /restate/call/{service}/{handler}         request-response to a service
+#   /restate/call/{service}/{key}/{handler}   request-response to a virtual object or workflow
+#   /restate/send/{service}/{handler}         one-way send, answered with 202
+#   /restate/send/{service}/{key}/{handler}   one-way send to a virtual object or workflow
+# A send is delayed with a ?delay=<duration> query parameter; the unversioned
+# /{service}[/{key}]/{handler}[/send] paths are deprecated since server 1.7.
 # NOTE: JSON uses camelCase — the source generator configures JsonNamingPolicy.CamelCase
 echo "=== Running Tests ==="
 echo ""
@@ -247,13 +254,13 @@ echo ""
 
 assert_response \
     "GreeterService/Greet" \
-    "http://localhost:8080/GreeterService/Greet" \
+    "http://localhost:8080/restate/call/GreeterService/Greet" \
     '{"name":"World"}' \
     "Hello, World! Welcome aboard."
 
 assert_response \
     "GreeterService/GreetWithCancellation" \
-    "http://localhost:8080/GreeterService/GreetWithCancellation" \
+    "http://localhost:8080/restate/call/GreeterService/GreetWithCancellation" \
     '{"name":"Alice"}' \
     "Hello, Alice!"
 
@@ -261,29 +268,29 @@ assert_response \
 
 assert_response \
     "CounterObject/Add (first)" \
-    "http://localhost:8080/CounterObject/my-counter/Add" \
+    "http://localhost:8080/restate/call/CounterObject/my-counter/Add" \
     "5" \
     "5"
 
 assert_response \
     "CounterObject/Add (second)" \
-    "http://localhost:8080/CounterObject/my-counter/Add" \
+    "http://localhost:8080/restate/call/CounterObject/my-counter/Add" \
     "3" \
     "8"
 
 assert_void_response \
     "CounterObject/Get (shared)" \
-    "http://localhost:8080/CounterObject/my-counter/Get" \
+    "http://localhost:8080/restate/call/CounterObject/my-counter/Get" \
     "8"
 
 assert_void_response \
     "CounterObject/GetKeys (shared)" \
-    "http://localhost:8080/CounterObject/my-counter/GetKeys" \
+    "http://localhost:8080/restate/call/CounterObject/my-counter/GetKeys" \
     "count"
 
 assert_void_status \
     "CounterObject/AddThenFail (TerminalException 400)" \
-    "http://localhost:8080/CounterObject/my-counter/AddThenFail" \
+    "http://localhost:8080/restate/call/CounterObject/my-counter/AddThenFail" \
     "400"
 
 # --- Ticket Reservation (state machine + delayed sends) ---
@@ -291,50 +298,50 @@ assert_void_status \
 # TicketState enum: Available=0, Reserved=1, Sold=2 (serialized as int with camelCase keys)
 assert_response \
     "TicketObject/Reserve" \
-    "http://localhost:8080/TicketObject/ticket-1/Reserve" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-1/Reserve" \
     '{"userId":"alice"}' \
     '"state":1'
 
 assert_void_response \
     "TicketObject/GetStatus (shared)" \
-    "http://localhost:8080/TicketObject/ticket-1/GetStatus" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-1/GetStatus" \
     '"state":1'
 
 assert_void_response \
     "TicketObject/Confirm" \
-    "http://localhost:8080/TicketObject/ticket-1/Confirm" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-1/Confirm" \
     '"state":2'
 
 assert_status \
     "TicketObject/Reserve already-sold (TerminalException 409)" \
-    "http://localhost:8080/TicketObject/ticket-1/Reserve" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-1/Reserve" \
     '{"userId":"bob"}' \
     "409"
 
 # Reserve + Cancel flow
 assert_response \
     "TicketObject/Reserve (ticket-2)" \
-    "http://localhost:8080/TicketObject/ticket-2/Reserve" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-2/Reserve" \
     '{"userId":"charlie"}' \
     '"state":1'
 
 # Cancel returns void — just assert success (curl -sf will fail on non-2xx)
 assert_void_response \
     "TicketObject/Cancel (ticket-2)" \
-    "http://localhost:8080/TicketObject/ticket-2/Cancel" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-2/Cancel" \
     ""
 
 assert_void_response \
     "TicketObject/GetStatus (after cancel)" \
-    "http://localhost:8080/TicketObject/ticket-2/GetStatus" \
+    "http://localhost:8080/restate/call/TicketObject/ticket-2/GetStatus" \
     '"state":0'
 
 # --- Signup Workflow (workflow + state + signals) ---
 
-# Send the workflow — it will block on the signal, so use the /send endpoint (returns 202)
+# Send the workflow — it will block on the signal, so use the send verb (returns 202)
 assert_status \
     "SignupWorkflow/Run (send workflow)" \
-    "http://localhost:8080/SignupWorkflow/test-user/Run/send" \
+    "http://localhost:8080/restate/send/SignupWorkflow/test-user/Run" \
     '{"email":"test@example.com","name":"Test User"}' \
     "202"
 
@@ -343,14 +350,14 @@ sleep 2
 
 assert_void_response \
     "SignupWorkflow/GetStatus (query)" \
-    "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
+    "http://localhost:8080/restate/call/SignupWorkflow/test-user/GetStatus" \
     "awaiting-verification"
 
 # The verification link resolves the "email-verified" signal the Run handler awaits, through the
 # invocation handle the workflow published in state.
 assert_void_response \
     "SignupWorkflow/Verify (resolve the signal)" \
-    "http://localhost:8080/SignupWorkflow/test-user/Verify" \
+    "http://localhost:8080/restate/call/SignupWorkflow/test-user/Verify" \
     "verified"
 
 # Give the resumed Run handler time to activate the account
@@ -358,7 +365,7 @@ sleep 2
 
 assert_void_response \
     "SignupWorkflow/GetStatus (after verification)" \
-    "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
+    "http://localhost:8080/restate/call/SignupWorkflow/test-user/GetStatus" \
     "completed"
 
 # --- Scoped Client (flow-control scope and limit key) ---
@@ -367,7 +374,7 @@ assert_void_response \
 # as protocol V7 fields on the call command, and files the result with a scoped send.
 assert_response \
     "PricingService/QuoteInScope (scoped call with a limit key)" \
-    "http://localhost:8080/PricingService/QuoteInScope" \
+    "http://localhost:8080/restate/call/PricingService/QuoteInScope" \
     '{"tenant":"tenant-a","sku":"widget","quantity":2}' \
     '"amountCents":500'
 
@@ -394,7 +401,7 @@ sleep 2
 
 assert_response \
     "GreeterService/Greet completes across suspend/resume (inactivity-timeout < sleep)" \
-    "http://localhost:18080/GreeterService/Greet" \
+    "http://localhost:18080/restate/call/GreeterService/Greet" \
     '{"name":"Suspenders"}' \
     "Hello, Suspenders! Welcome aboard."
 
@@ -470,7 +477,7 @@ sleep 2
 
 assert_response \
     "GreeterService/Greet via signing server (signed request accepted)" \
-    "http://localhost:28080/GreeterService/Greet" \
+    "http://localhost:28080/restate/call/GreeterService/Greet" \
     '{"name":"Verified"}' \
     "Hello, Verified! Welcome aboard."
 
@@ -546,13 +553,13 @@ echo ""
 
 assert_response \
     "AOT GreeterService/Greet" \
-    "http://localhost:8080/GreeterService/Greet" \
+    "http://localhost:8080/restate/call/GreeterService/Greet" \
     '{"name":"Restate"}' \
     "Hello, Restate!"
 
 assert_response \
     "AOT GreeterService/GreetWithRetry" \
-    "http://localhost:8080/GreeterService/GreetWithRetry" \
+    "http://localhost:8080/restate/call/GreeterService/GreetWithRetry" \
     '{"name":"AOT"}' \
     "Hello, AOT!"
 
@@ -560,24 +567,24 @@ assert_response \
 
 assert_response \
     "AOT CounterObject/Add (first)" \
-    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "http://localhost:8080/restate/call/CounterObject/aot-counter/Add" \
     "10" \
     "10"
 
 assert_response \
     "AOT CounterObject/Add (second)" \
-    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "http://localhost:8080/restate/call/CounterObject/aot-counter/Add" \
     "7" \
     "17"
 
 assert_void_response \
     "AOT CounterObject/Reset" \
-    "http://localhost:8080/CounterObject/aot-counter/Reset" \
+    "http://localhost:8080/restate/call/CounterObject/aot-counter/Reset" \
     ""
 
 assert_response \
     "AOT CounterObject/Add (after reset)" \
-    "http://localhost:8080/CounterObject/aot-counter/Add" \
+    "http://localhost:8080/restate/call/CounterObject/aot-counter/Add" \
     "1" \
     "1"
 
@@ -589,7 +596,7 @@ assert_response \
 
 SAGA_PAYLOAD='{"tripId":"test-trip","userId":"alice","flight":{"from":"NYC","to":"LAX","date":"2025-06-15"},"hotel":{"city":"Los Angeles","checkIn":"2025-06-15","checkOut":"2025-06-20"},"carRental":{"city":"Los Angeles","pickUp":"2025-06-15","dropOff":"2025-06-20"}}'
 
-saga_response=$(curl -s -w "\n%{http_code}" -X POST "http://localhost:8080/TripBookingService/Book" \
+saga_response=$(curl -s -w "\n%{http_code}" -X POST "http://localhost:8080/restate/call/TripBookingService/Book" \
     -H "content-type: application/json" \
     -d "$SAGA_PAYLOAD" 2>&1)
 saga_code=$(echo "$saga_response" | tail -1)
