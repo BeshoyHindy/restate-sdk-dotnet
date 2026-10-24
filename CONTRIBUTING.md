@@ -71,7 +71,9 @@ The repository uses trunk-based development (GitHub Flow):
   and for minor and patch bumps of the Restate server image in `docker-compose.yml` arm
   auto-merge and land on their own once the required checks pass; major updates are
   merged by hand. A Dependabot pull request that falls behind `main` is rebased by a
-  scheduled workflow, so its armed auto-merge can complete.
+  scheduled workflow, so its armed auto-merge can complete. The auto-merge is performed
+  with a dedicated credential rather than the default workflow token, so that the usual
+  push checks run on `main` for the merge commit.
 - Releases are cut by release-please: it collects merged commits into a release PR
   that updates `CHANGELOG.md` and the version in `Directory.Build.props`; merging that
   PR tags the release and CI publishes the packages to NuGet. See `RELEASING.md`.
