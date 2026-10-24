@@ -928,6 +928,19 @@ public class RestateClientTests
     }
 
     [Fact]
+    public async Task WithScope_CarriesTheAdminAddress_SoTheDerivedClientCanCancel()
+    {
+        var (client, handler) = CreateAdminCapableClient();
+
+        // Binding a scope keeps the rest of the client configuration, so cancellation — which
+        // addresses the admin API rather than the ingress, and knows no scope — still reaches it.
+        await client.WithScope("tenant-a").Cancel("inv-7");
+
+        Assert.Equal(HttpMethod.Patch, handler.LastRequest!.Method);
+        Assert.Equal("http://localhost:9070/invocations/inv-7/cancel", handler.LastRequest.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
     public void WithScope_NullOrEmptyScope_Throws()
     {
         var (client, _) = CreateClient();

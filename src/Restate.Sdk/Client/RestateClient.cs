@@ -133,16 +133,18 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
-    ///     Creates the derived client <see cref="WithScope" /> hands out: the same ingress and the
-    ///     same JSON configuration, with one concurrency scope bound. It shares the
-    ///     <see cref="HttpClient" /> of the client it came from without owning it, so disposing the
-    ///     derived client leaves the original — and the connections it pools — usable.
+    ///     Creates the derived client <see cref="WithScope" /> hands out: the same ingress, the
+    ///     same admin API and the same JSON configuration, with one concurrency scope bound. It
+    ///     shares the <see cref="HttpClient" /> of the client it came from without owning it, so
+    ///     disposing the derived client leaves the original — and the connections it pools —
+    ///     usable.
     /// </summary>
     private RestateClient(RestateClient source, string scope)
     {
         _http = source._http;
         _ownsClient = false;
         _reflectionJsonOptions = source._reflectionJsonOptions;
+        _adminAddress = source._adminAddress;
         _scope = scope;
     }
 
