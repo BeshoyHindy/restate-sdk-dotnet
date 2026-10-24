@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Restate.Sdk.Client;
 
 namespace Restate.Sdk.Tests.Client;
@@ -370,6 +371,116 @@ public class RestateClientTests
         var (adminClient, adminHandler) = CreateAdminCapableClient();
         await adminClient.Cancel("inv-cancel");
         Assert.True(adminHandler.LastResponseContent!.IsDisposed);
+    }
+
+    // ── No-option overloads match their option-taking twins ──
+
+    /// <summary>
+    ///     Everything the ingress sees of a request: the no-option overloads delegate to the
+    ///     option-taking ones, so for equivalent options both must put the same bytes on the wire.
+    /// </summary>
+    private static (string Method, string Url, string? Body, string? IdempotencyKey, string? LimitKey)
+        Fingerprint(StubHandler handler)
+    {
+        var request = handler.LastRequest!;
+        return (
+            request.Method.Method,
+            request.RequestUri!.AbsoluteUri,
+            handler.LastRequestBody,
+            request.Headers.TryGetValues("idempotency-key", out var idempotency) ? idempotency.Single() : null,
+            request.Headers.TryGetValues("x-restate-limit-key", out var limit) ? limit.Single() : null);
+    }
+
+    [Fact]
+    public async Task CallOverloads_WithoutOptions_SendWhatDefaultOptionsSend()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"message":"hello Ada"}""";
+        var handle = client.VirtualObject("Counter", "my-key");
+
+        await handle.Call<GreetResponse>("Greet", new GreetRequest("Ada"));
+        var reflection = Fingerprint(handler);
+        await handle.Call<GreetResponse>("Greet", new GreetRequest("Ada"), default(CallOptions));
+        Assert.Equal(Fingerprint(handler), reflection);
+
+        await handle.Call("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse);
+        var typed = Fingerprint(handler);
+        await handle.Call("Greet", new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse,
+            default(CallOptions));
+        Assert.Equal(Fingerprint(handler), typed);
+
+        await handle.Call("Status", ClientTestJsonContext.Default.GreetResponse);
+        var noRequest = Fingerprint(handler);
+        await handle.Call("Status", ClientTestJsonContext.Default.GreetResponse, default(CallOptions));
+        Assert.Equal(Fingerprint(handler), noRequest);
+    }
+
+    [Fact]
+    public async Task SendOverloads_WithoutOptions_SendWhatTheEquivalentSendOptionsSend()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+        var handle = client.VirtualObject("Counter", "my-key");
+
+        await handle.Send("Greet", new GreetRequest("Ada"));
+        var reflection = Fingerprint(handler);
+        await handle.Send("Greet", new GreetRequest("Ada"), default(SendOptions));
+        Assert.Equal(Fingerprint(handler), reflection);
+
+        await handle.Send("Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest);
+        var typed = Fingerprint(handler);
+        await handle.Send("Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
+            default(SendOptions));
+        Assert.Equal(Fingerprint(handler), typed);
+    }
+
+    [Fact]
+    public async Task SendOverloads_LooseDelayAndIdempotencyKey_MapOntoSendOptions()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = """{"invocationId":"inv-1"}""";
+        var handle = client.Service("Greeter");
+        var delay = TimeSpan.FromSeconds(30);
+        var options = new SendOptions { Delay = delay, IdempotencyKey = "order-1" };
+
+        await handle.Send("Greet", new GreetRequest("Ada"), delay, "order-1");
+        var reflection = Fingerprint(handler);
+        await handle.Send("Greet", new GreetRequest("Ada"), options);
+        Assert.Equal(Fingerprint(handler), reflection);
+
+        await handle.Send("Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest,
+            delay, "order-1");
+        var typed = Fingerprint(handler);
+        await handle.Send("Greet", new GreetRequest("Ada"), ClientTestJsonContext.Default.GreetRequest, options);
+        Assert.Equal(Fingerprint(handler), typed);
+
+        // The mapping is observable, not just self-consistent.
+        Assert.Equal("?delay=30000ms", handler.LastRequest!.RequestUri!.Query);
+        Assert.Equal("order-1", typed.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task AotOverloads_WithoutOptions_StillRejectANullTypeInfo()
+    {
+        var (client, handler) = CreateClient();
+        var handle = client.Service("Greeter");
+
+        // The null checks now run in the option-taking twin, so they must still name the parameter
+        // the caller passed and still fail before a request is made.
+        Assert.Equal("requestTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            handle.Call<GreetRequest, GreetResponse>("Greet", new GreetRequest("Ada"), null!,
+                ClientTestJsonContext.Default.GreetResponse))).ParamName);
+        Assert.Equal("responseTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            handle.Call<GreetRequest, GreetResponse>("Greet", new GreetRequest("Ada"),
+                ClientTestJsonContext.Default.GreetRequest, null!))).ParamName);
+        Assert.Equal("responseTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            handle.Call("Status", (JsonTypeInfo<GreetResponse>)null!))).ParamName);
+        Assert.Equal("requestTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            handle.Send("Greet", new GreetRequest("Ada"), null!))).ParamName);
+
+        Assert.Null(handler.LastRequest);
     }
 
     // ── Argument validation ──

@@ -560,12 +560,12 @@ public class CombinatorTests
     }
 
     [Fact]
-    public async Task LazyCallFuture_InTwoCombinators_ResolvesInBoth()
+    public async Task LazyNotificationFuture_InTwoCombinators_ResolvesInBoth()
     {
         var ctx = new BareContext();
         var tcs = new TaskCompletionSource<CompletionResult>();
         var source = new SingleUseValueTaskSource<TaskCompletionSource<CompletionResult>>();
-        var future = new LazyCallFuture<int>(source.ValueTask, JsonSerializerOptions.Default);
+        var future = new LazyNotificationFuture<int>(source.ValueTask, JsonSerializerOptions.Default);
 
         var all = ctx.All<int>(future);
         var settled = ctx.AllSettled<int>(future);

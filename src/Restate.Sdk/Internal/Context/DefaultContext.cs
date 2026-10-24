@@ -133,7 +133,7 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         var invocationId = new InvocationIdSlot(_stateMachine, invocationIdIndex);
         if (task.IsCompletedSuccessfully)
             return new DurableFuture<TResponse>(task.Result, _stateMachine.JsonOptions, invocationId);
-        return new LazyCallFuture<TResponse>(task, _stateMachine.JsonOptions, invocationId);
+        return new LazyNotificationFuture<TResponse>(task, _stateMachine.JsonOptions, invocationId);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
@@ -287,7 +287,7 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         if (flushTask.IsCompletedSuccessfully)
             return new DurableFuture<T>(tcs, _stateMachine.JsonOptions);
 
-        return new LazyCallFuture<T>(AwaitFlush(flushTask, tcs), _stateMachine.JsonOptions);
+        return new LazyNotificationFuture<T>(AwaitFlush(flushTask, tcs), _stateMachine.JsonOptions);
     }
 
     private static async ValueTask<TaskCompletionSource<CompletionResult>> AwaitFlush(

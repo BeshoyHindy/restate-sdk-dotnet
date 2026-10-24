@@ -754,7 +754,7 @@ public readonly record struct ServiceHandle
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<TResponse> Call<TResponse>(string handler, object? request = null, CancellationToken ct = default)
     {
-        return _client.CallAsync<TResponse>(BuildPath(handler, null, false), request, null, null, ct);
+        return Call<TResponse>(handler, request, default(CallOptions), ct);
     }
 
     /// <summary>
@@ -786,10 +786,7 @@ public readonly record struct ServiceHandle
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(requestTypeInfo);
-        ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        return _client.CallAsync(BuildPath(handler, null, false), request, requestTypeInfo, responseTypeInfo,
-            null, null, ct);
+        return Call(handler, request, requestTypeInfo, responseTypeInfo, default(CallOptions), ct);
     }
 
     /// <summary>
@@ -822,8 +819,7 @@ public readonly record struct ServiceHandle
     public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(responseTypeInfo);
-        return _client.CallAsync(BuildPath(handler, null, false), responseTypeInfo, null, null, ct);
+        return Call(handler, responseTypeInfo, default(CallOptions), ct);
     }
 
     /// <summary>
@@ -850,7 +846,7 @@ public readonly record struct ServiceHandle
     public Task<string> Send(string handler, object? request = null, TimeSpan? delay = null,
         string? idempotencyKey = null, CancellationToken ct = default)
     {
-        return _client.SendAsync(BuildPath(handler, null, true), request, delay, idempotencyKey, null, ct);
+        return Send(handler, request, new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }
 
     /// <summary>
@@ -877,9 +873,8 @@ public readonly record struct ServiceHandle
     public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
         TimeSpan? delay = null, string? idempotencyKey = null, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(requestTypeInfo);
-        return _client.SendAsync(BuildPath(handler, null, true), request, requestTypeInfo, delay, idempotencyKey,
-            null, ct);
+        return Send(handler, request, requestTypeInfo,
+            new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }
 
     /// <summary>
