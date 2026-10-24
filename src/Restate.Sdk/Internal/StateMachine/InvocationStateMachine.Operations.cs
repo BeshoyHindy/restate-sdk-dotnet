@@ -317,35 +317,19 @@ internal sealed partial class InvocationStateMachine
         }
     }
 
-    private async Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
+    /// <summary>
+    ///     Retries a closure that produces no value, on the same loop as the generic overload: the
+    ///     action is wrapped into one returning a discarded <c>true</c>, so there is a single place
+    ///     where the policy is consulted and a run's retries are exhausted.
+    /// </summary>
+    private Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
         CancellationToken ct, ReplayedRun? replayed = null)
     {
-        var startTime = DateTimeOffset.UtcNow;
-        var attempt = 0;
-
-        while (true)
+        return ExecuteWithRetryAsync<bool>(name, async () =>
         {
-            try
-            {
-                await action().ConfigureAwait(false);
-                return;
-            }
-            catch (TerminalException)
-            {
-                throw; // Never retry terminal exceptions
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                var elapsed = DateTimeOffset.UtcNow - startTime;
-                if (!policy.ShouldRetry(attempt + 1, elapsed))
-                    throw await ExhaustRetriesAsync(name, attempt + 1, ex, replayed, ct).ConfigureAwait(false);
-
-                var delay = policy.GetDelay(attempt);
-                Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
-                await Task.Delay(delay, ct).ConfigureAwait(false);
-                attempt++;
-            }
-        }
+            await action().ConfigureAwait(false);
+            return true;
+        }, policy, ct, replayed);
     }
 
     /// <summary>

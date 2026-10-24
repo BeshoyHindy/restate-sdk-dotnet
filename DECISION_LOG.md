@@ -202,3 +202,19 @@ ids and notification indexes are not compared either: they are allocated by the 
 position, so the kind and field checks already cover the divergence that would change them. The
 idempotency key is left out because the handler supplies it and the SDK cannot tell a stable one
 from a per-attempt one; it does not change which operation the call targets.
+
+## 18. Scope and Limit Key Are Public API (amends #13)
+
+**Decision:** The flow-control options are part of the public API: `CallOptions.Scope` /
+`CallOptions.LimitKey` and `SendOptions.Scope` / `SendOptions.LimitKey` shipped in 0.3.0, on the
+handler contexts and on the ingress client alike. A limit key set without a scope, and a scope or
+limit key on a stream that negotiated below service protocol V7, are usage errors: both throw
+`ArgumentException` at the call site rather than silently dropping the flow control the caller
+asked for.
+
+**Context:** #13 wired scopes and limit keys at the protocol layer "without new public API until
+the semantics settle upstream". They have settled: restate-server 1.8 makes flow control generally
+available and negotiates service protocol V7 by default, so the `scope` and `limit_key` fields of
+`CallCommand` and `OneWayCallCommand` reach a default deployment. Keeping the options internal
+would have left the feature unreachable from handler code. #13 stands as written for the
+negotiation range and the single vendored proto; this entry amends only its last sentence.

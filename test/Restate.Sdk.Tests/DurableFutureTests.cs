@@ -172,11 +172,11 @@ public class DurableFutureTests
     }
 
     [Fact]
-    public async Task LazyCallFuture_GetResultTwice_ReturnsSameValue()
+    public async Task LazyNotificationFuture_GetResultTwice_ReturnsSameValue()
     {
         var tcs = new TaskCompletionSource<CompletionResult>();
         var source = PendingInit();
-        var future = new LazyCallFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
+        var future = new LazyNotificationFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
 
         source.SetResult(tcs);
         var buffer = new ArrayBufferWriter<byte>();
@@ -188,10 +188,10 @@ public class DurableFutureTests
     }
 
     [Fact]
-    public async Task LazyCallFuture_Failed_ThrowsSameExceptionOnEveryAwait()
+    public async Task LazyNotificationFuture_Failed_ThrowsSameExceptionOnEveryAwait()
     {
         var source = PendingInit();
-        var future = new LazyCallFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
+        var future = new LazyNotificationFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
         var failure = new TerminalException("call setup failed");
 
         source.SetException(failure);
@@ -201,11 +201,11 @@ public class DurableFutureTests
     }
 
     [Fact]
-    public async Task LazyCallFuture_FailedCompletion_ThrowsOnEveryAwait()
+    public async Task LazyNotificationFuture_FailedCompletion_ThrowsOnEveryAwait()
     {
         var tcs = new TaskCompletionSource<CompletionResult>();
         var source = PendingInit();
-        var future = new LazyCallFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
+        var future = new LazyNotificationFuture<string>(source.ValueTask, JsonSerializerOptions.Default);
 
         source.SetResult(tcs);
         tcs.SetResult(CompletionResult.Failure(500, "downstream failed"));

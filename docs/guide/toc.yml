@@ -4,6 +4,10 @@
   href: service-types.md
 - name: Durable Building Blocks
   href: durable-building-blocks.md
+- name: Scope and Limit Key
+  href: scope-and-limit-key.md
+- name: Ingress Client Errors
+  href: ingress-errors.md
 - name: Testing
   href: testing.md
 - name: Integration Testing with Testcontainers

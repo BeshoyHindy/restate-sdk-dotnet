@@ -193,7 +193,7 @@ public class CallFutureInvocationIdTests : IDisposable
         var ctx = StartLive(new PipeOptions(pauseWriterThreshold: 1, resumeWriterThreshold: 1));
 
         var future = ctx.CallFuture<string>("Downstream", "Get", (object?)"payload");
-        Assert.IsType<LazyCallFuture<string>>(future);
+        Assert.IsType<LazyNotificationFuture<string>>(future);
         Assert.Null(future.InvocationId);
 
         var command = await ReadCallCommandAsync();

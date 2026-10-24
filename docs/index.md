@@ -21,6 +21,8 @@ applications using *distributed durable async/await*.
 - [Getting Started](guide/getting-started.md) — install, quick start, hosting, error handling
 - [Service Types](guide/service-types.md) — Service, Virtual Object, Workflow
 - [Durable Building Blocks](guide/durable-building-blocks.md) — Run, Sleep, state, awakeables, calls
+- [Scope and Limit Key](guide/scope-and-limit-key.md) — server-side concurrency limits on calls and sends
+- [Ingress Client Errors](guide/ingress-errors.md) — what `RestateIngressException` reports
 - [Testing](guide/testing.md) — mock contexts for unit tests
 - [Integration Testing with Testcontainers](guide/testcontainers.md) — a real Restate server in Docker
 - [Request Identity Verification](guide/request-identity.md) — verify that requests come from Restate
