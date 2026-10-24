@@ -746,6 +746,8 @@ cd samples/Greeter
 dotnet run
 ```
 
+<a id="versions"></a>
+
 ## Compatibility
 
 | SDK Version | Restate Server | Protocol | .NET |
@@ -760,12 +762,15 @@ dotnet run
 | 0.3.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.3.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.4.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
+| 0.4.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 
 The protocol version is negotiated per invocation from the request content type, so the SDK and the
 server settle on the highest version both support; v5 is the floor, which is why the minimum server
 version has not moved. 0.3.0 was the first release to carry scope and limit key, signals, and
 `RestateIngressException`; 0.4.0 adds the unnamed signal handle, entry names on state operations,
-and the ingress lookups with their scope-bound client. Everything else documented here is in 0.2.1.
+and the ingress lookups with their scope-bound client. 0.4.1 changed only the registry the tests
+and the Testcontainers harness pull the server image from, not any SDK behaviour. Everything else
+documented here is in 0.2.1.
 
 Individual features can need a newer server than that minimum. Scope and limit key are protocol v7
 fields, so a handler that sets either on a stream the server negotiated below v7 fails the call with
