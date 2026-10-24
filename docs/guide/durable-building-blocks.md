@@ -198,6 +198,12 @@ var results = await ctx.All(f1, f2);     // wait for all
 var winner = await ctx.Race(f1, f2);     // first to complete
 ```
 
+`All` throws the first failure in delivery order as soon as that failure is delivered, without
+waiting for the futures still pending: the operations behind them stay journaled and complete
+there. A future still pending when the invocation suspends is not a failure — the suspension
+propagates instead, unless another future was delivered a failure, which is thrown in its place
+because the journal replays it on the next attempt.
+
 A context and the futures it hands out must not be used from more than one thread at a time:
 concurrent context operations reorder the journal and break replay. `Task.WhenAny` and
 `Task.WhenAll` over durable futures bypass the delivery ordering the combinators provide, so
