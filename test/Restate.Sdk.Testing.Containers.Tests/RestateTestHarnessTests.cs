@@ -26,7 +26,8 @@ public sealed class RestateHarnessFixture : IAsyncLifetime
             .AddService<HarnessScopedService>()
             .AddService<HarnessSignalService>()
             .AddService<HarnessSignalResolverService>()
-            .AddVirtualObject<HarnessCounterObject>());
+            .AddVirtualObject<HarnessCounterObject>()
+            .AddWorkflow<HarnessLookupWorkflow>());
     }
 
     public async Task DisposeAsync()

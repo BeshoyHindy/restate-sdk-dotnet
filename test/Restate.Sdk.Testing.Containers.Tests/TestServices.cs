@@ -189,3 +189,43 @@ public sealed class HarnessSignalResolverService
         return "rejected";
     }
 }
+
+/// <summary>
+///     A workflow whose run handler parks on a durable promise, so a test can look its invocation
+///     up by name and key while it is still in flight, attach to it, and then release it.
+/// </summary>
+[Workflow]
+public sealed class HarnessLookupWorkflow
+{
+    /// <summary>The promise the run handler awaits and <see cref="Release" /> resolves.</summary>
+    public const string ReleasePromise = "release";
+
+    private static readonly ConcurrentDictionary<string, TaskCompletionSource> Gates = new(StringComparer.Ordinal);
+
+    /// <summary>Completes once the run handler invoked with <paramref name="token" /> has started.</summary>
+    public static Task Started(string token)
+    {
+        return Gate(token).Task;
+    }
+
+    private static TaskCompletionSource Gate(string token)
+    {
+        return Gates.GetOrAdd(token,
+            static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    }
+
+    [Handler]
+    public async Task<string> Run(WorkflowContext ctx, SignalStartRequest request)
+    {
+        var release = ctx.Promise<string>(ReleasePromise);
+        Gate(request.Token).TrySetResult();
+        return await release;
+    }
+
+    [SharedHandler]
+    public Task<string> Release(SharedWorkflowContext ctx, string value)
+    {
+        ctx.ResolvePromise(ReleasePromise, value);
+        return Task.FromResult("accepted");
+    }
+}
