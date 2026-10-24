@@ -1,3 +1,4 @@
+using Restate.Sdk.Internal.StateMachine;
 using Restate.Sdk.Testing;
 
 namespace Restate.Sdk.Tests.Testing;
@@ -499,6 +500,35 @@ public class MockContextFeatureTests
         Assert.Equal(1, await ctx.Signal<int>().GetResult());
         Assert.Equal(2, await ctx.Signal<int>().GetResult());
         Assert.Equal([null, null], ctx.AwaitedSignals);
+    }
+
+    [Fact]
+    public void MockContext_UnnamedSignalHandles_CarryIncreasingIndicesFromTheFirstUserIndex()
+    {
+        var ctx = new MockContext();
+
+        var first = ctx.Signal<int>();
+        var second = ctx.Signal<int>();
+
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex, first.Index);
+        Assert.Equal(first.Index + 1, second.Index);
+    }
+
+    [Fact]
+    public async Task MockContext_ResolvingASignalByItsHandleIndex_RecordsTheIndex()
+    {
+        var ctx = new MockContext();
+        var handle = ctx.Signal<string>();
+
+        // A handler publishing its own signal index: the resolver addresses the invocation and
+        // the index, and the mock records what was sent.
+        await new InvocationHandle("inv-target").ResolveSignal(ctx, handle.Index, "granted");
+
+        var completion = Assert.Single(ctx.SignalCompletions);
+        Assert.Equal("inv-target", completion.InvocationId);
+        Assert.Null(completion.Name);
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex, completion.SignalIndex);
+        Assert.Equal("granted", completion.Value);
     }
 
     [Fact]

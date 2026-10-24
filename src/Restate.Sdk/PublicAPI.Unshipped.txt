@@ -1,6 +1,32 @@
 #nullable enable
+*REMOVED*Restate.Sdk.IContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+*REMOVED*abstract Restate.Sdk.Context.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+*REMOVED*override Restate.Sdk.SharedObjectContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
 Restate.Sdk.Client.RestateClient.LookupIdempotentInvocation(string! service, string! handler, string! idempotencyKey, string? key = null, string? scope = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.InvocationHandle>!
 Restate.Sdk.Client.RestateClient.LookupWorkflow(string! workflowName, string! workflowKey, string? scope = null, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Restate.Sdk.InvocationHandle>!
 Restate.Sdk.Client.RestateClient.WithScope(string! scope) -> Restate.Sdk.Client.RestateClient!
 Restate.Sdk.Client.RestateClientOptions.AdminAddress.get -> System.Uri?
 Restate.Sdk.Client.RestateClientOptions.AdminAddress.set -> void
+Restate.Sdk.IContext.Signal<T>() -> Restate.Sdk.SignalHandle<T>
+Restate.Sdk.InvocationHandle.RejectSignal(Restate.Sdk.IContext! context, int signalIndex, string! reason) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.InvocationHandle.RejectSignal(Restate.Sdk.IContext! context, string! name, string! reason) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.InvocationHandle.ResolveSignal<T>(Restate.Sdk.IContext! context, int signalIndex, T value) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.InvocationHandle.ResolveSignal<T>(Restate.Sdk.IContext! context, string! name, T value) -> System.Threading.Tasks.ValueTask
+Restate.Sdk.SignalHandle<T>
+Restate.Sdk.SignalHandle<T>.Deconstruct(out int Index, out Restate.Sdk.IDurableFuture<T>! Future) -> void
+Restate.Sdk.SignalHandle<T>.Equals(Restate.Sdk.SignalHandle<T> other) -> bool
+Restate.Sdk.SignalHandle<T>.Future.get -> Restate.Sdk.IDurableFuture<T>!
+Restate.Sdk.SignalHandle<T>.Future.init -> void
+Restate.Sdk.SignalHandle<T>.GetResult() -> System.Threading.Tasks.ValueTask<T>
+Restate.Sdk.SignalHandle<T>.Index.get -> int
+Restate.Sdk.SignalHandle<T>.Index.init -> void
+Restate.Sdk.SignalHandle<T>.InvocationId.get -> string?
+Restate.Sdk.SignalHandle<T>.SignalHandle() -> void
+Restate.Sdk.SignalHandle<T>.SignalHandle(int Index, Restate.Sdk.IDurableFuture<T>! Future) -> void
+abstract Restate.Sdk.Context.Signal<T>() -> Restate.Sdk.SignalHandle<T>
+override Restate.Sdk.SharedObjectContext.Signal<T>() -> Restate.Sdk.SignalHandle<T>
+override Restate.Sdk.SignalHandle<T>.GetHashCode() -> int
+static Restate.Sdk.SignalHandle<T>.operator !=(Restate.Sdk.SignalHandle<T> left, Restate.Sdk.SignalHandle<T> right) -> bool
+static Restate.Sdk.SignalHandle<T>.operator ==(Restate.Sdk.SignalHandle<T> left, Restate.Sdk.SignalHandle<T> right) -> bool
+~override Restate.Sdk.SignalHandle<T>.Equals(object obj) -> bool
+~override Restate.Sdk.SignalHandle<T>.ToString() -> string

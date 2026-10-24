@@ -17,15 +17,15 @@ public static class AccountService
 }
 
 /// <summary>
-///     Stub for an email delivery service. The verification email contains a link
-///     with the awakeable ID so the external click can resolve the durable promise.
+///     Stub for an email delivery service. The verification email contains a link with the
+///     workflow key so the external click can reach the handler that resolves the signal.
 /// </summary>
 public static class EmailService
 {
-    public static void SendVerification(string email, string callbackId)
+    public static void SendVerification(string email, string workflowKey)
     {
         // In production: send an email with a link like
-        // https://myapp.com/verify?token={callbackId}
-        // When clicked, the frontend calls ResolveAwakeable(callbackId, "verified")
+        // https://myapp.com/verify?user={workflowKey}
+        // When clicked, the frontend invokes SignupWorkflow/{workflowKey}/Verify
     }
 }

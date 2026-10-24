@@ -130,15 +130,23 @@ public sealed record RejectSignalRequest(string InvocationId, string Name, strin
 [Service]
 public sealed class HarnessSignalService
 {
-    /// <summary>The index the first unnamed signal of an invocation allocates.</summary>
-    public const int FirstUnnamedSignalIndex = 17;
-
     private static readonly ConcurrentDictionary<string, TaskCompletionSource> Gates = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, int> SignalIndices = new(StringComparer.Ordinal);
 
     /// <summary>Completes once the handler invoked with <paramref name="token" /> has started.</summary>
     public static Task Started(string token)
     {
         return Gate(token).Task;
+    }
+
+    /// <summary>
+    ///     The index the unnamed signal of the invocation reported under <paramref name="token" />
+    ///     allocated, read from the handle <see cref="AwaitUnnamed" /> received. It is published
+    ///     before <see cref="Started" /> completes, so a test that waited for the start can read it.
+    /// </summary>
+    public static int UnnamedSignalIndex(string token)
+    {
+        return SignalIndices[token];
     }
 
     private static TaskCompletionSource Gate(string token)
@@ -159,6 +167,7 @@ public sealed class HarnessSignalService
     public async Task<string> AwaitUnnamed(Context ctx, SignalStartRequest request)
     {
         var signal = ctx.Signal<string>();
+        SignalIndices[request.Token] = signal.Index;
         Gate(request.Token).TrySetResult();
         return await signal.GetResult();
     }
@@ -178,7 +187,7 @@ public sealed class HarnessSignalResolverService
     [Handler]
     public async Task<string> ResolveByIndex(Context ctx, ResolveSignalByIndexRequest request)
     {
-        await ctx.ResolveSignal(request.InvocationId, request.Index, request.Value);
+        await new InvocationHandle(request.InvocationId).ResolveSignal(ctx, request.Index, request.Value);
         return "resolved";
     }
 

@@ -1,1 +1,3 @@
 #nullable enable
+*REMOVED*override Restate.Sdk.Testing.MockContext.Signal<T>() -> Restate.Sdk.IDurableFuture<T>!
+override Restate.Sdk.Testing.MockContext.Signal<T>() -> Restate.Sdk.SignalHandle<T>

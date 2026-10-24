@@ -120,11 +120,13 @@ public sealed class RestateFlowControlAndSignalTests
         var token = $"unnamed-{Guid.NewGuid():N}";
         var invocationId = await StartSignalHandlerAsync(nameof(HarnessSignalService.AwaitUnnamed), token);
 
+        // The index comes from the handle the awaiting handler got back, not from a literal.
+        var signalIndex = HarnessSignalService.UnnamedSignalIndex(token);
+
         var resolved = await Client
             .Service(nameof(HarnessSignalResolverService))
             .Call<string>(nameof(HarnessSignalResolverService.ResolveByIndex),
-                new ResolveSignalByIndexRequest(
-                    invocationId, HarnessSignalService.FirstUnnamedSignalIndex, "proceed-unnamed"));
+                new ResolveSignalByIndexRequest(invocationId, signalIndex, "proceed-unnamed"));
         Assert.Equal("resolved", resolved);
 
         Assert.Equal("proceed-unnamed", await Client.Attach<string>(invocationId));

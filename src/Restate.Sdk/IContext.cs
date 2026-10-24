@@ -147,17 +147,18 @@ public interface IContext
     Awakeable<T> Awakeable<T>(ISerde<T>? serde = null);
 
     /// <summary>
-    ///     Awaits a signal by name, resolved or rejected by whoever holds this invocation handle.
-    ///     Defaulted so that adding it does not break external implementations of this interface
-    ///     (mirroring <see cref="Logger" />).
+    ///     Awaits a signal by name, resolved or rejected by another handler holding this
+    ///     invocation handle. Defaulted so that adding it does not break external implementations
+    ///     of this interface (mirroring <see cref="Logger" />).
     /// </summary>
     IDurableFuture<T> Signal<T>(string name) => throw new NotSupportedException(SignalsNotSupported);
 
     /// <summary>
-    ///     Awaits an unnamed signal, addressed by the index this call allocates.
+    ///     Awaits an unnamed signal; the returned <see cref="SignalHandle{T}" /> carries the index
+    ///     this call allocates, which addresses the signal on this invocation.
     ///     Defaulted for the same reason as <see cref="Signal{T}(string)" />.
     /// </summary>
-    IDurableFuture<T> Signal<T>() => throw new NotSupportedException(SignalsNotSupported);
+    SignalHandle<T> Signal<T>() => throw new NotSupportedException(SignalsNotSupported);
 
     /// <summary>
     ///     Resolves a named signal on another invocation. Defaulted so that adding it does not

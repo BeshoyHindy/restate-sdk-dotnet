@@ -827,7 +827,7 @@ public class CombinatorTests
             throw new NotSupportedException();
         }
 
-        public override IDurableFuture<T> Signal<T>()
+        public override SignalHandle<T> Signal<T>()
         {
             throw new NotSupportedException();
         }
