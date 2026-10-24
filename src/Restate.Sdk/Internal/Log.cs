@@ -54,6 +54,10 @@ internal static partial class Log
         Message = "Invocation cancellation requested by the runtime: invocationId={InvocationId}")]
     public static partial void InvocationCancelRequested(ILogger logger, string invocationId);
 
+    [LoggerMessage(EventId = 14, Level = LogLevel.Error,
+        Message = "Journal mismatch: invocationId={InvocationId}, journalIndex={JournalIndex}, detail={Detail}")]
+    public static partial void JournalMismatch(ILogger logger, string invocationId, int journalIndex, string detail);
+
     // --- Protocol diagnostics (Trace level, zero-overhead when disabled) ---
 
     [LoggerMessage(EventId = 100, Level = LogLevel.Trace,

@@ -1237,13 +1237,17 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = await StartReplayingAsync(MessageType.SleepCommand,
             ProtobufCodec.CreateSleepCommand(123_456UL, 1).ToByteArray());
 
-        var ex = Assert.Throws<TerminalException>(() => sm.SetState("count", 1));
+        var ex = Assert.Throws<JournalMismatchException>(() => sm.SetState("count", 1));
 
-        Assert.Equal(570, ex.Code);
+        Assert.Equal(1, ex.JournalIndex);
         Assert.Contains("journal mismatch", ex.Message);
         Assert.Contains("journal index 1", ex.Message);
-        Assert.Contains("SetState", ex.Message);
-        Assert.Contains("Sleep (SleepCommand)", ex.Message);
+        Assert.Contains("the handler expects SetState", ex.Message);
+        Assert.Contains("previous execution recorded Sleep (SleepCommand)", ex.Message);
+
+        // Recorded on the state machine, so the attempt still fails with the mismatch even if
+        // handler code swallows the exception.
+        Assert.Same(ex, sm.JournalMismatch);
     }
 
     [Fact]
@@ -1254,13 +1258,23 @@ public class InvocationStateMachineTests : IDisposable
         // operation runs past the end of the replayed journal.
         sm.Initialize("inv-1", "key", 0, 1);
 
-        var ex = Assert.Throws<TerminalException>(() => sm.SetState("count", 1));
+        var ex = Assert.Throws<JournalMismatchException>(() => sm.SetState("count", 1));
 
-        Assert.Equal(570, ex.Code);
+        Assert.Equal(0, ex.JournalIndex);
         Assert.Contains("journal mismatch", ex.Message);
         Assert.Contains("journal index 0", ex.Message);
         Assert.Contains("no command at that index", ex.Message);
         Assert.Equal(InvocationState.Replaying, sm.State);
+    }
+
+    [Fact]
+    public void JournalMismatch_IsNotATerminalException()
+    {
+        // Handler code that catches terminal failures (a saga's compensation block, say) must
+        // never swallow a journal mismatch, so the two hierarchies stay disjoint.
+        Assert.False(typeof(TerminalException).IsAssignableFrom(typeof(JournalMismatchException)));
+        Assert.True(typeof(Exception).IsAssignableFrom(typeof(JournalMismatchException)));
+        Assert.Equal(570, JournalMismatchException.ErrorCode);
     }
 
     // ------- Resolving signals on other invocations -------
