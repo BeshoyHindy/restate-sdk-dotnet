@@ -33,9 +33,13 @@ internal readonly struct CompletionResult
         return new CompletionResult(ReadOnlyMemory<byte>.Empty, null, code, message);
     }
 
+    /// <summary>The <see cref="TerminalException" /> a failed result stands for, or null for a success.</summary>
+    public TerminalException? FailureException =>
+        IsFailure ? new TerminalException(FailureMessage ?? "Unknown error", FailureCode!.Value) : null;
+
     public void ThrowIfFailure()
     {
-        if (IsFailure)
-            throw new TerminalException(FailureMessage ?? "Unknown error", FailureCode!.Value);
+        if (FailureException is { } failure)
+            throw failure;
     }
 }

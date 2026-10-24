@@ -23,53 +23,72 @@ internal interface IArrivalOrderedFuture
 }
 
 /// <summary>
-///     The runtime's delivery for one durable future, before any deserialization: a wait the
-///     combinators park on, plus the failure the delivery carried, if any.
+///     The runtime's delivery for one durable future, before any deserialization: whether it
+///     happened, the failure it carried, and a wait the combinators park on until it does.
 ///     <para>
-///         <see cref="Settled" /> never faults. It awaits the underlying wait and keeps whatever
-///         it threw, so a branch a combinator abandons still has its fault observed and never
-///         surfaces as <see cref="TaskScheduler.UnobservedTaskException" /> at collection.
+///         <see cref="IsSettled" /> and <see cref="Failure" /> read the delivery itself, never
+///         the wait. A wait resumes on the thread pool some time after the delivery it tracks, so
+///         a combinator woken by one input could otherwise miss a result the runtime delivered
+///         earlier whose wait had not resumed yet, and hand back the later delivery. Reading the
+///         deliveries directly lets every wake-up see everything the runtime has delivered so far
+///         and rank it by arrival position.
+///     </para>
+///     <para>
+///         <see cref="Settled" /> never faults. It awaits the delivery and keeps nothing, so a
+///         branch a combinator abandons still has its fault observed and never surfaces as
+///         <see cref="TaskScheduler.UnobservedTaskException" /> at collection.
 ///     </para>
 ///     <para>
 ///         One instance per future, created on first use and shared by every combinator the
 ///         future is handed to.
 ///     </para>
 /// </summary>
-internal sealed class RawCompletion
+internal abstract class RawCompletion
 {
+    private Exception? _failure;
+    private bool _failureRead;
+
     private RawCompletion()
     {
     }
 
-    /// <summary>A delivery that is already settled with a value: a future resolved locally.</summary>
-    internal static RawCompletion Resolved { get; } = new();
+    /// <summary>A delivery that already happened and carried a value: a future resolved locally.</summary>
+    internal static RawCompletion Resolved { get; } = new ResolvedCompletion();
 
     /// <summary>The wait to park on; completes once the delivery happened, and never faults.</summary>
-    internal Task Settled { get; private set; } = Task.CompletedTask;
+    internal abstract Task Settled { get; }
 
-    /// <summary>Whether the delivery already happened.</summary>
-    internal bool IsSettled => Settled.IsCompleted;
+    /// <summary>Whether the delivery already happened; read from the delivery, not from <see cref="Settled" />.</summary>
+    internal abstract bool IsSettled { get; }
 
     /// <summary>
-    ///     The failure the delivery carried, or null when it carried a value. Only meaningful
-    ///     once <see cref="IsSettled" /> is true. Reading it deserializes nothing.
+    ///     The failure the delivery carried, or null when it carried a value or has not happened
+    ///     yet. Reading it deserializes nothing, and every read returns the same instance.
     /// </summary>
-    internal Exception? Failure { get; private set; }
+    internal Exception? Failure
+    {
+        get
+        {
+            if (!_failureRead && IsSettled)
+            {
+                _failure = ReadFailure();
+                _failureRead = true;
+            }
+
+            return _failure;
+        }
+    }
 
     /// <summary>Tracks a wait the runtime completes with a result or a failure.</summary>
     internal static RawCompletion OfDelivery(Task<CompletionResult> delivery)
     {
-        var completion = new RawCompletion();
-        completion.Settled = completion.CaptureDelivery(delivery);
-        return completion;
+        return new DeliveredCompletion(delivery);
     }
 
     /// <summary>Tracks a delivery whose wait only exists once an asynchronous setup completes.</summary>
     internal static RawCompletion OfDelivery(ValueTask<TaskCompletionSource<CompletionResult>> setup)
     {
-        var completion = new RawCompletion();
-        completion.Settled = completion.CaptureSetup(setup);
-        return completion;
+        return new SetUpCompletion(setup);
     }
 
     /// <summary>
@@ -78,45 +97,98 @@ internal sealed class RawCompletion
     /// </summary>
     internal static RawCompletion OfWait(Task wait)
     {
-        var completion = new RawCompletion();
-        completion.Settled = completion.CaptureWait(wait);
-        return completion;
+        return new AwaitedCompletion(wait);
     }
 
-    private async Task CaptureDelivery(Task<CompletionResult> delivery)
+    /// <summary>The failure of a delivery <see cref="IsSettled" /> reports as happened.</summary>
+    protected abstract Exception? ReadFailure();
+
+    /// <summary>What awaiting the completed task would throw: its fault, a cancellation, or nothing.</summary>
+    private static Exception? FaultOf(Task task)
     {
-        try
-        {
-            (await delivery.ConfigureAwait(false)).ThrowIfFailure();
-        }
-        catch (Exception ex)
-        {
-            Failure = ex;
-        }
+        if (task.IsCanceled)
+            return new TaskCanceledException(task);
+        return task.IsFaulted ? task.Exception!.InnerException ?? task.Exception : null;
     }
 
-    private async Task CaptureSetup(ValueTask<TaskCompletionSource<CompletionResult>> setup)
+    /// <summary>The fault of a delivered wait, or the failure the result it delivered carries.</summary>
+    private static Exception? FailureOf(Task<CompletionResult> delivery)
     {
-        try
-        {
-            var tcs = await setup.ConfigureAwait(false);
-            (await tcs.Task.ConfigureAwait(false)).ThrowIfFailure();
-        }
-        catch (Exception ex)
-        {
-            Failure = ex;
-        }
+        return FaultOf(delivery) ?? delivery.Result.FailureException;
     }
 
-    private async Task CaptureWait(Task wait)
+    /// <summary>Awaits <paramref name="wait" /> without ever faulting.</summary>
+    private static async Task Observe(Task wait)
     {
         try
         {
             await wait.ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Failure = ex;
+            // The failure is read from the delivery itself; awaiting it here only marks it observed.
+        }
+    }
+
+    private sealed class ResolvedCompletion : RawCompletion
+    {
+        internal override Task Settled => Task.CompletedTask;
+
+        internal override bool IsSettled => true;
+
+        protected override Exception? ReadFailure()
+        {
+            return null;
+        }
+    }
+
+    private sealed class DeliveredCompletion(Task<CompletionResult> delivery) : RawCompletion
+    {
+        private Task? _settled;
+
+        internal override Task Settled => _settled ??= Observe(delivery);
+
+        internal override bool IsSettled => delivery.IsCompleted;
+
+        protected override Exception? ReadFailure()
+        {
+            return FailureOf(delivery);
+        }
+    }
+
+    private sealed class SetUpCompletion(ValueTask<TaskCompletionSource<CompletionResult>> setup) : RawCompletion
+    {
+        private Task? _settled;
+
+        internal override Task Settled => _settled ??= Observe(Deliver());
+
+        // Settled once the setup failed, or once the wait it produced completed.
+        internal override bool IsSettled =>
+            setup.IsCompleted && (!setup.IsCompletedSuccessfully || setup.Result.Task.IsCompleted);
+
+        protected override Exception? ReadFailure()
+        {
+            return setup.IsCompletedSuccessfully ? FailureOf(setup.Result.Task) : FaultOf(setup.AsTask());
+        }
+
+        private async Task Deliver()
+        {
+            var tcs = await setup.ConfigureAwait(false);
+            await tcs.Task.ConfigureAwait(false);
+        }
+    }
+
+    private sealed class AwaitedCompletion(Task wait) : RawCompletion
+    {
+        private Task? _settled;
+
+        internal override Task Settled => _settled ??= Observe(wait);
+
+        internal override bool IsSettled => wait.IsCompleted;
+
+        protected override Exception? ReadFailure()
+        {
+            return FaultOf(wait);
         }
     }
 }

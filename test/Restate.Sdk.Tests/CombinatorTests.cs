@@ -634,6 +634,18 @@ public class CombinatorTests
     }
 
     [Fact]
+    public async Task Race_BackToBackLiveDeliveries_AlwaysPicksTheEarlierDelivery()
+    {
+        await AssertEarlierLiveDeliveryWins((ctx, first, second) => ctx.Race(first, second).AsTask());
+    }
+
+    [Fact]
+    public async Task Any_BackToBackLiveDeliveries_AlwaysPicksTheEarlierDelivery()
+    {
+        await AssertEarlierLiveDeliveryWins((ctx, first, second) => ctx.Any(first, second).AsTask());
+    }
+
+    [Fact]
     public async Task Race_DeserializesOnlyTheBranchItHandsBack()
     {
         var decoder = new CountingInt32Converter();
@@ -846,6 +858,31 @@ public class CombinatorTests
         }
 
         return yielded;
+    }
+
+    /// <summary>
+    ///     Delivers two completions back to back, second argument first, to a combinator that is
+    ///     already waiting, and asserts it hands back the earlier delivery. The two deliveries wake
+    ///     the combinator on the thread pool in whichever order it schedules them, so a single
+    ///     attempt proves nothing; the delivery is repeated until every scheduling has had its
+    ///     chance to resume the later delivery's wake-up first.
+    /// </summary>
+    private static async Task AssertEarlierLiveDeliveryWins(
+        Func<Context, IDurableFuture<string>, IDurableFuture<string>, Task<string>> combinator)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var manager = new CompletionManager<int>();
+            var ctx = new BareContext();
+            var first = new DurableFuture<string>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+            var second = new DurableFuture<string>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+            var pending = combinator(ctx, first, second);
+            Assert.False(pending.IsCompleted);
+            Deliver(manager);
+
+            Assert.Equal("second", await pending);
+        }
     }
 
     private static void Deliver(CompletionManager<int> manager)
