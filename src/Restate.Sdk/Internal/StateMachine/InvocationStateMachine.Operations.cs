@@ -472,21 +472,45 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
+    ///     Allocates the completion slot the runtime delivers an outgoing call's invocation id to.
+    ///     No wait is ever registered for it: the live notification is stored as an early result
+    ///     by TryComplete and read back by <see cref="TryReadInvocationId" />, whereas a pending
+    ///     registration would be poisoned on EOF and advertised in the SuspensionMessage,
+    ///     triggering an immediate spurious resume of every parked call.
+    /// </summary>
+    private uint AllocateInvocationIdSlot()
+    {
+        return NextCompletionId();
+    }
+
+    /// <summary>
+    ///     Reads the invocation id the runtime delivered for an outgoing call, or null while the
+    ///     notification has not arrived. Peeks the slot <see cref="AllocateInvocationIdSlot" />
+    ///     handed out rather than awaiting it, so reading neither blocks nor adds the slot to the
+    ///     SuspensionMessage. Replayed notifications are already stored as early results, so a
+    ///     resumed attempt reads the id its first attempt was given.
+    /// </summary>
+    internal string? TryReadInvocationId(uint notificationIndex)
+    {
+        if (!_completions.TryPeekResult((int)notificationIndex, out var result))
+            return null;
+
+        var id = result.StringValue ?? Encoding.UTF8.GetString(result.Value.Span);
+        return string.IsNullOrEmpty(id) ? null : id;
+    }
+
+    /// <summary>
     ///     Writes the CallCommand for a live call and returns the source that resolves with its
     ///     result, plus the completion id it is registered under. <paramref name="requestBytes" />
     ///     must already be serialized: the shared serialization buffer is only valid until the
     ///     next Serialize call, and this copies it into the command before the first await.
+    ///     <paramref name="invocationIdNotificationIdx" /> comes from
+    ///     <see cref="AllocateInvocationIdSlot" />.
     /// </summary>
     private async ValueTask<(TaskCompletionSource<CompletionResult> Tcs, uint CompletionId)> BeginCallAsync(
         string service, string? key, string handler, ReadOnlyMemory<byte> requestBytes, CallOptions options,
-        CancellationToken ct)
+        uint invocationIdNotificationIdx, CancellationToken ct)
     {
-        // Allocate the invocation-id slot. Request/response calls never await it, so no TCS is
-        // registered: the live notification is stored as an early result by TryComplete, and a
-        // pending registration would otherwise be poisoned on EOF and advertised in the
-        // SuspensionMessage, triggering an immediate spurious resume of every parked call.
-        var invocationIdNotificationIdx = NextCompletionId();
-
         var completionId = NextCompletionId();
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
         _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
@@ -507,7 +531,8 @@ internal sealed partial class InvocationStateMachine
         using var activity = StartCallActivity(service, handler);
 
         var (tcs, completionId) =
-            await BeginCallAsync(service, key, handler, requestBytes, options, ct).ConfigureAwait(false);
+            await BeginCallAsync(service, key, handler, requestBytes, options, AllocateInvocationIdSlot(), ct)
+                .ConfigureAwait(false);
 
         Log.AwaitingCompletion(Logger, InvocationId, (int)completionId);
         var completion = await tcs.Task.ConfigureAwait(false);
@@ -626,7 +651,14 @@ internal sealed partial class InvocationStateMachine
 
     // ------- Non-blocking Call (CallFuture) -------
 
-    public ValueTask<TaskCompletionSource<CompletionResult>> CallFutureAsync(
+    /// <summary>
+    ///     Starts a call whose result is awaited later, and hands back both halves the future
+    ///     needs: the wait that resolves with the result, and the completion slot the runtime
+    ///     delivers the called invocation's id to. The slot index is returned synchronously —
+    ///     before the command is even flushed — so a future created lazily reports the same id
+    ///     as one created eagerly. On replay it is read from the recorded CallCommand.
+    /// </summary>
+    public (ValueTask<TaskCompletionSource<CompletionResult>> Pending, uint InvocationIdIndex) CallFutureAsync(
         string service, string? key, string handler, object? request, CallOptions options, CancellationToken ct)
     {
         EnsureActive();
@@ -637,16 +669,21 @@ internal sealed partial class InvocationStateMachine
         {
             var replay = TakeReplayEntry(JournalEntryType.Call,
                 InvocationTarget(service, handler, key, options.Scope, options.LimitKey));
-            return new ValueTask<TaskCompletionSource<CompletionResult>>(RegisterReplayCompletion(in replay));
+            return (new ValueTask<TaskCompletionSource<CompletionResult>>(RegisterReplayCompletion(in replay)),
+                ProtobufCodec.ParseCallInvocationIdIndex(replay.Result.Span));
         }
 
-        return BeginCallFutureAsync(service, key, handler, SerializeObject(request), options, ct);
+        var invocationIdNotificationIdx = AllocateInvocationIdSlot();
+        return (BeginCallFutureAsync(service, key, handler, SerializeObject(request), options,
+            invocationIdNotificationIdx, ct), invocationIdNotificationIdx);
     }
 
     private async ValueTask<TaskCompletionSource<CompletionResult>> BeginCallFutureAsync(string service, string? key,
-        string handler, ReadOnlyMemory<byte> requestBytes, CallOptions options, CancellationToken ct)
+        string handler, ReadOnlyMemory<byte> requestBytes, CallOptions options, uint invocationIdNotificationIdx,
+        CancellationToken ct)
     {
-        var (tcs, _) = await BeginCallAsync(service, key, handler, requestBytes, options, ct).ConfigureAwait(false);
+        var (tcs, _) = await BeginCallAsync(service, key, handler, requestBytes, options,
+            invocationIdNotificationIdx, ct).ConfigureAwait(false);
         return tcs;
     }
 

@@ -128,10 +128,12 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     private IDurableFuture<TResponse> CallFutureInternal<TResponse>(string service, string? key, string handler,
         object? request, CallOptions options)
     {
-        var task = _stateMachine.CallFutureAsync(service, key, handler, request, options, Aborted);
+        var (task, invocationIdIndex) =
+            _stateMachine.CallFutureAsync(service, key, handler, request, options, Aborted);
+        var invocationId = new InvocationIdSlot(_stateMachine, invocationIdIndex);
         if (task.IsCompletedSuccessfully)
-            return new DurableFuture<TResponse>(task.Result, _stateMachine.JsonOptions);
-        return new LazyCallFuture<TResponse>(task, _stateMachine.JsonOptions);
+            return new DurableFuture<TResponse>(task.Result, _stateMachine.JsonOptions, invocationId);
+        return new LazyCallFuture<TResponse>(task, _stateMachine.JsonOptions, invocationId);
     }
 
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)

@@ -30,9 +30,10 @@ public class DurableFutureTests
     public async Task TcsBacked_ResolvesWhenCompleted()
     {
         var tcs = new TaskCompletionSource<CompletionResult>();
-        var future = new DurableFuture<string>(tcs, JsonSerializerOptions.Default, "inv-123");
+        var future = new DurableFuture<string>(tcs, JsonSerializerOptions.Default);
 
-        Assert.Equal("inv-123", future.InvocationId);
+        // A future built without a slot started no invocation, so it reports no id.
+        Assert.Null(future.InvocationId);
 
         // Serialize "hello" to simulate a completion
         var buffer = new ArrayBufferWriter<byte>();

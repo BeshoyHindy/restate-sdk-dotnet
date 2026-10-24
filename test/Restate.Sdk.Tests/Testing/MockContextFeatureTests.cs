@@ -514,4 +514,40 @@ public class MockContextFeatureTests
     }
 
     #endregion
+
+    #region Call future invocation ids
+
+    [Fact]
+    public async Task MockContext_CallFuture_ReportsADeterministicInvocationId()
+    {
+        var ctx = new MockContext();
+        ctx.SetupCall("Svc", "handler", "result");
+        ctx.SetupCall("Svc", "obj-1", "handler", "keyed-result");
+
+        var first = ctx.CallFuture<string>("Svc", "handler", (object?)null);
+        var second = ctx.CallFuture<string>("Svc", "obj-1", "handler", (object?)null);
+
+        // The ids come from the same counter the mock's sends use, so a handler that reads the
+        // id of a call it started sees one under test as it does in production.
+        Assert.Equal("mock-inv-1", first.InvocationId);
+        Assert.Equal("mock-inv-2", second.InvocationId);
+        Assert.Equal("result", await first.GetResult());
+        Assert.Equal("keyed-result", await second.GetResult());
+
+        var send = await ctx.Send("Svc", "handler");
+        Assert.Equal("mock-inv-3", send.InvocationId);
+    }
+
+    [Fact]
+    public void MockContext_NonCallFutures_ReportNoInvocationId()
+    {
+        var ctx = new MockContext();
+
+        // The real context leaves the property null for futures that start no invocation.
+        Assert.Null(ctx.RunAsync("effect", () => Task.FromResult("done")).InvocationId);
+        Assert.Null(ctx.Signal<string>("approval").InvocationId);
+        Assert.Null(ctx.Signal<string>().InvocationId);
+    }
+
+    #endregion
 }

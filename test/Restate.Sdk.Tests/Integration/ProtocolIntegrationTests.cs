@@ -1950,6 +1950,9 @@ public class ProtocolIntegrationTests
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(new uint[] { 2 }, suspension.AwaitingOn.WaitingCompletions);
         Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        // Stated against the slot the command itself carries: no wait is registered for it, so
+        // it cannot appear here however the SDK reads the invocation id back.
+        Assert.DoesNotContain(callMsg.InvocationIdNotificationIdx, suspension.AwaitingOn.WaitingCompletions);
 
         Assert.Equal(responseData.Length, offset);
     }
@@ -1963,15 +1966,23 @@ public class ProtocolIntegrationTests
         var offset = 0;
 
         // Both fanned-out call commands are flushed before the handler parks on AllSettled.
-        var (callAHeader, _) = ReadFramedMessage(responseData, ref offset);
+        var (callAHeader, callAPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.CallCommand, callAHeader.Type);
-        var (callBHeader, _) = ReadFramedMessage(responseData, ref offset);
+        var callA = Gen.CallCommandMessage.Parser.ParseFrom(callAPayload);
+        var (callBHeader, callBPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.CallCommand, callBHeader.Type);
+        var callB = Gen.CallCommandMessage.Parser.ParseFrom(callBPayload);
 
         // EOF poisons the pending call results. AllSettled must NOT settle them as failures
         // and complete the handler with fabricated output — the invocation must suspend.
-        var (suspensionHeader, _) = ReadFramedMessage(responseData, ref offset);
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+
+        // Call futures read the called invocation's id from its notification slot without
+        // registering a wait on it, so only the two result ids may be advertised here.
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.Equal(new[] { callA.ResultCompletionId, callB.ResultCompletionId },
+            suspension.AwaitingOn.WaitingCompletions);
 
         // SuspensionMessage is terminal on its own: no Output, Error, or End may follow.
         Assert.Equal(responseData.Length, offset);

@@ -300,4 +300,38 @@ public class CompletionManagerTests
 
         Assert.Empty(manager.CollectPendingIds());
     }
+
+    [Fact]
+    public void TryPeekResult_ReadsAnEarlyResultWithoutRegistering()
+    {
+        var manager = new CompletionManager<int>();
+
+        // What a call's invocation-id notification does: delivered with nothing waiting on it.
+        manager.TryComplete(1, CompletionResult.SuccessString("inv-called"));
+
+        Assert.True(manager.TryPeekResult(1, out var peeked));
+        Assert.Equal("inv-called", peeked.StringValue);
+
+        // Peeking registers no wait, so poisoning the manager advertises nothing and leaves the
+        // result readable — the invocation must not be resumed over a notification it never
+        // asked to be woken for.
+        manager.Poison();
+        Assert.Empty(manager.CollectPendingIds());
+        Assert.True(manager.TryPeekResult(1, out _));
+    }
+
+    [Fact]
+    public void TryPeekResult_IsFalseWithoutADeliveredResult()
+    {
+        var manager = new CompletionManager<int>();
+
+        Assert.False(manager.TryPeekResult(7, out _));
+
+        // A registered wait holds the slot, and a failure is not a result to read.
+        _ = manager.Register(7);
+        Assert.False(manager.TryPeekResult(7, out _));
+
+        manager.TryFail(8, 500, "boom");
+        Assert.False(manager.TryPeekResult(8, out _));
+    }
 }

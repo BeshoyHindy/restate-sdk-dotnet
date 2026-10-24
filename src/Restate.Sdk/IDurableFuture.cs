@@ -21,8 +21,18 @@ public interface IDurableFuture
 public interface IDurableFuture<T> : IDurableFuture
 {
     /// <summary>
-    ///     The invocation ID associated with this future, if it originated from a call or send operation.
-    ///     Null for non-invocation futures (e.g., timers, side effects).
+    ///     The invocation id of the invocation this future started, or null.
+    ///     <para>
+    ///         Non-null only on a future returned by a call operation — <c>CallFuture</c> or a
+    ///         future-returning typed client method — and only once the server has delivered the
+    ///         id. Reading never blocks, so it is null between starting the call and the
+    ///         notification arriving; awaiting the future is enough to make the id available.
+    ///     </para>
+    ///     <para>
+    ///         Always null for futures that start no invocation: timers, side effects
+    ///         (<c>RunAsync</c>), awakeables and signals. One-way sends do not return a future;
+    ///         they hand back an <see cref="InvocationHandle" /> that always carries the id.
+    ///     </para>
     /// </summary>
     string? InvocationId { get; }
 
