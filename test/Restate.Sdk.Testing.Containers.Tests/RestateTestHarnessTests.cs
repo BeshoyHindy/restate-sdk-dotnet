@@ -23,6 +23,9 @@ public sealed class RestateHarnessFixture : IAsyncLifetime
         Harness = await RestateTestHarness.StartAsync(b => b
             .AddService<HarnessGreeterService>()
             .AddService<HarnessBlockingService>()
+            .AddService<HarnessScopedService>()
+            .AddService<HarnessSignalService>()
+            .AddService<HarnessSignalResolverService>()
             .AddVirtualObject<HarnessCounterObject>());
     }
 
@@ -33,7 +36,18 @@ public sealed class RestateHarnessFixture : IAsyncLifetime
     }
 }
 
-public sealed class RestateTestHarnessTests : IClassFixture<RestateHarnessFixture>
+/// <summary>
+///     Shares one harness — one container, one registered deployment — across every test class
+///     that needs it, so adding a scenario class does not add a container to the CI run.
+/// </summary>
+[CollectionDefinition(Name)]
+public sealed class SharedRestateHarness : ICollectionFixture<RestateHarnessFixture>
+{
+    public const string Name = "restate-harness";
+}
+
+[Collection(SharedRestateHarness.Name)]
+public sealed class RestateTestHarnessTests
 {
     private readonly RestateHarnessFixture _fixture;
     private readonly ITestOutputHelper _output;
