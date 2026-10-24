@@ -25,6 +25,10 @@ await ctx.Run("fire-and-forget", async () => await NotifyAsync(),
     });
 ```
 
+A `Run` result is the object the action returned on the attempt that ran it, and a copy
+deserialized from the journal on every later attempt, so the type must round-trip through the
+configured serializer and handler code must not rely on reference identity.
+
 ## Calls and Sends
 
 ```csharp
@@ -193,6 +197,11 @@ var f2 = ctx.RunAsync<int>("b", () => Task.FromResult(2));
 var results = await ctx.All(f1, f2);     // wait for all
 var winner = await ctx.Race(f1, f2);     // first to complete
 ```
+
+A context and the futures it hands out must not be used from more than one thread at a time:
+concurrent context operations reorder the journal and break replay. `Task.WhenAny` and
+`Task.WhenAll` over durable futures bypass the delivery ordering the combinators provide, so
+compose futures with `All`, `Race`, `Any`, `AllSettled` or `WaitAll`.
 
 ## State
 
