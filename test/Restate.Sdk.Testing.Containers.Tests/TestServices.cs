@@ -35,3 +35,18 @@ public sealed class HarnessCounterObject
         return await ctx.Get(Count);
     }
 }
+
+/// <summary>
+///     A service that blocks on a long durable sleep, so an invocation of it stays in flight
+///     while a test addresses it by invocation id.
+/// </summary>
+[Service]
+public sealed class HarnessBlockingService
+{
+    [Handler]
+    public async Task<string> Block(Context ctx)
+    {
+        await ctx.Sleep(TimeSpan.FromMinutes(10));
+        return "woken";
+    }
+}
