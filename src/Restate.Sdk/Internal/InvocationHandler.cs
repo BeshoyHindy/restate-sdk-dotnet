@@ -116,6 +116,13 @@ internal sealed class InvocationHandler
                 outcome = InvocationOutcome.Suspended;
             }
         }
+        catch (TerminalException) when (sm.JournalMismatch is { } swallowedMismatch)
+        {
+            // The handler swallowed the mismatch and failed terminally in its place. The recorded
+            // mismatch still wins: an OutputCommand failure would end the invocation for good.
+            outcome = InvocationOutcome.Error;
+            await ReportJournalMismatchAsync(sm, swallowedMismatch, logger, activity).ConfigureAwait(false);
+        }
         catch (TerminalException ex)
         {
             outcome = InvocationOutcome.TerminalError;

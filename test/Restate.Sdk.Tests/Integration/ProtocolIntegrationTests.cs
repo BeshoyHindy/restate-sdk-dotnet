@@ -166,6 +166,30 @@ public class SwallowingSleeperService
 }
 
 /// <summary>
+///     A sleeping service that swallows every exception around its durable sleep and then fails
+///     terminally — unsupported in handler code, and used to verify that the recorded journal
+///     mismatch still wins over the terminal failure the handler reports instead.
+/// </summary>
+[Service(Name = "FailingSleeper")]
+public class FailingSleeperService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        try
+        {
+            await ctx.Sleep(TimeSpan.FromMinutes(5));
+        }
+        catch (Exception)
+        {
+            throw new TerminalException($"gave up on {name}", 409);
+        }
+
+        return $"Rested hello, {name}!";
+    }
+}
+
+/// <summary>
 ///     A service that calls a downstream service and then sleeps — used to verify that
 ///     completion ids allocated after a resumed replay do not collide with replayed ids.
 /// </summary>
@@ -894,6 +918,19 @@ public class ProtocolIntegrationTests
         // handler no longer matches.
         var responseData = await RunMismatchingReplayAsync(
             ServiceProtocolVersion.V7, () => new SwallowingSleeperService());
+
+        AssertJournalMismatchResponse(responseData);
+    }
+
+    [Fact]
+    public async Task HandleAsync_JournalMismatchSwallowedThenTerminalFailure_StillFailsTheAttemptAsMismatch()
+    {
+        // The handler catches every exception around its durable sleep and throws a
+        // TerminalException instead. The recorded mismatch still decides the outcome: a terminal
+        // OutputCommand would end the invocation for good, and redeploying the code the journal
+        // was written by could no longer recover it.
+        var responseData = await RunMismatchingReplayAsync(
+            ServiceProtocolVersion.V7, () => new FailingSleeperService());
 
         AssertJournalMismatchResponse(responseData);
     }
