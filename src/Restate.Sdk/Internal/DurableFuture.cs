@@ -230,6 +230,7 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
     private readonly JsonSerializerOptions? _jsonOptions;
     private readonly TaskCompletionSource<CompletionResult>? _tcs;
     private RawCompletion? _completion;
+    private Task<T>? _decoded;
 
     internal DurableFuture(TaskCompletionSource<CompletionResult> tcs, JsonSerializerOptions jsonOptions,
         InvocationIdSlot invocationId = default)
@@ -255,9 +256,17 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
 
     public string? InvocationId => _invocationId.Read();
 
-    public async ValueTask<T> GetResult()
+    public ValueTask<T> GetResult()
     {
-        if (_isPreCompleted) return _completedValue!;
+        if (_isPreCompleted) return new ValueTask<T>(_completedValue!);
+
+        // Decoded on the first await and kept: a future handed to two combinators, or awaited
+        // again by the handler, observes the same value and the same failure every time.
+        return new ValueTask<T>(_decoded ??= Decode());
+    }
+
+    private async Task<T> Decode()
+    {
         var result = await _tcs!.Task.ConfigureAwait(false);
         result.ThrowIfFailure();
         var reader = new Utf8JsonReader(result.Value.Span);
@@ -287,6 +296,7 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture, 
     private static readonly VoidDurableFuture CachedCompleted = CreateCompleted();
     private readonly TaskCompletionSource<CompletionResult> _tcs;
     private RawCompletion? _completion;
+    private Task<bool>? _decoded;
 
     internal VoidDurableFuture(TaskCompletionSource<CompletionResult> tcs)
     {
@@ -302,7 +312,14 @@ internal sealed class VoidDurableFuture : IDurableFuture<bool>, IDurableFuture, 
 
     public string? InvocationId => null;
 
-    public async ValueTask<bool> GetResult()
+    public ValueTask<bool> GetResult()
+    {
+        // Nothing to decode, but the failure a delivery carries is built on every read, so the
+        // outcome is kept here too: every await throws the same exception instance.
+        return new ValueTask<bool>(_decoded ??= Decode());
+    }
+
+    private async Task<bool> Decode()
     {
         var result = await _tcs.Task.ConfigureAwait(false);
         result.ThrowIfFailure();
@@ -340,6 +357,7 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
     // so this costs nothing extra) and is a no-op for one that completed synchronously.
     private readonly ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> _initTask;
     private RawCompletion? _completion;
+    private Task<T>? _decoded;
 
     internal LazyRunFuture(ValueTask<(TaskCompletionSource<CompletionResult> Tcs, T Result)> initTask)
     {
@@ -356,7 +374,14 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
 
     public string? InvocationId => null;
 
-    public async ValueTask<T> GetResult()
+    public ValueTask<T> GetResult()
+    {
+        // Kept on the first await, so both combinators a future is handed to, and the handler
+        // awaiting it afterwards, see the one object the side effect produced.
+        return new ValueTask<T>(_decoded ??= Decode());
+    }
+
+    private async Task<T> Decode()
     {
         var (_, result) = await _initTask.ConfigureAwait(false);
         return result;
@@ -420,6 +445,7 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
     private readonly InvocationIdSlot _invocationId;
     private readonly JsonSerializerOptions _jsonOptions;
     private RawCompletion? _completion;
+    private Task<T>? _decoded;
 
     internal LazyNotificationFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
         JsonSerializerOptions jsonOptions, InvocationIdSlot invocationId = default)
@@ -441,7 +467,13 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
     // created one does. Null for a signal future, which started no invocation.
     public string? InvocationId => _invocationId.Read();
 
-    public async ValueTask<T> GetResult()
+    public ValueTask<T> GetResult()
+    {
+        // Decoded on the first await and kept, as in DurableFuture<T>.
+        return new ValueTask<T>(_decoded ??= Decode());
+    }
+
+    private async Task<T> Decode()
     {
         var tcs = await _initTask.ConfigureAwait(false);
         var result = await tcs.Task.ConfigureAwait(false);

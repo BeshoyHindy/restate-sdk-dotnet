@@ -607,17 +607,18 @@ public class CombinatorTests
     public async Task LazyRunFuture_InTwoCombinators_ResolvesInBoth()
     {
         var ctx = new BareContext();
-        var source = new SingleUseValueTaskSource<(TaskCompletionSource<CompletionResult> Tcs, int Result)>();
-        var future = new LazyRunFuture<int>(source.ValueTask);
+        var source = new SingleUseValueTaskSource<(TaskCompletionSource<CompletionResult> Tcs, Payload Result)>();
+        var future = new LazyRunFuture<Payload>(source.ValueTask);
 
-        var all = ctx.All<int>(future);
-        var race = ctx.Race<int>(future);
+        var all = ctx.All(future);
+        var race = ctx.Race(future);
 
-        source.SetResult((new TaskCompletionSource<CompletionResult>(), 7));
+        var produced = new Payload(7);
+        source.SetResult((new TaskCompletionSource<CompletionResult>(), produced));
 
-        var allResults = await all;
-        Assert.Equal([7], allResults);
-        Assert.Equal(7, await race);
+        // Both combinators hand back the one object the side effect produced.
+        Assert.Same(produced, Assert.Single(await all));
+        Assert.Same(produced, await race);
     }
 
     [Fact]
@@ -626,7 +627,8 @@ public class CombinatorTests
         var ctx = new BareContext();
         var tcs = new TaskCompletionSource<CompletionResult>();
         var source = new SingleUseValueTaskSource<TaskCompletionSource<CompletionResult>>();
-        var future = new LazyNotificationFuture<int>(source.ValueTask, JsonSerializerOptions.Default);
+        var decoder = new CountingInt32Converter();
+        var future = new LazyNotificationFuture<int>(source.ValueTask, WithConverter(decoder));
 
         var all = ctx.All<int>(future);
         var settled = ctx.AllSettled<int>(future);
@@ -639,6 +641,9 @@ public class CombinatorTests
         var settledResult = Assert.Single(await settled);
         Assert.True(settledResult.IsSuccess);
         Assert.Equal(11, settledResult.Value);
+
+        // The payload is decoded on the first combinator's await and kept for the second.
+        Assert.Equal(1, decoder.Reads);
     }
 
     [Fact]
@@ -660,6 +665,70 @@ public class CombinatorTests
 
         Assert.Null(Assert.Single(first).Error);
         Assert.Null(Assert.Single(second).Error);
+    }
+
+    // ── Memoized decoded results ──
+    //
+    // A future decodes the runtime's delivery on the first await and keeps the outcome, so a
+    // handler that awaits it again, or a combinator it is handed to afterwards, observes the
+    // same value and the same failure.
+
+    [Fact]
+    public async Task DurableFuture_AwaitedTwice_DecodesOnce()
+    {
+        var decoder = new CountingInt32Converter();
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized(7));
+
+        var future = new DurableFuture<int>(manager.GetOrRegister(1), WithConverter(decoder));
+
+        Assert.Equal(7, await future.GetResult());
+        Assert.Equal(7, await future.GetResult());
+        Assert.Equal(1, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task DurableFuture_AwaitedTwice_ReturnsTheSameValue()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized(new Payload(7)));
+
+        var future = new DurableFuture<Payload>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+
+        var first = await future.GetResult();
+        var second = await future.GetResult();
+
+        Assert.Same(first, second);
+    }
+
+    [Fact]
+    public async Task DurableFuture_PayloadCannotBeDeserialized_RethrowsTheSameException()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized("not-a-number"));
+
+        var future = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+
+        var first = await Assert.ThrowsAsync<JsonException>(() => future.GetResult().AsTask());
+        var second = await Assert.ThrowsAsync<JsonException>(() => future.GetResult().AsTask());
+
+        Assert.Same(first, second);
+    }
+
+    [Fact]
+    public async Task VoidDurableFuture_DeliveredFailure_RethrowsTheSameException()
+    {
+        // Delivered as a failed result rather than a faulted wait: the TerminalException it
+        // stands for is built on every read, so only a kept outcome makes the two awaits agree.
+        var tcs = new TaskCompletionSource<CompletionResult>();
+        tcs.SetResult(CompletionResult.Failure(500, "boom"));
+
+        var future = new VoidDurableFuture(tcs);
+
+        var first = await Assert.ThrowsAsync<TerminalException>(() => future.GetResult().AsTask());
+        var second = await Assert.ThrowsAsync<TerminalException>(() => future.GetResult().AsTask());
+
+        Assert.Same(first, second);
     }
 
     // ── Lazy, arrival-ordered combinators ──
@@ -1040,6 +1109,9 @@ public class CombinatorTests
             writer.WriteStringValue(value);
         }
     }
+
+    /// <summary>A result object, to assert that every await hands back the same instance.</summary>
+    private sealed record Payload(int Value);
 
     /// <summary>Counts how often a branch's payload is decoded.</summary>
     private sealed class CountingInt32Converter : JsonConverter<int>
