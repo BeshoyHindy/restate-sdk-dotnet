@@ -980,11 +980,14 @@ public class InvocationStateMachineTests : IDisposable
 
     /// <summary>
     ///     Starts the state machine on a resumed journal holding the input command plus a single
-    ///     replayed command, so the matching handler operation re-traverses it.
+    ///     replayed command, so the matching handler operation re-traverses it. A replayed command
+    ///     carrying a scope or a limit key needs <paramref name="negotiatedVersion" /> at V7, the
+    ///     version those fields require on the wire.
     /// </summary>
-    private async Task<InvocationStateMachine> StartReplayingAsync(MessageType commandType, byte[] commandPayload)
+    private async Task<InvocationStateMachine> StartReplayingAsync(MessageType commandType, byte[] commandPayload,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
     {
-        var sm = CreateSm();
+        var sm = CreateSm(negotiatedVersion);
 
         var start = new Gen.StartMessage
         {
@@ -1289,9 +1292,10 @@ public class InvocationStateMachineTests : IDisposable
     ///     returns the journal mismatch it must raise.
     /// </summary>
     private async Task<JournalMismatchException> AssertReplayMismatchAsync(
-        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes)
+        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
     {
-        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray());
+        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray(), negotiatedVersion);
 
         // The timeout keeps a regression honest: an undetected mismatch leaves the operation
         // waiting for a completion the runtime will never send, which would hang the test run.
@@ -1323,9 +1327,10 @@ public class InvocationStateMachineTests : IDisposable
     ///     consumed, no mismatch is raised, and the replay boundary is reached.
     /// </summary>
     private async Task AssertReplaysWithoutMismatchAsync(
-        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes)
+        MessageType commandType, IMessage journaled, Func<InvocationStateMachine, Task> handlerDoes,
+        ServiceProtocolVersion negotiatedVersion = ServiceProtocolVersion.V6)
     {
-        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray());
+        using var sm = await StartReplayingAsync(commandType, journaled.ToByteArray(), negotiatedVersion);
 
         var operation = handlerDoes(sm);
 
@@ -1402,7 +1407,8 @@ public class InvocationStateMachineTests : IDisposable
             ProtobufCodec.CreateCallCommand("Payments", "Refund", null, ReadOnlySpan<byte>.Empty, 2, 1,
                 scope: "tenant-b"),
             sm => sm.CallAsync<string>("Payments", null, "Refund", null, CallOptions.WithScope("tenant-a"),
-                CancellationToken.None).AsTask());
+                CancellationToken.None).AsTask(),
+            ServiceProtocolVersion.V7);
 
         AssertDifference(ex, "scope", "tenant-b", "tenant-a");
     }
@@ -1414,7 +1420,8 @@ public class InvocationStateMachineTests : IDisposable
             ProtobufCodec.CreateCallCommand("Payments", "Refund", "cust-1", ReadOnlySpan<byte>.Empty, 2, 1,
                 scope: "tenant-a"),
             sm => sm.CallFutureAsync("Payments", "cust-1", "Refund", null, CallOptions.WithScope("tenant-a"),
-                CancellationToken.None).AsTask());
+                CancellationToken.None).AsTask(),
+            ServiceProtocolVersion.V7);
     }
 
     [Theory]
