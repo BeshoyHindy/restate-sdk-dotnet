@@ -555,6 +555,84 @@ public class RestateClientTests
         Assert.Null(handler.LastRequest);
     }
 
+    [Fact]
+    public void HandleFactories_NullOrEmptyServiceName_ThrowWithoutSending()
+    {
+        var (client, handler) = CreateClient();
+
+        // An empty name would build "/restate/call//Greet" and a null one would only fail inside
+        // Uri.EscapeDataString, naming its own parameter instead of the caller's.
+        Assert.Equal("serviceName", Assert.Throws<ArgumentNullException>(() => client.Service(null!)).ParamName);
+        Assert.Equal("serviceName", Assert.Throws<ArgumentException>(() => client.Service("")).ParamName);
+        Assert.Equal("serviceName",
+            Assert.Throws<ArgumentNullException>(() => client.VirtualObject(null!, "my-key")).ParamName);
+        Assert.Equal("serviceName",
+            Assert.Throws<ArgumentException>(() => client.VirtualObject("", "my-key")).ParamName);
+        Assert.Equal("serviceName",
+            Assert.Throws<ArgumentNullException>(() => client.Workflow(null!, "wf-1")).ParamName);
+        Assert.Equal("serviceName", Assert.Throws<ArgumentException>(() => client.Workflow("", "wf-1")).ParamName);
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task KeyedHandleFactories_NullOrEmptyKey_ThrowInsteadOfMisroutingAsUnkeyed()
+    {
+        var (client, handler) = CreateClient();
+
+        // A keyless handle on a keyed service used to be built happily and then addressed the
+        // unkeyed route "/restate/call/X/Greet", which only the server rejects.
+        Assert.Equal("key", Assert.Throws<ArgumentNullException>(() => client.VirtualObject("X", null!)).ParamName);
+        Assert.Equal("key", Assert.Throws<ArgumentException>(() => client.VirtualObject("X", "")).ParamName);
+        Assert.Equal("key", Assert.Throws<ArgumentNullException>(() => client.Workflow("X", null!)).ParamName);
+        Assert.Equal("key", Assert.Throws<ArgumentException>(() => client.Workflow("X", "")).ParamName);
+
+        Assert.Null(handler.LastRequest);
+
+        // The keyed route is still what a key does produce.
+        handler.ResponseBody = """{"message":"ok"}""";
+        await client.VirtualObject("X", "k").Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("/restate/call/X/k/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task CallAndSend_NullOrEmptyHandler_ThrowWithoutSending(string? handlerName)
+    {
+        var (client, handler) = CreateClient();
+        var handle = client.VirtualObject("Counter", "my-key");
+        var expected = handlerName is null ? typeof(ArgumentNullException) : typeof(ArgumentException);
+
+        async Task Rejects(Func<Task> invoke)
+        {
+            // Every overload reports the caller's own parameter, before a path is built.
+            var ex = await Assert.ThrowsAnyAsync<ArgumentException>(invoke);
+            Assert.Equal(expected, ex.GetType());
+            Assert.Equal("handler", ex.ParamName);
+        }
+
+        await Rejects(() => handle.Call<GreetResponse>(handlerName!, new GreetRequest("Ada")));
+        await Rejects(() => handle.Call<GreetResponse>(handlerName!, new GreetRequest("Ada"), default(CallOptions)));
+        await Rejects(() => handle.Call(handlerName!, new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse));
+        await Rejects(() => handle.Call(handlerName!, new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, ClientTestJsonContext.Default.GreetResponse,
+            default(CallOptions)));
+        await Rejects(() => handle.Call(handlerName!, ClientTestJsonContext.Default.GreetResponse));
+        await Rejects(() => handle.Call(handlerName!, ClientTestJsonContext.Default.GreetResponse,
+            default(CallOptions)));
+
+        await Rejects(() => handle.Send(handlerName!, new GreetRequest("Ada")));
+        await Rejects(() => handle.Send(handlerName!, new GreetRequest("Ada"), default(SendOptions)));
+        await Rejects(() => handle.Send(handlerName!, new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest));
+        await Rejects(() => handle.Send(handlerName!, new GreetRequest("Ada"),
+            ClientTestJsonContext.Default.GreetRequest, default(SendOptions)));
+
+        Assert.Null(handler.LastRequest);
+    }
+
     // ── Ingress error responses ──
 
     [Fact]
