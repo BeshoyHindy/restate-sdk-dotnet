@@ -306,11 +306,13 @@ public class FanOutGreeterService
 [Service(Name = "CombinatorGreeter")]
 public class CombinatorGreeterService
 {
+    // Casts throughout: with three string arguments the keyed overload (service, key, handler)
+    // wins, and these calls are to a stateless service — the journals below record them unkeyed.
     [Handler]
     public async Task<string> Race(Context ctx, string name)
     {
-        var first = ctx.CallFuture<string>("Downstream", "A", name);
-        var second = ctx.CallFuture<string>("Downstream", "B", name);
+        var first = ctx.CallFuture<string>("Downstream", "A", (object?)name);
+        var second = ctx.CallFuture<string>("Downstream", "B", (object?)name);
 
         return await ctx.Race(first, second);
     }
@@ -318,8 +320,8 @@ public class CombinatorGreeterService
     [Handler]
     public async Task<string> Any(Context ctx, string name)
     {
-        var first = ctx.CallFuture<string>("Downstream", "A", name);
-        var second = ctx.CallFuture<string>("Downstream", "B", name);
+        var first = ctx.CallFuture<string>("Downstream", "A", (object?)name);
+        var second = ctx.CallFuture<string>("Downstream", "B", (object?)name);
 
         return await ctx.Any(first, second);
     }
@@ -327,7 +329,7 @@ public class CombinatorGreeterService
     [Handler]
     public async Task<string> Wait(Context ctx, string name)
     {
-        var call = ctx.CallFuture<string>("Downstream", "Get", name);
+        var call = ctx.CallFuture<string>("Downstream", "Get", (object?)name);
         var timer = ctx.Timer(TimeSpan.FromMinutes(5));
 
         var order = new List<string>();
