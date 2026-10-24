@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Restate.Sdk.Internal;
@@ -264,76 +265,136 @@ public abstract class Context : IContext
 
     /// <summary>
     ///     Awaits all futures and returns their results in order.
-    ///     If any future fails, the first failure is thrown.
+    ///     If any future fails, the first failure in input order is thrown, once every future
+    ///     has settled.
+    ///     <para>
+    ///         Inputs are deserialized lazily: each one is decoded as the runtime's delivery for
+    ///         it is taken, in delivery order, so the decoding order is the one the journal
+    ///         recorded rather than the one the thread pool happens to produce.
+    ///     </para>
     /// </summary>
     public virtual ValueTask<T[]> All<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
-        var tasks = new Task<T>[futures.Length];
-        for (var i = 0; i < futures.Length; i++)
-            tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitAll(tasks);
+        return AwaitAll(futures.ToArray());
 
-        static async ValueTask<T[]> AwaitAll(Task<T>[] tasks)
+        static async ValueTask<T[]> AwaitAll(IDurableFuture<T>[] inputs)
         {
-            return await Task.WhenAll(tasks).ConfigureAwait(false);
+            var completions = CompletionsOf(inputs);
+            var taken = new bool[inputs.Length];
+            var results = new T[inputs.Length];
+            Exception?[]? failures = null;
+
+            for (var remaining = inputs.Length; remaining > 0; remaining--)
+            {
+                var next = await TakeNextSettled(inputs, completions, taken).ConfigureAwait(false);
+                if (completions[next].Failure is { } delivered)
+                {
+                    failures ??= new Exception?[inputs.Length];
+                    failures[next] = delivered;
+                    continue;
+                }
+
+                try
+                {
+                    results[next] = await inputs[next].GetResult().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    failures ??= new Exception?[inputs.Length];
+                    failures[next] = ex;
+                }
+            }
+
+            // Every input has settled; the first failure in input order is the one thrown.
+            if (failures is not null)
+                foreach (var failure in failures)
+                    if (failure is not null)
+                        ExceptionDispatchInfo.Capture(failure).Throw();
+
+            return results;
         }
     }
 
     /// <summary>
-    ///     Returns the result of the first future to complete.
+    ///     Returns the result of the future the runtime delivered a result to first.
+    ///     <para>
+    ///         Only the winner is deserialized: a losing branch is left as the runtime delivered
+    ///         it, so its payload is never decoded and a payload that cannot be decoded cannot
+    ///         fail the invocation. The winner is chosen by delivery order, which makes a
+    ///         replayed attempt take the branch the original attempt took.
+    ///     </para>
     /// </summary>
+    /// <exception cref="ArgumentException">No futures were provided.</exception>
     public virtual ValueTask<T> Race<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
-        var tasks = new Task<T>[futures.Length];
-        for (var i = 0; i < futures.Length; i++)
-            tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitRace(InArrivalOrder(tasks, futures));
+        if (futures.Length == 0)
+            throw new ArgumentException("No futures provided.", nameof(futures));
 
-        static async ValueTask<T> AwaitRace(Task<T>[] tasks)
+        return AwaitRace(futures.ToArray());
+
+        static async ValueTask<T> AwaitRace(IDurableFuture<T>[] inputs)
         {
-            var winner = await Task.WhenAny(tasks).ConfigureAwait(false);
-            return await winner.ConfigureAwait(false);
+            var completions = CompletionsOf(inputs);
+            var winner = await TakeNextSettled(inputs, completions, new bool[inputs.Length]).ConfigureAwait(false);
+            return await inputs[winner].GetResult().ConfigureAwait(false);
         }
     }
 
     /// <summary>
-    ///     Returns the result of the first future to complete <em>successfully</em>.
-    ///     Failed futures are ignored unless every future fails, in which case an
+    ///     Returns the result of the first future the runtime delivered a <em>successful</em>
+    ///     result to. Failed futures are ignored unless every future fails, in which case an
     ///     <see cref="AggregateException" /> containing all failures is thrown
     ///     (matching the TypeScript SDK's <c>RestatePromise.any</c> / JavaScript <c>AggregateError</c> semantics).
+    ///     <para>
+    ///         Inputs are inspected in delivery order and only the input handed back is
+    ///         deserialized: a failed branch is read from the delivery itself, without decoding a
+    ///         payload, and a replayed attempt takes the branch the original attempt took.
+    ///     </para>
     /// </summary>
     /// <exception cref="AggregateException">
     ///     Every future failed (or none were provided); contains each failure as an inner exception,
     ///     in input order. Futures canceled by an invocation abort count as failures and surface as
     ///     <see cref="TaskCanceledException" />. Futures pending when the invocation suspends are
-    ///     never settled as failures — the suspension propagates instead.
+    ///     never settled as failures — the suspension propagates instead. A payload that cannot be
+    ///     deserialized is not a failed branch either: that error propagates so the attempt is retried.
     /// </exception>
     public virtual ValueTask<T> Any<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
-        var tasks = new Task<T>[futures.Length];
-        for (var i = 0; i < futures.Length; i++)
-            tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitAny(tasks, InArrivalOrder(tasks, futures));
+        return AwaitAny(futures.ToArray());
 
-        // The aggregate lists failures in input order, so the arrival-ordered array is only
-        // used to decide which success wins.
-        static async ValueTask<T> AwaitAny(Task<T>[] tasks, Task<T>[] byArrival)
+        static async ValueTask<T> AwaitAny(IDurableFuture<T>[] inputs)
         {
-            await foreach (var completed in Task.WhenEach(byArrival).ConfigureAwait(false))
-                if (completed.IsCompletedSuccessfully)
-                    return await completed.ConfigureAwait(false);
+            var completions = CompletionsOf(inputs);
+            var taken = new bool[inputs.Length];
 
-            // Every task has settled without a success: aggregate the failures in input order,
-            // matching JavaScript's AggregateError.errors ordering. Suspension is not a failure
-            // (see ThrowIfSuspension) and must win over the aggregate.
-            var errors = new Exception[tasks.Length];
-            for (var i = 0; i < tasks.Length; i++)
+            // Indexed by input, so the aggregate below lists failures in input order, matching
+            // JavaScript's AggregateError.errors ordering.
+            var errors = new Exception[inputs.Length];
+
+            for (var remaining = inputs.Length; remaining > 0; remaining--)
             {
-                ThrowIfSuspension(tasks[i]);
-                errors[i] = tasks[i].Exception?.InnerException
-                            ?? (Exception?)tasks[i].Exception
-                            ?? new TaskCanceledException(tasks[i]);
+                var next = await TakeNextSettled(inputs, completions, taken).ConfigureAwait(false);
+                if (completions[next].Failure is { } delivered)
+                {
+                    errors[next] = delivered;
+                    continue;
+                }
+
+                try
+                {
+                    return await inputs[next].GetResult().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsBranchFailure(ex))
+                {
+                    errors[next] = ex;
+                }
             }
+
+            // Every input has settled without a success. Suspension is not a failure (see
+            // FindSuspension) and must win over the aggregate.
+            foreach (var error in errors)
+                if (FindSuspension(error) is { } suspension)
+                    throw suspension;
 
             throw new AggregateException("All durable futures failed.", errors);
         }
@@ -347,107 +408,179 @@ public abstract class Context : IContext
     ///     Futures canceled by an invocation abort settle as failures carrying a
     ///     <see cref="TaskCanceledException" />. Futures pending when the invocation suspends are
     ///     never settled as failures — the operations are journaled and WILL complete on a later
-    ///     attempt, so the suspension propagates instead of fabricating failure entries.
+    ///     attempt, so the suspension propagates instead of fabricating failure entries. A payload
+    ///     that cannot be deserialized is not a failure entry either: that error propagates so the
+    ///     attempt is retried.
+    ///     <para>
+    ///         Inputs are deserialized lazily, each one as the runtime's delivery for it is taken,
+    ///         in delivery order; a failed branch is read from the delivery itself, without
+    ///         decoding a payload.
+    ///     </para>
     /// </summary>
     public virtual ValueTask<SettledResult<T>[]> AllSettled<T>(params ReadOnlySpan<IDurableFuture<T>> futures)
     {
-        var tasks = new Task<T>[futures.Length];
-        for (var i = 0; i < futures.Length; i++)
-            tasks[i] = futures[i].GetResult().AsTask();
-        return AwaitAllSettled(tasks);
+        return AwaitAllSettled(futures.ToArray());
 
-        static async ValueTask<SettledResult<T>[]> AwaitAllSettled(Task<T>[] tasks)
+        static async ValueTask<SettledResult<T>[]> AwaitAllSettled(IDurableFuture<T>[] inputs)
         {
-            var results = new SettledResult<T>[tasks.Length];
-            for (var i = 0; i < tasks.Length; i++)
+            var completions = CompletionsOf(inputs);
+            var taken = new bool[inputs.Length];
+            var results = new SettledResult<T>[inputs.Length];
+
+            for (var remaining = inputs.Length; remaining > 0; remaining--)
+            {
+                var next = await TakeNextSettled(inputs, completions, taken).ConfigureAwait(false);
+                if (completions[next].Failure is { } delivered)
+                {
+                    if (FindSuspension(delivered) is { } suspension)
+                        throw suspension;
+                    results[next] = SettledResult<T>.Failure(delivered);
+                    continue;
+                }
+
                 try
                 {
-                    results[i] = SettledResult<T>.Success(await tasks[i].ConfigureAwait(false));
+                    results[next] = SettledResult<T>.Success(
+                        await inputs[next].GetResult().ConfigureAwait(false));
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (IsBranchFailure(ex))
                 {
-                    if (FindSuspension(ex) is { } suspension)
-                        throw suspension;
-                    results[i] = SettledResult<T>.Failure(ex);
+                    results[next] = SettledResult<T>.Failure(ex);
                 }
+            }
 
             return results;
         }
     }
 
     /// <summary>
-    ///     Yields futures as they complete, in completion order.
+    ///     Yields futures as the runtime delivers their results, in delivery order.
     ///     Each element contains the completed future and an optional error.
+    ///     <para>
+    ///         Inputs are deserialized lazily, each one as it is yielded; a failed branch is read
+    ///         from the delivery itself, without decoding a payload. Delivery order is the order
+    ///         the journal recorded, so a replayed attempt yields the futures in the order the
+    ///         original attempt saw them.
+    ///     </para>
     /// </summary>
     public virtual async IAsyncEnumerable<(IDurableFuture future, Exception? error)> WaitAll(
         params IDurableFuture[] futures)
     {
-        var taskToFuture = new Dictionary<Task, IDurableFuture>(futures.Length);
-        var tasks = new Task[futures.Length];
-        for (var i = 0; i < futures.Length; i++)
-        {
-            var task = futures[i].GetResult().AsTask();
-            tasks[i] = task;
-            taskToFuture[task] = futures[i];
-        }
+        var completions = CompletionsOf(futures);
+        var taken = new bool[futures.Length];
 
-        await foreach (var completedTask in Task.WhenEach(InArrivalOrder(tasks, futures)).ConfigureAwait(false))
+        for (var remaining = futures.Length; remaining > 0; remaining--)
         {
-            ThrowIfSuspension(completedTask);
-            var future = taskToFuture[completedTask];
-            var error = completedTask.IsFaulted ? completedTask.Exception?.InnerException : null;
-            yield return (future, error);
+            var next = await TakeNextSettled(futures, completions, taken).ConfigureAwait(false);
+            var error = completions[next].Failure;
+            if (error is null)
+                try
+                {
+                    await futures[next].GetResult().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsBranchFailure(ex))
+                {
+                    error = ex;
+                }
+
+            if (FindSuspension(error) is { } suspension)
+                throw suspension;
+
+            yield return (futures[next], error);
         }
     }
 
     /// <summary>
-    ///     Returns <paramref name="tasks" /> reordered so that the futures the runtime has
-    ///     already settled come in the order it delivered their results, which is the order the
-    ///     journal recorded. On replay every journaled completion is settled before the handler
-    ///     resumes, so <c>Task.WhenAny</c> and <c>Task.WhenEach</c> would otherwise pick the
-    ///     first future in argument order and the attempt could take a branch the original one
-    ///     did not. Futures with no delivered result — still pending, or resolved locally by a
-    ///     re-executed Run — keep their position, and the array is returned unchanged when fewer
-    ///     than two futures carry an arrival position, which is the live case.
+    ///     The runtime's delivery for each input: the wait a combinator parks on and ranks
+    ///     without deserializing anything. A future the SDK did not create exposes no delivery,
+    ///     so its decoded result stands in for one — such an input is deserialized even when the
+    ///     combinator does not hand it back.
     /// </summary>
-    private static TTask[] InArrivalOrder<TTask, TFuture>(TTask[] tasks, ReadOnlySpan<TFuture> futures)
-        where TTask : Task
+    private static RawCompletion[] CompletionsOf<TFuture>(TFuture[] futures)
         where TFuture : class, IDurableFuture
     {
-        var settled = 0;
+        var completions = new RawCompletion[futures.Length];
         for (var i = 0; i < futures.Length; i++)
-            if (ArrivalOrderOf(futures[i]) > 0)
-                settled++;
+            completions[i] = futures[i] is IArrivalOrderedFuture ordered
+                ? ordered.Completion
+                : RawCompletion.OfWait(futures[i].GetResult().AsTask());
 
-        if (settled < 2)
-            return tasks;
+        return completions;
+    }
 
-        // The slots the settled futures occupy, in argument order, and the position at which
-        // each one's result was delivered.
-        var slots = new int[settled];
-        var arrivals = new long[settled];
-        var found = 0;
+    /// <summary>
+    ///     Waits until one of the inputs that has not been taken yet has settled, marks it taken
+    ///     and returns its index. The settled inputs are ranked afresh at every wake-up, so the
+    ///     combinator takes them in the order the runtime delivered their results — the order the
+    ///     journal recorded — rather than in the order the thread pool finishes deserializing
+    ///     them in, and the same journal replays to the same branch.
+    /// </summary>
+    private static async ValueTask<int> TakeNextSettled<TFuture>(TFuture[] futures,
+        RawCompletion[] completions, bool[] taken)
+        where TFuture : class, IDurableFuture
+    {
+        while (true)
+        {
+            var next = EarliestSettled(futures, completions, taken);
+            if (next >= 0)
+            {
+                taken[next] = true;
+                return next;
+            }
+
+            await WhenAnySettles(completions, taken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     The index of the input to take next, or -1 while none of the untaken inputs has
+    ///     settled. Inputs the runtime delivered a result to are ranked among themselves by the
+    ///     position it was delivered at; an input with no delivered result — resolved locally by
+    ///     a re-executed Run, or replayed as an already-known value — keeps its argument
+    ///     position, exactly where the caller put it.
+    /// </summary>
+    private static int EarliestSettled<TFuture>(TFuture[] futures, RawCompletion[] completions, bool[] taken)
+        where TFuture : class, IDurableFuture
+    {
+        var first = -1;
+        var firstArrival = 0L;
+        var earliest = -1;
+        var earliestArrival = 0L;
+
         for (var i = 0; i < futures.Length; i++)
         {
-            var arrival = ArrivalOrderOf(futures[i]);
-            if (arrival == 0)
+            if (taken[i] || !completions[i].IsSettled)
                 continue;
-            slots[found] = i;
-            arrivals[found] = arrival;
-            found++;
+
+            var arrival = ArrivalOrderOf(futures[i]);
+            if (first < 0)
+            {
+                first = i;
+                firstArrival = arrival;
+            }
+
+            if (arrival > 0 && (earliest < 0 || arrival < earliestArrival))
+            {
+                earliest = i;
+                earliestArrival = arrival;
+            }
         }
 
-        // Sorting by arrival position turns the copy into the slots in delivery order; writing
-        // those tasks back into the slots the settled futures occupied leaves every future with
-        // no delivered result exactly where the caller put it.
-        var byArrival = (int[])slots.Clone();
-        Array.Sort(arrivals, byArrival);
+        return firstArrival > 0 ? earliest : first;
+    }
 
-        var reordered = (TTask[])tasks.Clone();
-        for (var i = 0; i < settled; i++)
-            reordered[slots[i]] = tasks[byArrival[i]];
+    /// <summary>
+    ///     A wait that completes as soon as one of the untaken inputs settles. The deliveries
+    ///     never fault, so nothing is thrown here and no abandoned input is left unobserved.
+    /// </summary>
+    private static Task WhenAnySettles(RawCompletion[] completions, bool[] taken)
+    {
+        var pending = new List<Task>(completions.Length);
+        for (var i = 0; i < completions.Length; i++)
+            if (!taken[i])
+                pending.Add(completions[i].Settled);
 
-        return reordered;
+        return Task.WhenAny(pending);
     }
 
     private static long ArrivalOrderOf(IDurableFuture future)
@@ -456,15 +589,15 @@ public abstract class Context : IContext
     }
 
     /// <summary>
-    ///     Rethrows the <see cref="SuspensionException" /> buried in a settled task's fault, if any.
-    ///     Suspension is control flow, not a settlement: the input stream closed, the journaled
-    ///     operation WILL complete on a later attempt, and the invocation must suspend — recording
-    ///     the wait as a failure would durably fabricate a result.
+    ///     Whether deserializing the branch a combinator took failed in a way that settles that
+    ///     branch rather than the attempt: a <see cref="TerminalException" /> the serializer
+    ///     raised is the branch's own failure and a cancellation is the invocation unwinding,
+    ///     while any other error — a malformed payload, a broken converter — is a bug the runtime
+    ///     must retry, so it propagates and fails the attempt.
     /// </summary>
-    private static void ThrowIfSuspension(Task task)
+    private static bool IsBranchFailure(Exception exception)
     {
-        if (task.IsFaulted && FindSuspension(task.Exception) is { } suspension)
-            throw suspension;
+        return exception is TerminalException or OperationCanceledException;
     }
 
     /// <summary>Finds a <see cref="SuspensionException" /> in an exception tree, unwrapping aggregates.</summary>
