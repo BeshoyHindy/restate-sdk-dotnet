@@ -4,8 +4,8 @@ using Xunit.Abstractions;
 namespace Restate.Sdk.Testing.Containers.Tests;
 
 /// <summary>
-///     Starts one harness (SDK endpoint + Restate container + registered deployment)
-///     shared by all tests in <see cref="RestateTestHarnessTests" />, following the
+///     Starts one harness (SDK endpoint + Restate container + registered deployment) shared by
+///     every test class in the <see cref="SharedRestateHarness" /> collection, following the
 ///     IAsyncLifetime fixture pattern documented on <see cref="RestateTestHarness" />.
 /// </summary>
 public sealed class RestateHarnessFixture : IAsyncLifetime
