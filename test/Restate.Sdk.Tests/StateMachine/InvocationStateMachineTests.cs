@@ -58,6 +58,11 @@ public class InvocationStateMachineTests : IDisposable
         return new InvocationStateMachine(_reader, _writer);
     }
 
+    private InvocationStateMachine CreateSm(ServiceProtocolVersion negotiatedVersion)
+    {
+        return new InvocationStateMachine(_reader, _writer, negotiatedVersion: negotiatedVersion);
+    }
+
     // ------- Initialization -------
 
     [Fact]
@@ -324,7 +329,7 @@ public class InvocationStateMachineTests : IDisposable
     [Fact]
     public async Task Call_WithScopeAndLimitKey_WritesThemOnTheCallCommand()
     {
-        using var sm = CreateSm();
+        using var sm = CreateSm(ServiceProtocolVersion.V7);
         sm.Initialize("inv-1", "", 0, 0);
 
         _ = sm.CallAsync<string>("Svc", "obj-key", "Handler", (object?)"payload",
@@ -356,7 +361,7 @@ public class InvocationStateMachineTests : IDisposable
     [Fact]
     public async Task Send_WithScopeAndLimitKey_WritesThemOnTheOneWayCallCommand()
     {
-        using var sm = CreateSm();
+        using var sm = CreateSm(ServiceProtocolVersion.V7);
         sm.Initialize("inv-1", "", 0, 0);
 
         _ = sm.SendAsync("Svc", "obj-key", "Handler", (object?)"payload",
@@ -386,7 +391,7 @@ public class InvocationStateMachineTests : IDisposable
     [Fact]
     public async Task TypedCall_WithScope_WritesItOnTheCallCommand()
     {
-        using var sm = CreateSm();
+        using var sm = CreateSm(ServiceProtocolVersion.V7);
         sm.Initialize("inv-1", "", 0, 0);
 
         _ = sm.CallAsync<string, string>("Svc", "Handler", "payload", null,
@@ -401,7 +406,7 @@ public class InvocationStateMachineTests : IDisposable
     [Fact]
     public async Task CallFuture_WithScope_WritesItOnTheCallCommand()
     {
-        using var sm = CreateSm();
+        using var sm = CreateSm(ServiceProtocolVersion.V7);
         sm.Initialize("inv-1", "", 0, 0);
 
         _ = sm.CallFutureAsync("Svc", null, "Handler", (object?)"payload",
@@ -412,25 +417,159 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal("tenant-a", call.Scope);
     }
 
-    [Fact]
-    public async Task LimitKeyWithoutScope_Throws()
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task LimitKeyWithoutScope_Throws(int version)
     {
-        using var sm = CreateSm();
+        using var sm = CreateSm((ServiceProtocolVersion)version);
         sm.Initialize("inv-1", "", 0, 0);
 
         // The server only honours a limit key inside a scope, so asking for one without a scope
-        // is a usage error rather than a silently dropped option.
+        // is a usage error rather than a silently dropped option — on every negotiated version.
         var call = await Assert.ThrowsAsync<ArgumentException>(async () =>
             await sm.CallAsync<string>("Svc", null, "Handler", (object?)null,
                 new CallOptions { LimitKey = "customer-7" }, CancellationToken.None));
         Assert.Equal("options", call.ParamName);
+        Assert.Contains("A limit key requires a scope", call.Message, StringComparison.Ordinal);
 
         var send = await Assert.ThrowsAsync<ArgumentException>(async () =>
             await sm.SendAsync("Svc", null, "Handler", (object?)null,
                 new SendOptions { LimitKey = "customer-7" }, CancellationToken.None));
         Assert.Equal("options", send.ParamName);
+        Assert.Contains("A limit key requires a scope", send.Message, StringComparison.Ordinal);
 
         Assert.Empty(await DrainOutboundAsync());
+    }
+
+    [Theory]
+    [InlineData(5, "tenant-a", null)]
+    [InlineData(5, "tenant-a", "customer-7")]
+    [InlineData(6, "tenant-a", null)]
+    [InlineData(6, "tenant-a", "customer-7")]
+    public async Task Call_WithFlowControlBelowV7_ThrowsAndWritesNothing(
+        int version, string scope, string? limitKey)
+    {
+        using var sm = CreateSm((ServiceProtocolVersion)version);
+        sm.Initialize("inv-1", "", 0, 0);
+
+        // CallCommand.scope and CallCommand.limit_key were added in V7, so a V5 or V6 server
+        // would drop them: fail at the call site instead of losing the flow control silently.
+        // The throw is synchronous — nothing is written and no completion id is allocated, so
+        // the assertions never have to await a result that would not arrive.
+        var options = new CallOptions { Scope = scope, LimitKey = limitKey };
+
+        var untyped = Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.CallAsync<string>("Svc", "obj-key", "Handler", (object?)"payload", options, CancellationToken.None);
+        });
+        Assert.Equal("options", untyped.ParamName);
+        Assert.Contains(((ServiceProtocolVersion)version).ToString(), untyped.Message, StringComparison.Ordinal);
+        Assert.Contains("V7", untyped.Message, StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.CallAsync<string, string>("Svc", "Handler", "payload", null, options, CancellationToken.None);
+        });
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.CallFutureAsync("Svc", null, "Handler", (object?)"payload", options, CancellationToken.None);
+        });
+
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    [Theory]
+    [InlineData(5, "tenant-a", null)]
+    [InlineData(5, "tenant-a", "customer-7")]
+    [InlineData(6, "tenant-a", null)]
+    [InlineData(6, "tenant-a", "customer-7")]
+    public async Task Send_WithFlowControlBelowV7_ThrowsAndWritesNothing(
+        int version, string scope, string? limitKey)
+    {
+        using var sm = CreateSm((ServiceProtocolVersion)version);
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var options = new SendOptions { Scope = scope, LimitKey = limitKey };
+
+        var untyped = Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.SendAsync("Svc", "obj-key", "Handler", (object?)"payload", options, CancellationToken.None);
+        });
+        Assert.Equal("options", untyped.ParamName);
+        Assert.Contains(((ServiceProtocolVersion)version).ToString(), untyped.Message, StringComparison.Ordinal);
+        Assert.Contains("V7", untyped.Message, StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.SendAsync("Svc", "Handler", "payload", null, options, CancellationToken.None);
+        });
+
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    public async Task Call_WithFlowControlBelowV7_ThrowsWhileReplaying(int version)
+    {
+        using var sm = CreateSm((ServiceProtocolVersion)version);
+        sm.Initialize("inv-1", "", 0, 2);
+        Assert.Equal(InvocationState.Replaying, sm.State);
+
+        // The guard runs before the replay branch, so a replayed call fails the same way a live
+        // one does: the handler asked for something this stream never carried.
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.CallAsync<string>("Svc", null, "Handler", (object?)"payload",
+                CallOptions.WithScope("tenant-a"), CancellationToken.None);
+        });
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.SendAsync("Svc", null, "Handler", (object?)"payload",
+                SendOptions.WithScope("tenant-a"), CancellationToken.None);
+        });
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            _ = sm.CallFutureAsync("Svc", null, "Handler", (object?)"payload",
+                CallOptions.WithScope("tenant-a"), CancellationToken.None);
+        });
+
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    public async Task CallAndSend_WithoutFlowControlBelowV7_WriteTheirCommands(int version)
+    {
+        using var sm = CreateSm((ServiceProtocolVersion)version);
+        sm.Initialize("inv-1", "", 0, 0);
+
+        // Only scope and limit key are V7-only: the other options keep working below it.
+        _ = sm.CallAsync<string>("Svc", null, "Handler", (object?)"payload",
+            CallOptions.WithIdempotencyKey("idem-1"), CancellationToken.None);
+        _ = sm.SendAsync("Svc", null, "Handler", (object?)"payload",
+            new SendOptions { Delay = TimeSpan.FromSeconds(30), IdempotencyKey = "idem-2" },
+            CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(MessageType.CallCommand, frames[0].Type);
+        var call = Gen.CallCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("idem-1", call.IdempotencyKey);
+        Assert.False(call.HasScope);
+        Assert.False(call.HasLimitKey);
+
+        Assert.Equal(MessageType.OneWayCallCommand, frames[1].Type);
+        var send = Gen.OneWayCallCommandMessage.Parser.ParseFrom(frames[1].Payload);
+        Assert.Equal("idem-2", send.IdempotencyKey);
+        Assert.True(send.InvokeTime > 0);
+        Assert.False(send.HasScope);
+        Assert.False(send.HasLimitKey);
     }
 
     // ------- Calls -------
