@@ -19,7 +19,8 @@ public interface IDurableFuture
 {
     /// <summary>
     ///     Awaits the result of this future, returning it as an untyped object.
-    ///     Safe to await more than once: every await observes the same outcome.
+    ///     Safe to await more than once: every await observes the same outcome and the same
+    ///     decoded value.
     /// </summary>
     ValueTask<object?> GetResult();
 }
@@ -49,7 +50,9 @@ public interface IDurableFuture<T> : IDurableFuture
 
     /// <summary>
     ///     Awaits the typed result of this future.
-    ///     Safe to await more than once: every await observes the same outcome.
+    ///     Safe to await more than once: every await observes the same outcome and the same
+    ///     decoded value. The payload is deserialized on the first await; every later await
+    ///     returns that value or rethrows that failure.
     /// </summary>
     new ValueTask<T> GetResult();
 }
