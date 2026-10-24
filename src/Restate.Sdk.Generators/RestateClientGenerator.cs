@@ -106,6 +106,7 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                 string? inputType = null;
                 var contextParamType = "global::Restate.Sdk.Context";
                 var hasCt = false;
+                var hasRunContext = false;
 
                 foreach (var param in method.Parameters)
                 {
@@ -113,6 +114,14 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     {
                         contextParamType = param.Type.ToDisplayString(FullyQualifiedFormat);
                         continue;
+                    }
+
+                    // The invoker cannot supply an IRunContext, so there is nothing to emit for
+                    // this handler. RESTATE005 reports it from the diagnostic pass instead.
+                    if (IsRunContextInterface(param.Type))
+                    {
+                        hasRunContext = true;
+                        break;
                     }
 
                     if (param.Type.Name == "CancellationToken")
@@ -123,6 +132,9 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
 
                     inputType ??= param.Type.ToDisplayString(FullyQualifiedFormat);
                 }
+
+                if (hasRunContext)
+                    continue;
 
                 var outputType = UnwrapReturnType(method.ReturnType);
                 var returnType = method.ReturnType.ToDisplayString(FullyQualifiedFormat);
@@ -236,7 +248,7 @@ public sealed class RestateClientGenerator : IIncrementalGenerator
                     continue;
                 }
 
-                // RESTATE002: IRunContext belongs to a Run block, so the invoker cannot supply it.
+                // RESTATE005: IRunContext belongs to a Run block, so the invoker cannot supply it.
                 if (IsRunContextInterface(param.Type))
                 {
                     hasRunContext = true;

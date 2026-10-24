@@ -287,7 +287,10 @@ public class ClientGeneratorTests
         var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
-        Assert.Contains(diagnostics, d => d.Id == "RESTATE002");
+        // RESTATE002 stays a warning and keeps its own id, separate from the IRunContext error.
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "RESTATE002");
+        Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE005");
     }
 
     [Fact]
@@ -558,7 +561,7 @@ public class ClientGeneratorTests
     }
 
     [Fact]
-    public void Handler_RunContextParameter_EmitsRESTATE002()
+    public void Handler_RunContextParameter_EmitsRESTATE005()
     {
         var source = """
                      using Restate.Sdk;
@@ -574,11 +577,58 @@ public class ClientGeneratorTests
                      }
                      """;
 
-        var (driver, _, _) = GeneratorTestHelper.RunGenerator(source);
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+
+        // A service whose only handler is skipped still generates without throwing.
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
         var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
 
-        var diagnostic = Assert.Single(diagnostics, d => d.Id == "RESTATE002");
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "RESTATE005");
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Contains("only valid inside", diagnostic.GetMessage(CultureInfo.InvariantCulture));
+
+        // The missing-context warning no longer doubles up on the same handler.
+        Assert.DoesNotContain(diagnostics, d => d.Id == "RESTATE002");
+    }
+
+    [Fact]
+    public void Handler_RunContextParameter_IsSkippedAndSiblingHandlersGenerate()
+    {
+        var source = """
+                     using Restate.Sdk;
+                     using System.Threading.Tasks;
+
+                     namespace TestApp;
+
+                     [Service]
+                     public class MixedService
+                     {
+                         [Handler]
+                         public Task<string> Greet(Context ctx, string name) => Task.FromResult("Hello");
+
+                         [Handler]
+                         public Task<string> Audit(IRunContext ctx) => Task.FromResult("audited");
+                     }
+                     """;
+
+        var (driver, output, _) = GeneratorTestHelper.RunGenerator(source);
+
+        // Nothing is emitted for the IRunContext handler, so the generated invoker compiles.
+        GeneratorTestHelper.AssertGeneratedCodeCompiles(output);
+
+        var invoker = GeneratorTestHelper.GetGeneratedSource(driver, "MixedServiceInvokers.g.cs");
+        Assert.NotNull(invoker);
+        Assert.Contains("Greet(", invoker);
+        Assert.DoesNotContain("Audit", invoker);
+
+        var client = GeneratorTestHelper.GetGeneratedSource(driver, "MixedServiceClient.g.cs");
+        Assert.NotNull(client);
+        Assert.Contains("GreetAsync", client);
+        Assert.DoesNotContain("Audit", client);
+
+        var diagnostics = GeneratorTestHelper.GetGeneratorDiagnostics(driver);
+        var error = Assert.Single(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal("RESTATE005", error.Id);
     }
 
     [Fact]
