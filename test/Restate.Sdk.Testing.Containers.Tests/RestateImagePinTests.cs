@@ -11,8 +11,12 @@ namespace Restate.Sdk.Testing.Containers.Tests;
 /// </summary>
 public sealed class RestateImagePinTests
 {
-    /// <summary>Matches a pinned Restate image; mirrors the pattern the CI script greps with.</summary>
-    private const string ImagePattern = "docker\\.io/restatedev/restate:[^\"\\s]+";
+    /// <summary>
+    ///     Matches a pinned Restate image; mirrors the pattern the CI script greps with.
+    ///     <c>docker.restate.dev</c> is the registry the Restate docs and release notes name, and
+    ///     Docker Hub mirrors the same tags, so an override to <c>docker.io</c> stays valid.
+    /// </summary>
+    private const string ImagePattern = "(docker\\.restate\\.dev|docker\\.io)/restatedev/restate:[^\"\\s]+";
 
     /// <summary>Matches a Restate image literal that names a version.</summary>
     private const string VersionedImagePattern = "restatedev/restate:[0-9]";
@@ -23,8 +27,31 @@ public sealed class RestateImagePinTests
         var compose = File.ReadAllText(Path.Combine(RepoRoot(), "docker-compose.yml"));
         var match = Regex.Match(compose, ImagePattern);
 
-        Assert.True(match.Success, "docker-compose.yml names no restatedev/restate image.");
+        Assert.True(
+            match.Success,
+            "docker-compose.yml names no pinned docker.restate.dev/restatedev/restate image.");
         Assert.Equal(RestateBuilder.RestateImage, match.Value);
+    }
+
+    [Theory]
+    [InlineData("docker.restate.dev/restatedev/restate:1.8")]
+    [InlineData("docker.io/restatedev/restate:1.8")]
+    public void Pin_pattern_accepts_both_registries(string image)
+    {
+        var match = Regex.Match($"    image: {image}\n", ImagePattern);
+
+        Assert.True(match.Success, $"The pin pattern rejects {image}.");
+        Assert.Equal(image, match.Value);
+    }
+
+    [Theory]
+    [InlineData("docker.restate.dev/restatedev/restate")]
+    [InlineData("docker.io/restatedev/restate")]
+    public void Pin_pattern_rejects_an_untagged_image(string image)
+    {
+        Assert.False(
+            Regex.IsMatch($"    image: {image}\n", ImagePattern),
+            $"The pin pattern accepts the untagged {image}, so the server version would float.");
     }
 
     [Fact]

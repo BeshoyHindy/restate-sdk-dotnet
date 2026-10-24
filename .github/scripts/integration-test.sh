@@ -18,7 +18,7 @@ LOG_DIR=""
 # instead of repeating it, so CI and the Testcontainers harness cannot drift apart —
 # RestateBuilder.RestateImage is generated from the same line at build time.
 RESTATE_COMPOSE="$ROOT_DIR/docker-compose.yml"
-RESTATE_IMAGE="$(grep -oE 'docker\.io/restatedev/restate:[^"[:space:]]+' "$RESTATE_COMPOSE" | head -1 || true)"
+RESTATE_IMAGE="$(grep -oE '(docker\.restate\.dev|docker\.io)/restatedev/restate:[^"[:space:]]+' "$RESTATE_COMPOSE" | head -1 || true)"
 if [ -z "$RESTATE_IMAGE" ]; then
     echo "Could not read the Restate server image pin from $RESTATE_COMPOSE" >&2
     exit 1

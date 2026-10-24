@@ -90,7 +90,7 @@ await using var harness = await RestateTestHarness.StartAsync(
     b => b.AddService<GreeterService>(),
     new RestateTestHarnessOptions
     {
-        Image = "docker.io/restatedev/restate:<tag>",
+        Image = "docker.restate.dev/restatedev/restate:<tag>",
         StartupTimeout = TimeSpan.FromMinutes(5),
     });
 ```

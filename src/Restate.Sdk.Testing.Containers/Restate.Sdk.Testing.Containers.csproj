@@ -51,11 +51,11 @@
             <RestateImagePinSource>$(IntermediateOutputPath)RestateImagePin.g.cs</RestateImagePinSource>
         </PropertyGroup>
         <PropertyGroup>
-            <RestateImagePin>$([System.Text.RegularExpressions.Regex]::Match($(RestateComposeText), 'docker\.io/restatedev/restate:[^\s";]+').Value)</RestateImagePin>
+            <RestateImagePin>$([System.Text.RegularExpressions.Regex]::Match($(RestateComposeText), '(docker\.restate\.dev|docker\.io)/restatedev/restate:[^\s";]+').Value)</RestateImagePin>
         </PropertyGroup>
 
         <Error Condition="'$(RestateImagePin)' == ''"
-               Text="No 'image: docker.io/restatedev/restate:&lt;tag&gt;' line in $(RestateComposeFile); RestateBuilder.RestateImage is derived from it."/>
+               Text="No 'image: docker.restate.dev/restatedev/restate:&lt;tag&gt;' (or docker.io) line in $(RestateComposeFile); RestateBuilder.RestateImage is derived from it."/>
 
         <ItemGroup>
             <RestateImagePinLine Include="// &lt;auto-generated/&gt;"/>

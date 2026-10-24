@@ -3,7 +3,7 @@ services:
     # The pinned Restate server image, written down here and nowhere else: `docker compose up`
     # reads this file directly, and RestateBuilder.RestateImage, .github/scripts/integration-test.sh
     # and RestateImagePinTests all derive the pin from this line.
-    image: docker.io/restatedev/restate:1.8
+    image: docker.restate.dev/restatedev/restate:1.8
     container_name: restate-server
     ports:
       - "8080:8080"
