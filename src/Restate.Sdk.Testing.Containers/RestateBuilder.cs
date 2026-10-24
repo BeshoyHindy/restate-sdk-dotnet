@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using Docker.DotNet.Models;
 using DotNet.Testcontainers.Builders;
@@ -15,8 +16,18 @@ namespace Restate.Sdk.Testing.Containers;
 /// </summary>
 public sealed class RestateBuilder : ContainerBuilder<RestateBuilder, RestateContainer, RestateConfiguration>
 {
-    /// <summary>The default Restate Docker image (pinned to a minor version, not <c>latest</c>).</summary>
-    public const string RestateImage = "docker.io/restatedev/restate:1.7";
+    /// <summary>The default Restate Docker image, pinned to a minor version rather than <c>latest</c>.</summary>
+    /// <remarks>
+    ///     The pin lives in the repository's <c>docker-compose.yml</c>; this constant is generated from
+    ///     its <c>image:</c> line at build time, so the server version is written down exactly once.
+    /// </remarks>
+    [SuppressMessage(
+        "ApiDesign",
+        "RS0016:Add public types and members to the declared API",
+        Justification =
+            "The public API listing records a const's value, and this one moves with the image pin in " +
+            "docker-compose.yml. Listing it would turn every server bump into a public API edit.")]
+    public const string RestateImage = RestateImagePin.Image;
 
     /// <summary>The Restate ingress port inside the container.</summary>
     public const ushort IngressPort = 8080;
@@ -37,8 +48,8 @@ public sealed class RestateBuilder : ContainerBuilder<RestateBuilder, RestateCon
     ///     Initializes a new instance of the <see cref="RestateBuilder" /> class.
     /// </summary>
     /// <param name="image">
-    ///     The full Docker image name, including the image repository and tag
-    ///     (e.g., <c>docker.io/restatedev/restate:1.7</c>).
+    ///     The full Docker image name, including the image repository and tag; see
+    ///     <see cref="RestateImage" /> for the default.
     /// </param>
     /// <remarks>
     ///     Docker image tags available at <see href="https://hub.docker.com/r/restatedev/restate/tags" />.

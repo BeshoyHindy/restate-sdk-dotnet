@@ -29,7 +29,8 @@ updates:
       prefix: "ci(deps)"
 
   # The Restate server image referenced by docker-compose.yml at the repository root.
-  # RestateBuilder.RestateImage holds the same pin and has to move with it.
+  # That file is the only place the pin is written: RestateBuilder.RestateImage and
+  # .github/scripts/integration-test.sh derive from it, so a bump needs no second edit.
   - package-ecosystem: docker-compose
     directory: /
     schedule:
