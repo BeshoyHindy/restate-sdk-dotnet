@@ -782,7 +782,7 @@ public class RestateClientTests
         await client.GetOutput<GreetResponse>("inv-9");
         Assert.Equal("http://localhost:8080/restate/output/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
 
-        // The 1.8 ingress serves no cancel verb, so cancel keeps the invocation route.
+        // The ingress serves no cancel verb, so cancel keeps the invocation route.
         await client.Cancel("inv-9");
         Assert.Equal("http://localhost:8080/restate/invocation/inv-9", handler.LastRequest!.RequestUri!.AbsoluteUri);
     }
@@ -832,7 +832,7 @@ public class RestateClientTests
     }
 
     [Fact]
-    public async Task ReservedCharactersInInvocationAndSignalIds_StayInsideTheirSegment()
+    public async Task ReservedCharactersInInvocationIds_StayInsideTheirSegment()
     {
         var (client, handler) = CreateClient();
         handler.ResponseBody = """{"message":"done"}""";
@@ -849,14 +849,25 @@ public class RestateClientTests
         await client.Cancel(Reserved);
         Assert.Equal($"http://localhost:8080/restate/invocation/{ReservedEscaped}",
             handler.LastRequest!.RequestUri!.AbsoluteUri);
+    }
 
-        await client.ResolveSignal(Reserved, "value", ClientTestJsonContext.Default.String);
-        Assert.Equal($"http://localhost:8080/restate/awakeables/{ReservedEscaped}/resolve",
+    [Fact]
+    public async Task SignalIds_ArePutInThePathVerbatim()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{}";
+
+        // The ingress takes the awakeable segment as-is and never url-decodes it, and ids minted
+        // by other SDKs end in base64 padding, so a "=" must reach the server unescaped: "%3D"
+        // would address an id that does not exist.
+        const string signalId = "sign_1PePOqp8nZM3KtGH8kSJqwJzpGn2B1pQ4=";
+
+        await client.ResolveSignal(signalId, "value", ClientTestJsonContext.Default.String);
+        Assert.Equal($"http://localhost:8080/restate/awakeables/{signalId}/resolve",
             handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Equal(5, handler.LastRequest.RequestUri.Segments.Length);
 
-        await client.RejectSignal(Reserved, "nope");
-        Assert.Equal($"http://localhost:8080/restate/awakeables/{ReservedEscaped}/reject",
+        await client.RejectSignal(signalId, "nope");
+        Assert.Equal($"http://localhost:8080/restate/awakeables/{signalId}/reject",
             handler.LastRequest!.RequestUri!.AbsoluteUri);
     }
 

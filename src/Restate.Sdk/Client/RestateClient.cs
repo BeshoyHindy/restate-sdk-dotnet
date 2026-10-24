@@ -330,8 +330,8 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Cancels a running invocation by ID.
     ///     <para>
-    ///         restate-server 1.8 serves no cancel route on the ingress — cancellation is an
-    ///         admin API operation — so this request is rejected by a 1.8 ingress with a
+    ///         The ingress has never served a cancel route — cancellation is an admin API
+    ///         operation — so the ingress rejects this request with a
     ///         <see cref="RestateIngressException" />.
     ///     </para>
     /// </summary>
@@ -408,11 +408,13 @@ public sealed class RestateClient : IDisposable
 
     /// <summary>
     ///     The ingress route for completing a signal by id, which the server serves under
-    ///     <c>/restate/awakeables</c> for both signal ids and legacy awakeable ids.
+    ///     <c>/restate/awakeables</c> for both signal ids and legacy awakeable ids. The id is put in
+    ///     the path verbatim: the ingress never url-decodes this segment, and ids minted by other
+    ///     SDKs end in base64 padding, which escaping would turn into <c>%3D</c>.
     /// </summary>
     private static string SignalPath(string signalId, string verb)
     {
-        return $"/restate/awakeables/{Uri.EscapeDataString(signalId)}/{verb}";
+        return $"/restate/awakeables/{signalId}/{verb}";
     }
 
     /// <summary>The canonical route for attaching to an invocation by id.</summary>
@@ -428,8 +430,8 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
-    ///     The route for cancelling an invocation by id. restate-server 1.8 serves no cancel verb
-    ///     under the versioned ingress API, so this stays on the invocation route.
+    ///     The route for cancelling an invocation by id. The ingress has never served a cancel
+    ///     verb, under the versioned API or otherwise, so this stays on the invocation route.
     /// </summary>
     private static string CancelPath(string invocationId)
     {
