@@ -49,6 +49,12 @@ public sealed class SharedRestateHarness : ICollectionFixture<RestateHarnessFixt
 [Collection(SharedRestateHarness.Name)]
 public sealed class RestateTestHarnessTests
 {
+    /// <summary>How long a test waits for an invocation it sent to reach its handler.</summary>
+    private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long a test waits for a cancelled invocation to report its outcome.</summary>
+    private static readonly TimeSpan CancellationTimeout = TimeSpan.FromSeconds(60);
+
     private readonly RestateHarnessFixture _fixture;
     private readonly ITestOutputHelper _output;
 
@@ -134,21 +140,32 @@ public sealed class RestateTestHarnessTests
     }
 
     [DockerFact]
-    public async Task Cancel_of_a_blocked_invocation_is_rejected_by_the_ingress()
+    public async Task Cancel_through_the_admin_api_terminates_a_blocked_invocation()
     {
+        var token = $"cancel-{Guid.NewGuid():N}";
+
+        // The idempotency key gives the invocation completion retention, so its outcome stays
+        // readable after it has been cancelled.
         var invocationId = await _fixture.Harness.Client
-            .Service("HarnessBlockingService")
-            .Send("Block");
+            .Service(nameof(HarnessBlockingService))
+            .Send(nameof(HarnessBlockingService.Block), new BlockRequest(token), idempotencyKey: token);
+        Assert.NotEmpty(invocationId);
+        await HarnessBlockingService.Started(token).WaitAsync(StartTimeout);
 
-        // The ingress serves no cancel verb — cancellation is an admin-API operation — so the
-        // deprecated invocation route is all the client can address, and the ingress rejects it.
-        // Pinned here so the route can be revisited if the ingress ever grows a cancel verb.
+        // Cancellation is an admin-API operation, so it needs a client that can reach it.
+        using var client = new RestateClient(_fixture.Harness.Container.GetIngressUri(),
+            new RestateClientOptions { AdminAddress = _fixture.Harness.Container.GetAdminUri() });
+
+        await client.Cancel(invocationId);
+
+        // The handler's ten-minute sleep fails with a terminal cancellation error instead of
+        // waking, so the invocation ends in failure and the ingress reports it on attach.
         var ex = await Assert.ThrowsAsync<RestateIngressException>(
-            () => _fixture.Harness.Client.Cancel(invocationId));
+            () => _fixture.Harness.Client.Attach<string>(invocationId).WaitAsync(CancellationTimeout));
 
-        _output.WriteLine($"Cancel response: {ex.StatusCode}, source={ex.ErrorSource ?? "<none>"}, " +
+        _output.WriteLine($"Attach after cancellation: {ex.StatusCode}, source={ex.ErrorSource ?? "<none>"}, " +
                           $"code={ex.ErrorCode ?? "<none>"}, message={ex.Message}");
         Assert.NotNull(ex.StatusCode);
-        Assert.InRange((int)ex.StatusCode.Value, 400, 499);
+        Assert.Contains("cancel", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

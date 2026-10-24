@@ -33,6 +33,7 @@ public sealed class RestateClient : IDisposable
     private const string LimitKeyHeader = "x-restate-limit-key";
 
     private static JsonSerializerOptions? s_reflectionJsonOptions;
+    private readonly Uri? _adminAddress;
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
     private readonly JsonSerializerOptions? _reflectionJsonOptions;
@@ -89,6 +90,7 @@ public sealed class RestateClient : IDisposable
         _http = new HttpClient { BaseAddress = baseUrl };
         _ownsClient = true;
         _reflectionJsonOptions = options.JsonSerializerOptions;
+        _adminAddress = options.AdminAddress;
     }
 
     /// <summary>
@@ -120,6 +122,7 @@ public sealed class RestateClient : IDisposable
         _http = httpClient;
         _ownsClient = false;
         _reflectionJsonOptions = options.JsonSerializerOptions;
+        _adminAddress = options.AdminAddress;
     }
 
     /// <summary>
@@ -328,20 +331,32 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
-    ///     Cancels a running invocation by ID.
+    ///     Cancels a running invocation by ID: the handler's pending operation fails with a
+    ///     terminal error, so the invocation ends in failure rather than returning a result.
     ///     <para>
-    ///         The ingress has never served a cancel route — cancellation is an admin API
-    ///         operation — so the ingress rejects this request with a
-    ///         <see cref="RestateIngressException" />.
+    ///         Cancellation is an admin API operation — the ingress has never served a cancel
+    ///         route — so this requires <see cref="RestateClientOptions.AdminAddress" /> to be
+    ///         configured, and sends <c>PATCH {admin}/invocations/{id}/cancel</c>, served by
+    ///         restate-server 1.7 and later. The request goes through the same
+    ///         <see cref="HttpClient" /> as the ingress requests, so any handler or default
+    ///         header configured on it applies to it too.
+    ///     </para>
+    ///     <para>
+    ///         The server accepts the request before the invocation has finished unwinding, and
+    ///         rejects it for an invocation that has already completed. A non-success response
+    ///         throws a <see cref="RestateIngressException" />, as for every other operation here.
     ///     </para>
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="invocationId" /> is <see langword="null" />.</exception>
     /// <exception cref="ArgumentException"><paramref name="invocationId" /> is empty.</exception>
+    /// <exception cref="InvalidOperationException">
+    ///     No <see cref="RestateClientOptions.AdminAddress" /> was configured.
+    /// </exception>
     public async Task Cancel(string invocationId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(invocationId);
-        using var response = await _http.DeleteAsync(CancelPath(invocationId), ct)
-            .ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Patch, CancelUri(invocationId));
+        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         await EnsureIngressSuccessAsync(response, ct).ConfigureAwait(false);
     }
 
@@ -430,12 +445,26 @@ public sealed class RestateClient : IDisposable
     }
 
     /// <summary>
-    ///     The route for cancelling an invocation by id. The ingress has never served a cancel
-    ///     verb, under the versioned API or otherwise, so this stays on the invocation route.
+    ///     The admin API route for cancelling an invocation by id. restate-server 1.7 and later
+    ///     serve it as <c>PATCH /invocations/{id}/cancel</c>; the older
+    ///     <c>DELETE /invocations/{id}?mode=cancel</c> is deprecated there.
+    ///     <para>
+    ///         The address is composed by hand rather than with <c>new Uri(baseUri, relative)</c>,
+    ///         which would drop the last segment of an admin address written without a trailing
+    ///         slash, silently addressing the wrong route behind a path-prefixed proxy.
+    ///     </para>
     /// </summary>
-    private static string CancelPath(string invocationId)
+    /// <exception cref="InvalidOperationException">No admin address was configured.</exception>
+    private Uri CancelUri(string invocationId)
     {
-        return $"/restate/invocation/{Uri.EscapeDataString(invocationId)}";
+        if (_adminAddress is null)
+            throw new InvalidOperationException(
+                "Cancelling an invocation is an admin API operation, and this client has no admin address. " +
+                $"Set {nameof(RestateClientOptions)}.{nameof(RestateClientOptions.AdminAddress)} " +
+                "(the Restate admin API listens on port 9070 by default) and pass the options to the client.");
+
+        var root = _adminAddress.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        return new Uri($"{root}/invocations/{Uri.EscapeDataString(invocationId)}/cancel", UriKind.Absolute);
     }
 
     [RequiresUnreferencedCode(ReflectionJsonMessage)]

@@ -38,18 +38,38 @@ public sealed class HarnessCounterObject
     }
 }
 
+/// <summary>Request for the blocking handler, carrying the token it reports under.</summary>
+public sealed record BlockRequest(string Token);
+
 /// <summary>
 ///     A service that blocks on a long durable sleep, so an invocation of it stays in flight
-///     while a test addresses it by invocation id.
+///     while a test addresses it by invocation id. It reports that it has started — through
+///     <see cref="Started" />, which works because the harness runs the SDK endpoint in the test
+///     process — before sleeping, so a test never addresses an invocation the server has not begun.
 /// </summary>
 [Service]
 public sealed class HarnessBlockingService
 {
-    [Handler]
-    public async Task<string> Block(Context ctx)
+    private static readonly ConcurrentDictionary<string, TaskCompletionSource> Gates = new(StringComparer.Ordinal);
+
+    /// <summary>Completes once the handler invoked with <paramref name="token" /> has started.</summary>
+    public static Task Started(string token)
     {
+        return Gate(token).Task;
+    }
+
+    [Handler]
+    public async Task<string> Block(Context ctx, BlockRequest request)
+    {
+        Gate(request.Token).TrySetResult();
         await ctx.Sleep(TimeSpan.FromMinutes(10));
         return "woken";
+    }
+
+    private static TaskCompletionSource Gate(string token)
+    {
+        return Gates.GetOrAdd(token,
+            static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
 }
 

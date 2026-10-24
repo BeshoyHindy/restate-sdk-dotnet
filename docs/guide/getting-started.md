@@ -138,6 +138,22 @@ virtual-object key such as `a/b c?d` addresses the key rather than a different r
 > `HttpClient.DefaultRequestHeaders` or a `DelegatingHandler` on the `HttpClient` passed to
 > `new RestateClient(httpClient)`.
 
+Cancelling an invocation is the one operation the ingress does not serve: it lives on the admin
+API (port 9070 by default). Configure that address and `Cancel` sends
+`PATCH {admin}/invocations/{id}/cancel`, which restate-server 1.7 and later serve:
+
+```csharp
+using var clientWithAdmin = new RestateClient("http://localhost:8080",
+    new RestateClientOptions { AdminAddress = new Uri("http://localhost:9070") });
+
+var pending = await clientWithAdmin.Service("EmailService").Send("SendEmail", request);
+await clientWithAdmin.Cancel(pending);
+```
+
+The handler's pending operation then fails with a terminal cancellation error, so the invocation
+ends in failure instead of returning a result. Without an `AdminAddress`, `Cancel` throws
+`InvalidOperationException` rather than sending a request no server version answers.
+
 Reflection-based overloads use camelCase JSON by default. To match an endpoint with different
 JSON conventions, configure the client explicitly:
 
