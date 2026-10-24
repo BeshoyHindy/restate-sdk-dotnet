@@ -242,6 +242,123 @@ internal static class ProtobufCodec
         return keys;
     }
 
+    /// <summary>
+    ///     Extracts the identifying fields of a replayed command payload — the ones replay
+    ///     compares against the operation the handler is performing (see
+    ///     <see cref="CommandFields" />). Commands with nothing identifying of their own
+    ///     (ClearAllState, the state-keys reads) and non-replayable messages parse to
+    ///     <see cref="CommandFields.None" />, so they never report a difference.
+    ///     Only called while replaying.
+    /// </summary>
+    public static CommandFields ParseCommandFields(MessageType type, ReadOnlySpan<byte> payload)
+    {
+        switch (type)
+        {
+            case MessageType.RunCommand:
+                return new CommandFields { Name = Gen.RunCommandMessage.Parser.ParseFrom(payload).Name };
+
+            case MessageType.SleepCommand:
+                return new CommandFields { Name = Gen.SleepCommandMessage.Parser.ParseFrom(payload).Name };
+
+            case MessageType.CallCommand:
+                {
+                    var msg = Gen.CallCommandMessage.Parser.ParseFrom(payload);
+                    return new CommandFields
+                    {
+                        ServiceName = msg.ServiceName,
+                        HandlerName = msg.HandlerName,
+                        Key = msg.Key,
+                        Scope = msg.Scope,
+                        LimitKey = msg.LimitKey
+                    };
+                }
+
+            case MessageType.OneWayCallCommand:
+                {
+                    // invoke_time is deliberately not read: a delayed send replayed at another
+                    // wall-clock time records a different one and is still the same operation.
+                    var msg = Gen.OneWayCallCommandMessage.Parser.ParseFrom(payload);
+                    return new CommandFields
+                    {
+                        ServiceName = msg.ServiceName,
+                        HandlerName = msg.HandlerName,
+                        Key = msg.Key,
+                        Scope = msg.Scope,
+                        LimitKey = msg.LimitKey
+                    };
+                }
+
+            case MessageType.GetLazyStateCommand:
+                return new CommandFields
+                {
+                    Key = Gen.GetLazyStateCommandMessage.Parser.ParseFrom(payload).Key.ToStringUtf8()
+                };
+
+            case MessageType.GetEagerStateCommand:
+                return new CommandFields
+                {
+                    Key = Gen.GetEagerStateCommandMessage.Parser.ParseFrom(payload).Key.ToStringUtf8()
+                };
+
+            case MessageType.SetStateCommand:
+                return new CommandFields
+                {
+                    Key = Gen.SetStateCommandMessage.Parser.ParseFrom(payload).Key.ToStringUtf8()
+                };
+
+            case MessageType.ClearStateCommand:
+                return new CommandFields
+                {
+                    Key = Gen.ClearStateCommandMessage.Parser.ParseFrom(payload).Key.ToStringUtf8()
+                };
+
+            case MessageType.GetPromiseCommand:
+                return new CommandFields { Key = Gen.GetPromiseCommandMessage.Parser.ParseFrom(payload).Key };
+
+            case MessageType.PeekPromiseCommand:
+                return new CommandFields { Key = Gen.PeekPromiseCommandMessage.Parser.ParseFrom(payload).Key };
+
+            case MessageType.CompletePromiseCommand:
+                return new CommandFields { Key = Gen.CompletePromiseCommandMessage.Parser.ParseFrom(payload).Key };
+
+            case MessageType.CompleteAwakeableCommand:
+                return new CommandFields
+                {
+                    Target = Gen.CompleteAwakeableCommandMessage.Parser.ParseFrom(payload).AwakeableId
+                };
+
+            case MessageType.AttachInvocationCommand:
+                return new CommandFields
+                {
+                    Target = Gen.AttachInvocationCommandMessage.Parser.ParseFrom(payload).InvocationId
+                };
+
+            case MessageType.GetInvocationOutputCommand:
+                return new CommandFields
+                {
+                    Target = Gen.GetInvocationOutputCommandMessage.Parser.ParseFrom(payload).InvocationId
+                };
+
+            case MessageType.SendSignalCommand:
+                {
+                    var msg = Gen.SendSignalCommandMessage.Parser.ParseFrom(payload);
+                    return new CommandFields
+                    {
+                        Target = msg.TargetInvocationId,
+                        SignalName = msg.SignalIdCase == Gen.SendSignalCommandMessage.SignalIdOneofCase.Name
+                            ? msg.Name
+                            : null,
+                        SignalIndex = msg.SignalIdCase == Gen.SendSignalCommandMessage.SignalIdOneofCase.Idx
+                            ? msg.Idx
+                            : null
+                    };
+                }
+
+            default:
+                return CommandFields.None;
+        }
+    }
+
     // ── Factory methods for outgoing commands ─────────────────────────
 
     public static Gen.RunCommandMessage CreateRunCommand(string name, uint completionId)
