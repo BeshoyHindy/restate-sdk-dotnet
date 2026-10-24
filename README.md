@@ -677,9 +677,12 @@ server settle on the highest version both support; v5 is the floor, which is why
 version has not moved. 0.3.0 is the release being cut from `main`: it is the first to carry scope and
 limit key, signals, and `RestateIngressException` -- everything else documented here is in 0.2.1.
 
-Two features degrade rather than fail against older servers: scope and limit key need a server that
-honours them (CI runs against restate-server 1.7), and `RestateIngressException.ErrorSource` and
-`ErrorCode` are only reported by restate-server 1.7.4 and newer.
+Scope and limit key are protocol v7 fields, so a handler that sets either on a stream the server
+negotiated below v7 fails the call with an `ArgumentException` instead of losing the flow control
+silently; the server has to negotiate v7 for them (restate-server 1.8 does by default). On the
+ingress client they are carried in the request URL, so no negotiation applies. One feature degrades
+rather than fails against older servers: `RestateIngressException.ErrorSource` and `ErrorCode` are
+only reported by restate-server 1.7.4 and newer.
 
 ## Contributing
 

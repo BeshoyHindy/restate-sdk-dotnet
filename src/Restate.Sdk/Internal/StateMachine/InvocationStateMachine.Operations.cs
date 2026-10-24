@@ -539,6 +539,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
             return ReplayResultAsync<TResponse>(JournalEntryType.Call);
@@ -552,6 +553,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
             return ReplayResultAsync<TResponse>(JournalEntryType.Call);
@@ -578,6 +580,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
             return ReplaySendAsync();
@@ -591,6 +594,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
             return ReplaySendAsync();
@@ -605,6 +609,7 @@ internal sealed partial class InvocationStateMachine
     {
         EnsureActive();
         FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        FlowControl.ValidateVersion(options.Scope, options.LimitKey, NegotiatedVersion, nameof(options));
 
         if (State == InvocationState.Replaying)
         {

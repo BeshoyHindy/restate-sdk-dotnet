@@ -145,6 +145,22 @@ public class CallGreeterService
 }
 
 /// <summary>
+///     A service that calls a downstream handler inside a concurrency scope — used to verify
+///     that a stream below V7, which cannot carry the scope, fails the attempt instead of
+///     dropping the flow control the handler asked for.
+/// </summary>
+[Service(Name = "ScopedCallGreeter")]
+public class ScopedCallGreeterService
+{
+    [Handler]
+    public async Task<string> Greet(Context ctx, string name)
+    {
+        return await ctx.Call<string>("Downstream", "Get", name,
+            options: CallOptions.WithScope("tenant-a", "customer-7"));
+    }
+}
+
+/// <summary>
 ///     A service with a durable side effect — used to verify Run replay semantics: a stored
 ///     completion resolves without re-executing, a missing one re-executes and re-proposes.
 /// </summary>
@@ -425,6 +441,57 @@ public class ProtocolIntegrationTests
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);
 
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ScopedCallOnV6_EndsWithRetryableErrorAndNoCallCommand()
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        var startPayload = BuildStartMessagePayload("scoped-inv-1", 1, "test-key", 42);
+        var inputCommandPayload = BuildInputCommandPayload(inputJson);
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(ScopedCallGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == "Greet");
+
+        var handler = new InvocationHandler();
+
+        // CallCommand.scope arrived in V7: on a V6 stream the handler asked for flow control the
+        // server cannot see. The ArgumentException is a usage error, so it surfaces the way any
+        // unhandled exception does — a retryable ErrorMessage 500 ending the attempt. The user
+        // keeps retrying until the code or the server changes, which beats a silent drop.
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new ScopedCallGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        var responseData = responseStream.ToArray();
+        var offset = 0;
+
+        var (errorHeader, errorPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Error, errorHeader.Type);
+        var (code, message) = ExtractErrorFields(errorPayload);
+        Assert.Equal(500u, code);
+        Assert.Contains("V7", message, StringComparison.Ordinal);
+        Assert.Contains("V6", message, StringComparison.Ordinal);
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        // Error + End is the whole response: no CallCommand was written, so the scope was not
+        // dropped on the way to a server that would have ignored it.
         Assert.Equal(responseData.Length, offset);
     }
 
