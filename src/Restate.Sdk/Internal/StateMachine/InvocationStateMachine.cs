@@ -28,13 +28,13 @@ internal sealed partial class InvocationStateMachine : IDisposable
 {
     private static readonly IReadOnlyDictionary<string, string> EmptyHeaders = FrozenDictionary<string, string>.Empty;
     private static readonly JsonWriterOptions WriterOptions = new() { SkipValidation = true };
-    private readonly CompletionManager<int> _completions = new();
-    private readonly CompletionManager<int> _signalCompletions = new();
+    private readonly CompletionManager<int> _completions;
+    private readonly CompletionManager<int> _signalCompletions;
 
     // Signals the handler awaits by name rather than by index. Keyed by the name the runtime
     // echoes back in SignalNotification, so a named signal resolves the same way an indexed one
     // does — including notifications replayed ahead of the handler.
-    private readonly CompletionManager<string> _namedSignals = new();
+    private readonly CompletionManager<string> _namedSignals;
     private readonly InvocationJournal _journal = new();
     private readonly ProtocolReader _reader;
 
@@ -79,6 +79,15 @@ internal sealed partial class InvocationStateMachine : IDisposable
     {
         _reader = reader;
         _writer = writer;
+
+        // One clock for all three managers: a combinator may be handed waits settled through
+        // different managers (a call raced against a signal), and their results have to be
+        // comparable to replay the branch the original attempt took.
+        var arrivals = new ArrivalClock();
+        _completions = new CompletionManager<int>(arrivals);
+        _signalCompletions = new CompletionManager<int>(arrivals);
+        _namedSignals = new CompletionManager<string>(arrivals);
+
         JsonOptions = jsonOptions ?? JsonSerde.SerializerOptions;
         Logger = logger ?? NullLogger.Instance;
         NegotiatedVersion = negotiatedVersion;

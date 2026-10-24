@@ -297,6 +297,46 @@ public class FanOutGreeterService
 }
 
 /// <summary>
+///     A service whose handlers combine two durable futures — used by the combinator replay
+///     tests, which resume a journal whose completions were delivered in an order that differs
+///     from the order the futures are passed in.
+/// </summary>
+[Service(Name = "CombinatorGreeter")]
+public class CombinatorGreeterService
+{
+    [Handler]
+    public async Task<string> Race(Context ctx, string name)
+    {
+        var first = ctx.CallFuture<string>("Downstream", "A", name);
+        var second = ctx.CallFuture<string>("Downstream", "B", name);
+
+        return await ctx.Race(first, second);
+    }
+
+    [Handler]
+    public async Task<string> Any(Context ctx, string name)
+    {
+        var first = ctx.CallFuture<string>("Downstream", "A", name);
+        var second = ctx.CallFuture<string>("Downstream", "B", name);
+
+        return await ctx.Any(first, second);
+    }
+
+    [Handler]
+    public async Task<string> Wait(Context ctx, string name)
+    {
+        var call = ctx.CallFuture<string>("Downstream", "Get", name);
+        var timer = ctx.Timer(TimeSpan.FromMinutes(5));
+
+        var order = new List<string>();
+        await foreach (var (future, _) in ctx.WaitAll(call, timer))
+            order.Add(ReferenceEquals(future, call) ? "call" : "timer");
+
+        return string.Join(",", order);
+    }
+}
+
+/// <summary>
 ///     A service that cancels another invocation and then sleeps — used to verify that a
 ///     journaled SendSignalCommand (ctx.CancelInvocation) replays instead of failing the drain.
 /// </summary>
@@ -1011,6 +1051,228 @@ public class ProtocolIntegrationTests
         var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
         Assert.Equal("\"downstream-result-done\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+
+        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.End, endHeader.Type);
+
+        Assert.Equal(responseData.Length, offset);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRace_PicksTheWinnerTheJournalRecorded()
+    {
+        // The journal delivered the second future's completion first, so the original attempt
+        // returned its result. Replay must pick the same winner — with every completion already
+        // settled, argument order must not decide the race.
+        var responseData = await RunReplayedTwoCallJournalAsync("Race", 4, 2);
+
+        AssertCompletedWith(responseData, "\"from-b\"");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedRace_FirstCompletionFirst_PicksTheFirstFuture()
+    {
+        // Mirror of the test above: the journal delivered the first future's completion first,
+        // so that future wins — the branch follows the journal rather than being flipped.
+        var responseData = await RunReplayedTwoCallJournalAsync("Race", 2, 4);
+
+        AssertCompletedWith(responseData, "\"from-a\"");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedAny_PicksTheWinnerTheJournalRecorded()
+    {
+        var responseData = await RunReplayedTwoCallJournalAsync("Any", 4, 2);
+
+        AssertCompletedWith(responseData, "\"from-b\"");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedAny_FirstCompletionFirst_PicksTheFirstFuture()
+    {
+        var responseData = await RunReplayedTwoCallJournalAsync("Any", 2, 4);
+
+        AssertCompletedWith(responseData, "\"from-a\"");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedWaitAll_YieldsInJournaledCompletionOrder()
+    {
+        // The journal delivered the sleep completion (id 3) before the call completion (id 2),
+        // so the original attempt saw the timer first. The replayed enumeration must match.
+        var responseData = await RunReplayedCallAndTimerJournalAsync(3, 2);
+
+        AssertCompletedWith(responseData, "\"timer,call\"");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ReplayedWaitAll_CallCompletionFirst_YieldsCallFirst()
+    {
+        var responseData = await RunReplayedCallAndTimerJournalAsync(2, 3);
+
+        AssertCompletedWith(responseData, "\"call,timer\"");
+    }
+
+    /// <summary>
+    ///     Runs a <see cref="CombinatorGreeterService" /> handler against a resumed journal of
+    ///     <paramref name="knownEntries" /> entries: Start, the InputCommand, then whatever
+    ///     <paramref name="writeJournal" /> appends.
+    /// </summary>
+    private static async Task<byte[]> RunReplayedCombinatorJournalAsync(string handlerName,
+        Action<MemoryStream> writeJournal, uint knownEntries)
+    {
+        var startPayload = BuildStartMessagePayload("combinator-inv-1", knownEntries, "test-key", 7);
+        var inputCommandPayload = BuildInputCommandPayload(JsonSerializer.SerializeToUtf8Bytes("World"));
+
+        var requestStream = new MemoryStream();
+        WriteFramedMessage(requestStream, MessageType.Start, startPayload);
+        WriteFramedMessage(requestStream, MessageType.InputCommand, inputCommandPayload);
+        writeJournal(requestStream);
+        requestStream.Position = 0;
+
+        var responseStream = new MemoryStream();
+
+        var serviceDef = ServiceDefinitionRegistry.TryGet(typeof(CombinatorGreeterService))!;
+        var handlerDef = serviceDef.Handlers.First(h => h.Name == handlerName);
+
+        var handler = new InvocationHandler();
+
+        await handler.HandleAsync(
+            PipeReader.Create(requestStream),
+            PipeWriter.Create(responseStream),
+            serviceDef,
+            handlerDef,
+            new FuncServiceProvider(_ => new CombinatorGreeterService()),
+            ServiceProtocolVersion.V6,
+            CancellationToken.None);
+
+        return responseStream.ToArray();
+    }
+
+    /// <summary>
+    ///     Replays a journal of two call futures: both CallCommands, both invocation-id
+    ///     notifications, then the two result notifications in
+    ///     <paramref name="resultCompletionOrder" /> — the order the runtime delivered them on
+    ///     the original attempt. Completion id 2 is the first future ("from-a"), id 4 the
+    ///     second ("from-b").
+    /// </summary>
+    private static Task<byte[]> RunReplayedTwoCallJournalAsync(string handlerName,
+        params uint[] resultCompletionOrder)
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        return RunReplayedCombinatorJournalAsync(handlerName, requestStream =>
+        {
+            WriteFramedMessage(requestStream, MessageType.CallCommand, new Gen.CallCommandMessage
+            {
+                ServiceName = "Downstream",
+                HandlerName = "A",
+                Parameter = ByteString.CopyFrom(inputJson),
+                InvocationIdNotificationIdx = 1,
+                ResultCompletionId = 2
+            }.ToByteArray());
+            WriteFramedMessage(requestStream, MessageType.CallCommand, new Gen.CallCommandMessage
+            {
+                ServiceName = "Downstream",
+                HandlerName = "B",
+                Parameter = ByteString.CopyFrom(inputJson),
+                InvocationIdNotificationIdx = 3,
+                ResultCompletionId = 4
+            }.ToByteArray());
+
+            uint[] invocationIdNotifications = [1, 3];
+            foreach (var completionId in invocationIdNotifications)
+            {
+                WriteFramedMessage(requestStream, MessageType.CallInvocationIdCompletion,
+                    new Gen.CallInvocationIdCompletionNotificationMessage
+                    {
+                        CompletionId = completionId,
+                        InvocationId = $"inv-downstream-{completionId}"
+                    }.ToByteArray());
+            }
+
+            foreach (var completionId in resultCompletionOrder)
+            {
+                WriteFramedMessage(requestStream, MessageType.CallCompletion,
+                    new Gen.CallCompletionNotificationMessage
+                    {
+                        CompletionId = completionId,
+                        Value = new Gen.Value
+                        {
+                            Content = ByteString.CopyFrom(
+                                JsonSerializer.SerializeToUtf8Bytes(completionId == 2 ? "from-a" : "from-b"))
+                        }
+                    }.ToByteArray());
+            }
+        }, 7);
+    }
+
+    /// <summary>
+    ///     Replays a resumed journal of a call future (completion id 2) and a timer
+    ///     (completion id 3) through <see cref="CombinatorGreeterService" />'s WaitAll handler,
+    ///     with the two result notifications in <paramref name="resultCompletionOrder" />.
+    /// </summary>
+    private static Task<byte[]> RunReplayedCallAndTimerJournalAsync(params uint[] resultCompletionOrder)
+    {
+        var inputJson = JsonSerializer.SerializeToUtf8Bytes("World");
+
+        return RunReplayedCombinatorJournalAsync("Wait", requestStream =>
+        {
+            WriteFramedMessage(requestStream, MessageType.CallCommand, new Gen.CallCommandMessage
+            {
+                ServiceName = "Downstream",
+                HandlerName = "Get",
+                Parameter = ByteString.CopyFrom(inputJson),
+                InvocationIdNotificationIdx = 1,
+                ResultCompletionId = 2
+            }.ToByteArray());
+            WriteFramedMessage(requestStream, MessageType.SleepCommand, new Gen.SleepCommandMessage
+            {
+                WakeUpTime = (ulong)DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+                ResultCompletionId = 3
+            }.ToByteArray());
+            WriteFramedMessage(requestStream, MessageType.CallInvocationIdCompletion,
+                new Gen.CallInvocationIdCompletionNotificationMessage
+                {
+                    CompletionId = 1,
+                    InvocationId = "inv-downstream"
+                }.ToByteArray());
+
+            foreach (var completionId in resultCompletionOrder)
+            {
+                if (completionId == 3)
+                {
+                    WriteFramedMessage(requestStream, MessageType.SleepCompletion,
+                        new Gen.SleepCompletionNotificationMessage
+                        {
+                            CompletionId = 3,
+                            Void = new Gen.Void()
+                        }.ToByteArray());
+                }
+                else
+                {
+                    WriteFramedMessage(requestStream, MessageType.CallCompletion,
+                        new Gen.CallCompletionNotificationMessage
+                        {
+                            CompletionId = completionId,
+                            Value = new Gen.Value
+                            {
+                                Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("from-call"))
+                            }
+                        }.ToByteArray());
+                }
+            }
+        }, 6);
+    }
+
+    /// <summary>Asserts the response is exactly an OutputCommand carrying the given JSON, then End.</summary>
+    private static void AssertCompletedWith(byte[] responseData, string expectedJson)
+    {
+        var offset = 0;
+
+        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
+        Assert.Equal(expectedJson, Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
 
         var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
         Assert.Equal(MessageType.End, endHeader.Type);

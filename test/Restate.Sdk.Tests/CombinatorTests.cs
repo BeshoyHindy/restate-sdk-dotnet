@@ -20,12 +20,17 @@ public class CombinatorTests
         return (new DurableFuture<T>(tcs, JsonSerializerOptions.Default), tcs);
     }
 
-    private static void Complete<T>(TaskCompletionSource<CompletionResult> tcs, T value)
+    private static CompletionResult Serialized<T>(T value)
     {
         var buffer = new ArrayBufferWriter<byte>();
         JsonSerializer.Serialize(
             new Utf8JsonWriter(buffer), value);
-        tcs.SetResult(CompletionResult.Success(buffer.WrittenMemory));
+        return CompletionResult.Success(buffer.WrittenMemory);
+    }
+
+    private static void Complete<T>(TaskCompletionSource<CompletionResult> tcs, T value)
+    {
+        tcs.SetResult(Serialized(value));
     }
 
     // ── All ──
@@ -110,6 +115,49 @@ public class CombinatorTests
         var result = await ctx.Race(f1, f2);
 
         Assert.Equal("fast", result);
+    }
+
+    [Fact]
+    public async Task Race_SettledFutures_PicksTheEarlierArrival()
+    {
+        // Replay settles every journaled completion before the handler runs, so the race is
+        // decided by the order the runtime delivered the results, not by argument order.
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(2, Serialized("second"));
+        manager.TryComplete(1, Serialized("first"));
+
+        var ctx = new BareContext();
+        var f1 = new DurableFuture<string>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+        var f2 = new DurableFuture<string>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+        Assert.Equal("second", await ctx.Race(f1, f2));
+    }
+
+    [Fact]
+    public async Task WaitAll_SettledAndPendingFutures_YieldsSettledInArrivalOrder()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(2, Serialized(20));
+        manager.TryComplete(3, Serialized(30));
+
+        var ctx = new BareContext();
+        var settledSecond = new DurableFuture<int>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+        var stillWaiting = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+        var settledThird = new DurableFuture<int>(manager.GetOrRegister(3), JsonSerializerOptions.Default);
+
+        var yielded = new List<IDurableFuture>();
+        var enumeration = Task.Run(async () =>
+        {
+            await foreach (var (future, _) in ctx.WaitAll(settledThird, stillWaiting, settledSecond))
+                yielded.Add(future);
+        });
+
+        manager.TryComplete(1, Serialized(10));
+        await enumeration;
+
+        // The two journaled futures come in delivery order; the one that was still waiting is
+        // yielded when its result arrives.
+        Assert.Equal([settledSecond, settledThird, stillWaiting], yielded);
     }
 
     // ── WaitAll ──
