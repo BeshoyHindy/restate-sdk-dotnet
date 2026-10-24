@@ -14,10 +14,12 @@ public interface IContext
     ///     Reported by the default implementations of the options overloads below. They exist so
     ///     that adding an overload does not break external implementations of this interface
     ///     (mirroring <see cref="Logger" />); an implementation that has not overridden them
-    ///     cannot honour a scope or limit key, and says so instead of dropping it.
+    ///     cannot honour a scope or limit key, and says so instead of dropping it. The options the
+    ///     option-less overloads can carry are forwarded instead of reported.
     /// </summary>
     private const string OptionsNotSupported =
-        "This IContext implementation does not support call or send options; override the overload that takes them.";
+        "This IContext implementation does not support the flow-control scope or limit key; " +
+        "override the overload that takes call or send options.";
 
     /// <summary>Reported by the default implementations of the signal overloads below.</summary>
     private const string SignalsNotSupported =
@@ -91,14 +93,20 @@ public interface IContext
 
     /// <summary>
     ///     Calls a handler with typed request/response serialization and call options
-    ///     (idempotency key, scope, limit key). Defaults to the option-less overload, so external
-    ///     implementations keep compiling; an implementation that cannot honour the options
-    ///     reports that rather than dropping them.
+    ///     (idempotency key, scope, limit key). Defaulted so that external implementations keep
+    ///     compiling: an idempotency key is forwarded to the untyped options overload, which
+    ///     carries it, while a scope or limit key — which no other overload carries — is reported
+    ///     rather than dropped. Override this overload to serialize the request with its static
+    ///     type while honouring a scope or limit key.
     /// </summary>
     ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request, string? key,
         CallOptions options) =>
-        options == default
-            ? Call<TRequest, TResponse>(service, handler, request, key)
+        options.Scope is null && options.LimitKey is null
+            ? options.IdempotencyKey is null
+                ? Call<TRequest, TResponse>(service, handler, request, key)
+                : key is null
+                    ? Call<TResponse>(service, handler, request, options)
+                    : Call<TResponse>(service, key, handler, request, options)
             : throw new NotSupportedException(OptionsNotSupported);
 
     /// <summary>
@@ -221,21 +229,26 @@ public interface IContext
 
     /// <summary>
     ///     Calls a handler with call options (idempotency key, scope, limit key) and returns a
-    ///     non-blocking future.
+    ///     non-blocking future. Defaulted so that external implementations keep compiling: a scope
+    ///     or limit key is reported rather than dropped, and anything else falls through to the
+    ///     option-less overload. No option-less future overload carries an idempotency key, so
+    ///     override this overload to honour one.
     /// </summary>
     IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
         CallOptions options) =>
-        options == default
+        options.Scope is null && options.LimitKey is null
             ? CallFuture<TResponse>(service, handler, request)
             : throw new NotSupportedException(OptionsNotSupported);
 
     /// <summary>
     ///     Calls a handler on a keyed virtual object or workflow with call options and returns a
-    ///     non-blocking future.
+    ///     non-blocking future. Defaulted like
+    ///     <see cref="CallFuture{TResponse}(string, string, object?, CallOptions)" />, with the same
+    ///     limits on the options it honours.
     /// </summary>
     IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler, object? request,
         CallOptions options) =>
-        options == default
+        options.Scope is null && options.LimitKey is null
             ? CallFuture<TResponse>(service, key, handler, request)
             : throw new NotSupportedException(OptionsNotSupported);
 }
