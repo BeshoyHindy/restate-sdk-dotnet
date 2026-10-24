@@ -50,9 +50,21 @@ jobs:
 
       # Auto-merge only schedules the merge: branch protection still gates it,
       # so the PR merges once every required check passes.
+      #
+      # The merge is armed with a dedicated credential instead of `GITHUB_TOKEN`, because a
+      # merge performed with `GITHUB_TOKEN` raises no workflow events: the squash commit lands
+      # on `main` without a push-triggered CI, docs or CodeQL run. An empty secret fails the
+      # step, so an expired credential cannot look like a merge that was skipped on purpose.
       - name: Enable auto-merge
         if: steps.classify.outputs.low-risk == 'true'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::AUTO_MERGE_TOKEN is missing or expired. This job runs as" \
+              "dependabot[bot], so the secret is needed under both Actions and Dependabot secrets."
+            exit 1
+          fi
+
+          gh pr merge --auto --squash "$PR_URL"
