@@ -346,8 +346,10 @@ await target.ResolveSignal(ctx, "approval", "granted");
 // ...or reject it: the awaiting handler fails with the reason
 await target.RejectSignal(ctx, "approval", "not approved");
 
-// Unnamed signals (ctx.Signal<T>()) are addressed by index instead -- the first is 17
-await ctx.ResolveSignal(target.InvocationId, 17, "granted");
+// Unnamed signals are addressed by index instead of name. The awaiting handler reads the index
+// from the handle ctx.Signal<T>() returns (handle.Index) and publishes it -- in state, or by
+// calling the resolver -- so nobody has to assume which index it allocated.
+await target.ResolveSignal(ctx, signalIndex, "granted");
 ```
 
 Signals are durable futures, so they compose with `All`, `Race`, `Any` and `AllSettled` like any

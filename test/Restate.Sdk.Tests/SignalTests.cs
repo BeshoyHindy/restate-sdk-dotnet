@@ -125,6 +125,102 @@ public class SignalTests : IDisposable
     }
 
     [Fact]
+    public async Task UnnamedSignalHandle_CarriesTheIndexThatResolvesIt()
+    {
+        var handle = _ctx.Signal<int>();
+
+        Assert.Equal(InvocationStateMachine.FirstUserSignalIndex, handle.Index);
+
+        await ResolveAsync(handle.Index, 7);
+
+        Assert.Equal(7, await handle.GetResult());
+    }
+
+    [Fact]
+    public async Task UnnamedSignalHandles_AdvanceOneIndexPerSignal()
+    {
+        var first = _ctx.Signal<int>();
+        var second = _ctx.Signal<int>();
+
+        Assert.Equal(first.Index + 1, second.Index);
+
+        await ResolveAsync(second.Index, 2);
+        await ResolveAsync(first.Index, 1);
+
+        Assert.Equal(1, await first.GetResult());
+        Assert.Equal(2, await second.GetResult());
+    }
+
+    [Fact]
+    public async Task UnnamedSignalHandles_ShareTheIndexSequenceWithAwakeables()
+    {
+        var first = _ctx.Signal<string>();
+        var awakeable = _ctx.Awakeable<string>();
+        var second = _ctx.Signal<string>();
+
+        // The awakeable took the index between the two signals, so the second handle reports the
+        // index the allocator handed out rather than a count of the handler's own signals.
+        Assert.Equal(first.Index + 2, second.Index);
+
+        await ResolveAsync(first.Index, "first");
+        await ResolveAsync(first.Index + 1, "from-awakeable");
+        await ResolveAsync(second.Index, "second");
+
+        Assert.Equal("first", await first.GetResult());
+        Assert.Equal("from-awakeable", await awakeable.Value);
+        Assert.Equal("second", await second.GetResult());
+    }
+
+    [Fact]
+    public async Task UnnamedSignalHandle_Rejected_ThrowsTerminalException()
+    {
+        var handle = _ctx.Signal<string>();
+
+        await WriteInboundAsync(new Gen.SignalNotificationMessage
+        {
+            Idx = (uint)handle.Index,
+            Failure = new Gen.Failure { Code = 403, Message = "denied" }
+        });
+
+        var ex = await Assert.ThrowsAsync<TerminalException>(() => handle.GetResult().AsTask());
+        Assert.Equal(403, ex.Code);
+        Assert.Equal("denied", ex.Message);
+    }
+
+    [Fact]
+    public async Task UnnamedSignalHandle_ResolvedBeforeTheHandlerAwaits_ResolvesFromTheJournal()
+    {
+        // On replay the notification arrives before the handler reaches the signal. The
+        // notification for the index the next unnamed signal allocates is written first, then one
+        // for an already-registered name: the reader handles frames in order, so the named signal
+        // settling proves the unnamed notification was stored before the handle was allocated.
+        var sentinel = _ctx.Signal<string>("sentinel");
+        await ResolveAsync(InvocationStateMachine.FirstUserSignalIndex, 42);
+        await ResolveAsync("sentinel", "arrived");
+        Assert.Equal("arrived", await sentinel.GetResult());
+
+        var handle = _ctx.Signal<int>();
+
+        // Already settled: the handler takes the journaled value instead of waiting again.
+        var result = handle.GetResult();
+        Assert.True(result.IsCompleted);
+        Assert.Equal(42, await result);
+    }
+
+    [Fact]
+    public async Task UnnamedSignalHandles_ComposeWithRace()
+    {
+        var slow = _ctx.Signal<string>();
+        var quick = _ctx.Signal<string>();
+
+        var race = _ctx.Race(slow, quick);
+
+        await ResolveAsync(quick.Index, "won");
+
+        Assert.Equal("won", await race);
+    }
+
+    [Fact]
     public async Task Signals_ComposeWithAll()
     {
         var first = _ctx.Signal<string>("first");

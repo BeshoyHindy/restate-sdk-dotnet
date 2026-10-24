@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Moves every PublicAPI.Unshipped.txt entry into the PublicAPI.Shipped.txt beside it.
+# Moves every PublicAPI.Unshipped.txt entry into the PublicAPI.Shipped.txt beside it, and
+# applies the *REMOVED* entries by deleting the symbols they name from the shipped file.
 # Run on the release pull request, where the version and changelog already change: the API
 # that PR releases stops being unshipped the moment it is published.
 # Usage: roll-public-api.sh [root-directory]   (defaults to the repository root)
@@ -13,6 +14,17 @@ rolled=0
 # Strips the nullable header and blank lines, leaving the API entries.
 entries_of() {
     grep -v -e "^$HEADER\$" -e '^[[:space:]]*$' "$1" || true
+}
+
+# An entry marked *REMOVED* records that a shipped API is gone. It deletes the symbol from the
+# shipped file instead of being copied into it: the analyzer rejects the marker there (RS0024),
+# and the entry it names no longer exists.
+removals_of() {
+    entries_of "$1" | sed -n 's/^\*REMOVED\*//p'
+}
+
+additions_of() {
+    entries_of "$1" | grep -v '^\*REMOVED\*' || true
 }
 
 while IFS= read -r unshipped; do
@@ -27,9 +39,15 @@ while IFS= read -r unshipped; do
         continue
     fi
 
+    removals="$(removals_of "$unshipped")"
+    kept="$(entries_of "$shipped")"
+    if [ -n "$removals" ]; then
+        kept="$(printf '%s\n' "$kept" | grep -F -x -v -f <(printf '%s\n' "$removals") || true)"
+    fi
+
     {
         echo "$HEADER"
-        printf '%s\n%s\n' "$(entries_of "$shipped")" "$unshipped_entries" \
+        printf '%s\n%s\n' "$kept" "$(additions_of "$unshipped")" \
             | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u
     } > "$shipped.rolled"
     mv "$shipped.rolled" "$shipped"

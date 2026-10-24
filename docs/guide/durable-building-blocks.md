@@ -66,9 +66,10 @@ var payload = await awakeable.Value;
 ## Signals
 
 A **signal** is a durable value delivered to a running invocation from outside it. The handler
-awaits it; anything holding the **invocation handle** — another handler or an ingress caller —
-resolves or rejects it. Unlike an awakeable, a named signal needs no id to be passed around: the
-name is the rendezvous point.
+awaits it; another handler holding the **invocation handle** resolves or rejects it. The ingress
+addresses signals by awakeable id only, so a signal awaited by name has no ingress route — use an
+awakeable when an external system must complete it. Unlike an awakeable, a named signal needs no id
+to be passed around: the name is the rendezvous point.
 
 ```csharp
 // Named signal: the resolver addresses this invocation and the name "approval"
@@ -78,8 +79,9 @@ var decision = await approval.GetResult();
 // Signals are durable futures, so they compose like any other
 var first = await ctx.Race(ctx.Signal<string>("approved"), ctx.Signal<string>("rejected"));
 
-// Unnamed signal: addressed by the index this call allocates (the first is 17)
-var unnamed = await ctx.Signal<string>().GetResult();
+// Unnamed signal: the handle carries the index this call allocates, which addresses the signal
+var handle = ctx.Signal<string>();
+var unnamed = await handle.GetResult();
 ```
 
 > Signal an invocation only once it has started. On restate-server 1.8.1 and later a signal sent to
@@ -105,9 +107,11 @@ await target.ResolveSignal(ctx, "approval", "granted");
 // Or reject it: the awaiting handler fails with a TerminalException carrying the reason
 await target.RejectSignal(ctx, "approval", "not approved");
 
-// Unnamed signals are addressed by index instead of name
-await ctx.ResolveSignal(target.InvocationId, 17, "granted");
-await ctx.RejectSignal(target.InvocationId, 17, "not approved");
+// Unnamed signals are addressed by index instead of name. The awaiting handler reads the index
+// from the handle ctx.Signal<T>() returned (handle.Index) and publishes it — in state, or by
+// calling the resolver — so nobody has to assume which index it allocated.
+await target.ResolveSignal(ctx, signalIndex, "granted");
+await target.RejectSignal(ctx, signalIndex, "not approved");
 ```
 
 From outside the runtime, `RestateClient` completes a signal by **id** — the id an invocation hands

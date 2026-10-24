@@ -145,23 +145,27 @@ public abstract class Context : IContext
     public abstract Awakeable<T> Awakeable<T>(ISerde<T>? serde = null);
 
     /// <summary>
-    ///     Awaits a signal by name. Anything holding this invocation handle — another handler or
-    ///     an ingress caller — resolves or rejects the signal by that name, and the returned
-    ///     future composes with <see cref="All{T}" />, <see cref="Race{T}" />, <see cref="Any{T}" />
-    ///     and <see cref="AllSettled{T}" /> like any other durable future.
+    ///     Awaits a signal by name. Another handler holding this invocation handle resolves or
+    ///     rejects the signal by that name, and the returned future composes with
+    ///     <see cref="All{T}" />, <see cref="Race{T}" />, <see cref="Any{T}" /> and
+    ///     <see cref="AllSettled{T}" /> like any other durable future.
     ///     A signal resolved before this attempt started resolves from the journal on replay.
+    ///     The ingress addresses signals by awakeable id only, so a named signal has no ingress
+    ///     route — use <see cref="Awakeable{T}" /> when an external system must complete it.
     /// </summary>
     /// <param name="name">The signal name the resolver addresses. Must not be empty.</param>
     public abstract IDurableFuture<T> Signal<T>(string name);
 
     /// <summary>
-    ///     Awaits an unnamed signal, addressed by the index this call allocates (the first is 17;
-    ///     0-16 are reserved for built-in signals). The index comes from the same allocator
-    ///     <see cref="Awakeable{T}" /> uses: an awakeable is an unnamed signal plus the opaque id
-    ///     that addresses it, so use <see cref="Awakeable{T}" /> when the resolver needs an id to
-    ///     carry around, and this when the resolver addresses the invocation handle and index.
+    ///     Awaits an unnamed signal, addressed by the index this call allocates: the returned
+    ///     <see cref="SignalHandle{T}" /> carries that index alongside the future. Indices below
+    ///     the first user index are reserved for built-in signals, and they come from the same
+    ///     allocator <see cref="Awakeable{T}" /> uses — an awakeable is an unnamed signal plus the
+    ///     opaque id that addresses it, so use <see cref="Awakeable{T}" /> when the resolver needs
+    ///     an id to carry around, and this when the resolver addresses the invocation handle and
+    ///     <see cref="SignalHandle{T}.Index" />.
     /// </summary>
-    public abstract IDurableFuture<T> Signal<T>();
+    public abstract SignalHandle<T> Signal<T>();
 
     /// <summary>
     ///     Resolves a named signal on another invocation. The awaiting handler receives

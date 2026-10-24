@@ -523,10 +523,10 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Resolves a signal on a running invocation with a value.
     ///     <para>
-    ///         <paramref name="signalId" /> is the id an invocation hands out for an unnamed
-    ///         signal — <c>ctx.Awakeable&lt;T&gt;().Id</c>. The ingress addresses signals by id
-    ///         only: a signal awaited by name can be resolved from a handler
-    ///         (<c>InvocationHandle.ResolveSignal</c>) but has no ingress route.
+    ///         <paramref name="signalId" /> is an awakeable id — the id an invocation hands out
+    ///         for an unnamed signal, <c>ctx.Awakeable&lt;T&gt;().Id</c> — not an invocation id.
+    ///         The ingress addresses signals by id only: a signal awaited by name can be resolved
+    ///         from a handler (<c>InvocationHandle.ResolveSignal</c>) but has no ingress route.
     ///     </para>
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="signalId" /> is <see langword="null" />.</exception>
@@ -545,6 +545,7 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Resolves a signal on a running invocation with a value.
     ///     AOT-safe: serializes the value using the provided <see cref="JsonTypeInfo{T}" />.
+    ///     <paramref name="signalId" /> is an awakeable id, as it is for the overload above.
     /// </summary>
     /// <exception cref="ArgumentNullException">
     ///     <paramref name="signalId" /> or <paramref name="valueTypeInfo" /> is null.
@@ -564,6 +565,12 @@ public sealed class RestateClient : IDisposable
     /// <summary>
     ///     Rejects a signal on a running invocation: the handler awaiting it fails with a terminal
     ///     error carrying <paramref name="reason" />.
+    ///     <para>
+    ///         <paramref name="signalId" /> is an awakeable id — <c>ctx.Awakeable&lt;T&gt;().Id</c>
+    ///         — not an invocation id. The ingress addresses signals by id only: a signal awaited
+    ///         by name can be rejected from a handler (<c>InvocationHandle.RejectSignal</c>) but
+    ///         has no ingress route.
+    ///     </para>
     /// </summary>
     /// <exception cref="ArgumentNullException">
     ///     <paramref name="signalId" /> or <paramref name="reason" /> is <see langword="null" />.

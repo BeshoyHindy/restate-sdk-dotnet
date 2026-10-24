@@ -87,6 +87,24 @@ public sealed class PublicApiRollTests : IDisposable
         Assert.Equal(["#nullable enable"], ReadLines(root, "Extras", "PublicAPI.Unshipped.txt"));
     }
 
+    /// <summary>
+    ///     A breaking change lists the API it drops as a <c>*REMOVED*</c> entry. Rolling it has to
+    ///     delete the symbol from the shipped file: copying either the marker or the dropped entry
+    ///     across leaves a shipped file the analyzer rejects (RS0024 for the marker, RS0017 for a
+    ///     symbol that no longer exists).
+    /// </summary>
+    [BashFact]
+    public void Roll_applies_removed_entries_by_deleting_them_from_shipped()
+    {
+        var root = CreateFixture(("Core", ["*REMOVED*Existing.Core", "Api.Alpha"]));
+
+        var output = RunRollScript(root);
+
+        Assert.Contains("Rolled 2 entries", output, StringComparison.Ordinal);
+        Assert.Equal(["#nullable enable", "Api.Alpha"], ReadLines(root, "Core", "PublicAPI.Shipped.txt"));
+        Assert.Equal(["#nullable enable"], ReadLines(root, "Core", "PublicAPI.Unshipped.txt"));
+    }
+
     [BashFact]
     public void Roll_is_idempotent_when_nothing_is_unshipped()
     {

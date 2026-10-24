@@ -220,7 +220,7 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     }
 
     /// <inheritdoc />
-    public override IDurableFuture<T> Signal<T>()
+    public override SignalHandle<T> Signal<T>()
     {
         return BaseContext.Signal<T>();
     }

@@ -323,22 +323,37 @@ assert_void_response \
     "http://localhost:8080/TicketObject/ticket-2/GetStatus" \
     '"state":0'
 
-# --- Signup Workflow (workflow + promises + awakeables) ---
+# --- Signup Workflow (workflow + state + signals) ---
 
-# Send the workflow — it will block on the awakeable, so use the /send endpoint (returns 202)
+# Send the workflow — it will block on the signal, so use the /send endpoint (returns 202)
 assert_status \
     "SignupWorkflow/Run (send workflow)" \
     "http://localhost:8080/SignupWorkflow/test-user/Run/send" \
     '{"email":"test@example.com","name":"Test User"}' \
     "202"
 
-# Give the workflow time to start and reach the awakeable
+# Give the workflow time to start and reach the signal
 sleep 2
 
 assert_void_response \
     "SignupWorkflow/GetStatus (query)" \
     "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
     "awaiting-verification"
+
+# The verification link resolves the "email-verified" signal the Run handler awaits, through the
+# invocation handle the workflow published in state.
+assert_void_response \
+    "SignupWorkflow/Verify (resolve the signal)" \
+    "http://localhost:8080/SignupWorkflow/test-user/Verify" \
+    "verified"
+
+# Give the resumed Run handler time to activate the account
+sleep 2
+
+assert_void_response \
+    "SignupWorkflow/GetStatus (after verification)" \
+    "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
+    "completed"
 
 echo ""
 echo "=== Regular Tests Passed ==="
@@ -379,11 +394,6 @@ fi
 
 docker rm -f "$SUSPEND_CONTAINER" >/dev/null
 echo ""
-
-# NOTE: An ingress awakeable round-trip for SignupWorkflow is intentionally not
-# tested here. The sample's EmailService stub discards the awakeable ID (it is
-# never logged or returned), so there is no scriptable way to obtain the ID and
-# call /restate/awakeables/{id}/resolve without contorting the sample.
 
 # === Phase 3: Request identity verification ===
 # A third restate-server is given an Ed25519 request-identity private key

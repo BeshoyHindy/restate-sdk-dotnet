@@ -270,10 +270,10 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         return SignalFuture<T>(_stateMachine.RegisterSignal(name));
     }
 
-    public override IDurableFuture<T> Signal<T>()
+    public override SignalHandle<T> Signal<T>()
     {
-        var (_, tcs) = _stateMachine.RegisterSignal();
-        return SignalFuture<T>(tcs);
+        var (index, tcs) = _stateMachine.RegisterSignal();
+        return new SignalHandle<T>(index, SignalFuture<T>(tcs));
     }
 
     /// <summary>

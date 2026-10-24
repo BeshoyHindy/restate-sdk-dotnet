@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Restate.Sdk.Internal;
+using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Testing;
 
@@ -25,6 +26,9 @@ public sealed class MockContext : Context
     private readonly List<RecordedSleep> _sleeps = [];
     private int _invocationCounter;
     private ILogger _logger = NullLogger.Instance;
+
+    // Unnamed signals allocate indices from the first user index upward, as an invocation does.
+    private int _nextSignalIndex = InvocationStateMachine.FirstUserSignalIndex;
 
     /// <summary>Creates a new mock context with the given invocation ID.</summary>
     public MockContext(string? invocationId = null)
@@ -420,13 +424,16 @@ public sealed class MockContext : Context
     }
 
     /// <inheritdoc />
-    public override IDurableFuture<T> Signal<T>()
+    public override SignalHandle<T> Signal<T>()
     {
         _awaitedSignals.Add(null);
 
-        return new CompletedFuture<T>(_unnamedSignalResults.Count > 0
+        // Indices start at the first user index and advance by one, so a test can assert the
+        // index the handler published and resolve the signal with it.
+        var future = new CompletedFuture<T>(_unnamedSignalResults.Count > 0
             ? (T)_unnamedSignalResults.Dequeue()!
             : default!);
+        return new SignalHandle<T>(_nextSignalIndex++, future);
     }
 
     /// <inheritdoc />

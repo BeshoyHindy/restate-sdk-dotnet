@@ -8,25 +8,28 @@ namespace SignupWorkflow;
 ///     Additional shared handlers can query or signal the workflow while it's running.
 ///     This demonstrates:
 ///     - Workflow lifecycle with state tracking
-///     - Awakeables: durable promises that pause execution until an external event
-///     (the user clicking a verification link)
-///     - Shared handlers for querying workflow status
+///     - Signals: durable values delivered to a running invocation (the user clicking a
+///     verification link), awaited by name and resolved through the invocation handle
+///     - Shared handlers for querying and signalling the workflow
 ///     - ctx.Run() for idempotent side effects (account creation, email sending)
 /// </summary>
 [Workflow]
 public sealed class SignupWorkflow
 {
+    /// <summary>The name of the signal the Run handler awaits while the email is unverified.</summary>
+    private const string EmailVerified = "email-verified";
+
     private static readonly StateKey<string> Status = new("status");
     private static readonly StateKey<string> AccountId = new("accountId");
+    private static readonly StateKey<string> RunInvocationId = new("runInvocationId");
 
     /// <summary>
     ///     Main workflow logic. Executes exactly once per workflow ID (the user's email).
     ///     Creates an account, sends a verification email, waits for the user to click
     ///     the link, then activates the account.
-    ///     The awakeable (ctx.Awakeable) is a durable promise — the workflow
-    ///     suspends while waiting, using zero compute. When the user clicks the
-    ///     verification link, an external system resolves the awakeable and the
-    ///     workflow resumes automatically.
+    ///     The signal is a durable rendezvous point — the workflow suspends while waiting,
+    ///     using zero compute. When the user clicks the verification link, the Verify handler
+    ///     resolves the signal and the workflow resumes automatically.
     /// </summary>
     [Handler]
     public async Task<SignupResult> Run(WorkflowContext ctx, SignupRequest request)
@@ -39,25 +42,28 @@ public sealed class SignupWorkflow
 
         ctx.Set(AccountId, accountId);
 
-        // Step 2: Send verification email with an awakeable callback
+        // Step 2: Send the verification email and await the signal the click resolves
+
+        // Signals have no ingress route, so the resolver has to be a handler: this invocation's
+        // id is published in state for Verify below to address. It is written before the status
+        // flips, so anything that sees "awaiting-verification" can already read the id.
+        ctx.Set(RunInvocationId, ctx.InvocationId);
         ctx.Set(Status, "awaiting-verification");
 
-        // Awakeable returns an ID and a Value (durable promise).
-        // The ID is sent to the external system; the Value is awaited.
-        var awakeable = ctx.Awakeable<string>();
+        // Awaited before the email goes out, so a verification that lands immediately is not missed.
+        var verification = ctx.Signal<string>(EmailVerified);
 
+        var workflowKey = ctx.Key;
         await ctx.Run("send-verification-email",
             () =>
             {
-                EmailService.SendVerification(request.Email, awakeable.Id);
+                EmailService.SendVerification(request.Email, workflowKey);
                 return Task.CompletedTask;
             });
 
         // The workflow suspends here — no compute charges on FaaS.
-        // When the user clicks the link, the external system calls:
-        //   ctx.ResolveAwakeable(awakeableId, "verified")
-        // or via HTTP: PUT /restate/awakeables/{id}/resolve
-        await awakeable.Value;
+        // When the user clicks the link, the frontend calls Verify, which resolves the signal.
+        await verification.GetResult();
 
         // Step 3: Activate the account
         ctx.Set(Status, "activating");
@@ -72,6 +78,21 @@ public sealed class SignupWorkflow
         ctx.Set(Status, "completed");
 
         return new SignupResult(accountId, true);
+    }
+
+    /// <summary>
+    ///     Resolve the signal the Run handler awaits, from the verification link the user clicked.
+    ///     Shared handler — runs concurrently, addressing the Run invocation by the id it published.
+    /// </summary>
+    [SharedHandler]
+    public async Task<string> Verify(SharedWorkflowContext ctx)
+    {
+        var invocationId = await ctx.Get(RunInvocationId)
+                           ?? throw new TerminalException("Signup has not reached verification yet.", 404);
+
+        await new InvocationHandle(invocationId).ResolveSignal(ctx, EmailVerified, "verified");
+
+        return "verified";
     }
 
     /// <summary>
