@@ -1,9 +1,17 @@
 namespace Restate.Sdk;
 
 /// <summary>
-///     Deterministic random number generator seeded by the invocation ID.
+///     Deterministic random number generator seeded per invocation.
 ///     Produces the same sequence on every replay, making it safe for durable execution.
 /// </summary>
+/// <remarks>
+///     From service protocol V6 the seed is the <c>random_seed</c> the server sends on the
+///     StartMessage. That field does not exist below V6, so on a V5 stream the seed is derived
+///     from the invocation id instead: SHA-256 of the raw invocation id, read as a big-endian
+///     64-bit integer, which is the same fallback <c>sdk-shared-core</c> applies for the SDKs
+///     built on it. The seed is folded to 32 bits for the underlying generator, so sequences
+///     still differ between SDKs even where the 64-bit seed agrees.
+/// </remarks>
 public sealed class DurableRandom
 {
     private readonly Random _random;

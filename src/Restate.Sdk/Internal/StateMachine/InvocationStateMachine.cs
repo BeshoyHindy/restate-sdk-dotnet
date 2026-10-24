@@ -1,9 +1,12 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -204,7 +207,9 @@ internal sealed partial class InvocationStateMachine : IDisposable
         InvocationId = invocationId;
         RawInvocationId = rawInvocationId;
         Key = key;
-        RandomSeed = randomSeed;
+        RandomSeed = NegotiatedVersion >= ServiceProtocolVersion.V6
+            ? randomSeed
+            : DeriveRandomSeed(rawInvocationId, invocationId);
         _initialState = initialState;
         _stateIsPartial = stateIsPartial;
         _journal.Initialize(knownEntries);
@@ -212,6 +217,26 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
         if (State == InvocationState.Replaying)
             Log.ReplayStarted(Logger, InvocationId, knownEntries);
+    }
+
+    /// <summary>
+    ///     Derives a random seed from the invocation id for streams below V6, where
+    ///     <c>StartMessage.random_seed</c> does not exist and every invocation would otherwise
+    ///     share the sequence of seed 0. The derivation is the shared core's fallback: SHA-256 of
+    ///     the raw invocation id, read as a big-endian 64-bit integer. Streams that carry no raw
+    ///     id (the id is only on the wire from the StartMessage) hash the UTF-8 bytes of the
+    ///     debug id instead. Both are stable across processes and machines, so a replay of the
+    ///     same invocation always derives the same seed.
+    /// </summary>
+    private static ulong DeriveRandomSeed(byte[] rawInvocationId, string invocationId)
+    {
+        Span<byte> digest = stackalloc byte[32];
+        if (rawInvocationId.Length > 0)
+            SHA256.HashData(rawInvocationId, digest);
+        else
+            SHA256.HashData(Encoding.UTF8.GetBytes(invocationId), digest);
+
+        return BinaryPrimitives.ReadUInt64BigEndian(digest);
     }
 
     /// <summary>Allocates the next completion id for a live command.</summary>
