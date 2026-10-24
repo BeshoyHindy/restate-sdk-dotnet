@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Restate.Sdk.Internal;
 
 namespace Restate.Sdk.Testing;
 
@@ -218,77 +219,35 @@ public sealed class MockContext : Context
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request = null)
     {
-        _calls.Add(new RecordedCall(service, null, handler, request));
-        var lookupKey = $"{service}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, null, handler, request, default);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        _calls.Add(new RecordedCall(service, key, handler, request));
-        var lookupKey = $"{service}/{key}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, key, handler, request, default);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string handler, object? request,
         CallOptions options)
     {
-        _calls.Add(new RecordedCall(service, null, handler, request, options.IdempotencyKey)
-        {
-            Scope = options.Scope,
-            LimitKey = options.LimitKey
-        });
-        var lookupKey = $"{service}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, null, handler, request, options);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
         string? key, CallOptions options)
     {
-        _calls.Add(new RecordedCall(service, key, handler, request, options.IdempotencyKey)
-        {
-            Scope = options.Scope,
-            LimitKey = options.LimitKey
-        });
-        var lookupKey = key is not null ? $"{service}/{key}/{handler}" : $"{service}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, key, handler, request, options);
     }
 
     /// <inheritdoc />
     public override ValueTask<TResponse> Call<TResponse>(string service, string key, string handler, object? request,
         CallOptions options)
     {
-        _calls.Add(new RecordedCall(service, key, handler, request, options.IdempotencyKey)
-        {
-            Scope = options.Scope,
-            LimitKey = options.LimitKey
-        });
-        var lookupKey = $"{service}/{key}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, key, handler, request, options);
     }
 
     /// <inheritdoc />
@@ -302,18 +261,16 @@ public sealed class MockContext : Context
     public override ValueTask<InvocationHandle> Send(string service, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        _sends.Add(new RecordedSend(service, null, handler, request, delay, idempotencyKey));
-        return new ValueTask<InvocationHandle>(
-            new InvocationHandle($"mock-inv-{Interlocked.Increment(ref _invocationCounter)}"));
+        return RecordSend(service, null, handler, request,
+            new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey });
     }
 
     /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send(string service, string key, string handler, object? request = null,
         TimeSpan? delay = null, string? idempotencyKey = null)
     {
-        _sends.Add(new RecordedSend(service, key, handler, request, delay, idempotencyKey));
-        return new ValueTask<InvocationHandle>(
-            new InvocationHandle($"mock-inv-{Interlocked.Increment(ref _invocationCounter)}"));
+        return RecordSend(service, key, handler, request,
+            new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey });
     }
 
     /// <inheritdoc />
@@ -330,9 +287,42 @@ public sealed class MockContext : Context
         return RecordSend(service, key, handler, request, options);
     }
 
+    /// <summary>
+    ///     Records a call the way the handler paths journal one: the flow-control options are
+    ///     validated first, so a limit key without a scope fails in a unit test exactly as it does
+    ///     against a server, and only then is the call recorded and the configured result or
+    ///     failure returned.
+    /// </summary>
+    private ValueTask<TResponse> RecordCall<TResponse>(string service, string? key, string handler, object? request,
+        CallOptions options)
+    {
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
+        _calls.Add(new RecordedCall(service, key, handler, request, options.IdempotencyKey)
+        {
+            Scope = options.Scope,
+            LimitKey = options.LimitKey
+        });
+        var lookupKey = key is not null ? $"{service}/{key}/{handler}" : $"{service}/{handler}";
+        if (_callFailures.TryGetValue(lookupKey, out var failure))
+            throw failure;
+        if (_callResults.TryGetValue(lookupKey, out var result))
+            return new ValueTask<TResponse>((TResponse)result!);
+        return new ValueTask<TResponse>(default(TResponse)!);
+    }
+
+    /// <summary>Records a call and hands its result back as an already-completed future.</summary>
+    private IDurableFuture<TResponse> RecordCallFuture<TResponse>(string service, string? key, string handler,
+        object? request, CallOptions options)
+    {
+        var call = RecordCall<TResponse>(service, key, handler, request, options);
+        return new CompletedFuture<TResponse>(call.IsCompletedSuccessfully ? call.Result : default!);
+    }
+
+    /// <summary>Records a send, validating the flow-control options as the handler paths do.</summary>
     private ValueTask<InvocationHandle> RecordSend(string service, string? key, string handler, object? request,
         SendOptions options)
     {
+        FlowControl.Validate(options.Scope, options.LimitKey, nameof(options));
         _sends.Add(new RecordedSend(service, key, handler, request, options.Delay, options.IdempotencyKey)
         {
             Scope = options.Scope,
@@ -499,22 +489,14 @@ public sealed class MockContext : Context
     public override ValueTask<TResponse> Call<TRequest, TResponse>(string service, string handler, TRequest request,
         string? key = null)
     {
-        _calls.Add(new RecordedCall(service, key, handler, request));
-        var lookupKey = key is not null ? $"{service}/{key}/{handler}" : $"{service}/{handler}";
-        if (_callFailures.TryGetValue(lookupKey, out var failure))
-            throw failure;
-        if (_callResults.TryGetValue(lookupKey, out var result))
-            return new ValueTask<TResponse>((TResponse)result!);
-        return new ValueTask<TResponse>(default(TResponse)!);
+        return RecordCall<TResponse>(service, key, handler, request, default);
     }
 
     /// <inheritdoc />
     public override ValueTask<InvocationHandle> Send<TRequest>(string service, string handler, TRequest request,
         string? key = null, SendOptions? options = null)
     {
-        _sends.Add(new RecordedSend(service, key, handler, request, options?.Delay, options?.IdempotencyKey));
-        return new ValueTask<InvocationHandle>(
-            new InvocationHandle($"mock-inv-{Interlocked.Increment(ref _invocationCounter)}"));
+        return RecordSend(service, key, handler, request, options ?? default);
     }
 
     /// <inheritdoc />
@@ -533,32 +515,28 @@ public sealed class MockContext : Context
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler,
         object? request = null)
     {
-        var vt = Call<TResponse>(service, handler, request);
-        return new CompletedFuture<TResponse>(vt.IsCompletedSuccessfully ? vt.Result : default!);
+        return RecordCallFuture<TResponse>(service, null, handler, request, default);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request = null)
     {
-        var vt = Call<TResponse>(service, key, handler, request);
-        return new CompletedFuture<TResponse>(vt.IsCompletedSuccessfully ? vt.Result : default!);
+        return RecordCallFuture<TResponse>(service, key, handler, request, default);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string handler, object? request,
         CallOptions options)
     {
-        var vt = Call<TResponse>(service, handler, request, options);
-        return new CompletedFuture<TResponse>(vt.IsCompletedSuccessfully ? vt.Result : default!);
+        return RecordCallFuture<TResponse>(service, null, handler, request, options);
     }
 
     /// <inheritdoc />
     public override IDurableFuture<TResponse> CallFuture<TResponse>(string service, string key, string handler,
         object? request, CallOptions options)
     {
-        var vt = Call<TResponse>(service, key, handler, request, options);
-        return new CompletedFuture<TResponse>(vt.IsCompletedSuccessfully ? vt.Result : default!);
+        return RecordCallFuture<TResponse>(service, key, handler, request, options);
     }
 
     /// <inheritdoc />
