@@ -12,6 +12,7 @@
         <Project Path="samples/NativeAotGreeter/NativeAotGreeter.csproj"/>
         <Project Path="samples/NativeAotSaga/NativeAotSaga.csproj"/>
         <Project Path="samples/Saga/Saga.csproj"/>
+        <Project Path="samples/ScopedClient/ScopedClient.csproj"/>
         <Project Path="samples/SignupWorkflow/SignupWorkflow.csproj"/>
         <Project Path="samples/TicketReservation/TicketReservation.csproj"/>
     </Folder>

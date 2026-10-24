@@ -213,11 +213,16 @@ echo "Starting SignupWorkflow on port 9084..."
 dotnet run --project "$ROOT_DIR/samples/SignupWorkflow" -c Release --no-build &
 PIDS+=($!)
 
+echo "Starting ScopedClient on port 9090..."
+dotnet run --project "$ROOT_DIR/samples/ScopedClient" -c Release --no-build &
+PIDS+=($!)
+
 echo "Waiting for services to start..."
 wait_for_port 9080
 wait_for_port 9081
 wait_for_port 9082
 wait_for_port 9084
+wait_for_port 9090
 echo "All services ready."
 echo ""
 
@@ -227,6 +232,7 @@ register_deployment 9080
 register_deployment 9081
 register_deployment 9082
 register_deployment 9084
+register_deployment 9090
 echo ""
 
 # Give Restate a moment to discover handlers
@@ -354,6 +360,16 @@ assert_void_response \
     "SignupWorkflow/GetStatus (after verification)" \
     "http://localhost:8080/SignupWorkflow/test-user/GetStatus" \
     "completed"
+
+# --- Scoped Client (flow-control scope and limit key) ---
+
+# QuoteInScope calls Quote with CallOptions.WithScope(scope, limitKey), which carries the scope
+# as protocol V7 fields on the call command, and files the result with a scoped send.
+assert_response \
+    "PricingService/QuoteInScope (scoped call with a limit key)" \
+    "http://localhost:8080/PricingService/QuoteInScope" \
+    '{"tenant":"tenant-a","sku":"widget","quantity":2}' \
+    '"amountCents":500'
 
 echo ""
 echo "=== Regular Tests Passed ==="
