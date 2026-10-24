@@ -629,7 +629,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
 
-        var value = await sm.GetStateAsync<int>("count", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("count", null, CancellationToken.None);
         Assert.Equal(42, value);
 
         var frames = await DrainOutboundAsync();
@@ -648,7 +648,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0);
 
-        var value = await sm.GetStateAsync<int>("missing", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("missing", null, CancellationToken.None);
         Assert.Equal(0, value);
 
         var frames = await DrainOutboundAsync();
@@ -670,7 +670,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
 
-        var value = await sm.GetStateAsync<int>("empty", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("empty", null, CancellationToken.None);
         Assert.Equal(0, value);
     }
 
@@ -685,7 +685,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0, eagerState, stateIsPartial: true);
 
-        var value = await sm.GetStateAsync<int>("count", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("count", null, CancellationToken.None);
         Assert.Equal(7, value);
 
         var frames = await DrainOutboundAsync();
@@ -704,7 +704,7 @@ public class InvocationStateMachineTests : IDisposable
         sm.Initialize("inv-1", "key-1", 0, 0, eagerState, stateIsPartial: true);
 
         // A partial map that misses the key cannot answer locally — the read goes to the wire.
-        var pending = sm.GetStateAsync<int>("missing", CancellationToken.None).AsTask();
+        var pending = sm.GetStateAsync<int>("missing", null, CancellationToken.None).AsTask();
         Assert.False(pending.IsCompleted);
 
         var frames = await DrainOutboundAsync();
@@ -723,12 +723,12 @@ public class InvocationStateMachineTests : IDisposable
         sm.SetState("a", 1);
 
         // "a" was just written, so it is locally known and resolves eagerly...
-        var a = await sm.GetStateAsync<int>("a", CancellationToken.None);
+        var a = await sm.GetStateAsync<int>("a", null, CancellationToken.None);
         Assert.Equal(1, a);
 
         // ...but "b" must NOT be reported as absent just because SetState created the local
         // map (the pre-V7 latent bug): under partial state it falls back to a lazy read.
-        var pending = sm.GetStateAsync<int>("b", CancellationToken.None).AsTask();
+        var pending = sm.GetStateAsync<int>("b", null, CancellationToken.None).AsTask();
         Assert.False(pending.IsCompleted);
 
         var frames = await DrainOutboundAsync();
@@ -750,7 +750,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
 
-        var keys = await sm.GetStateKeysAsync(CancellationToken.None);
+        var keys = await sm.GetStateKeysAsync(null, CancellationToken.None);
         Array.Sort(keys);
         Assert.Equal(["a", "b"], keys);
 
@@ -766,7 +766,7 @@ public class InvocationStateMachineTests : IDisposable
         using var sm = CreateSm();
         sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
 
-        var pending = sm.GetStateKeysAsync(CancellationToken.None).AsTask();
+        var pending = sm.GetStateKeysAsync(null, CancellationToken.None).AsTask();
         Assert.False(pending.IsCompleted);
 
         var frames = await DrainOutboundAsync();
@@ -782,7 +782,7 @@ public class InvocationStateMachineTests : IDisposable
         sm.ClearAllState();
 
         // After ClearAllState the (empty) local view is authoritative: reads resolve eagerly.
-        var value = await sm.GetStateAsync<int>("anything", CancellationToken.None);
+        var value = await sm.GetStateAsync<int>("anything", null, CancellationToken.None);
         Assert.Equal(0, value);
 
         var frames = await DrainOutboundAsync();
@@ -791,6 +791,179 @@ public class InvocationStateMachineTests : IDisposable
         Assert.Equal(MessageType.GetEagerStateCommand, frames[1].Type);
         Assert.Equal(Gen.GetEagerStateCommandMessage.ResultOneofCase.Void,
             Gen.GetEagerStateCommandMessage.Parser.ParseFrom(frames[1].Payload).ResultCase);
+    }
+
+    // ------- State entry names -------
+
+    // Two halves per operation: a named one writes the name in field 12 of its command, and an
+    // unnamed one writes exactly the bytes the command carried before entry names existed —
+    // compared against a message built without the field rather than through the codec.
+
+    [Fact]
+    public async Task GetStateAsync_WithEntryName_NamesEagerStateCommand()
+    {
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        {
+            ["count"] = JsonSerializer.SerializeToUtf8Bytes(42)
+        };
+
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
+
+        Assert.Equal(42, await sm.GetStateAsync<int>("count", "load-count", CancellationToken.None));
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.GetEagerStateCommand, frame.Type);
+        Assert.Equal("load-count", Gen.GetEagerStateCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task GetStateAsync_WithEntryName_NamesLazyStateCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        var pending = sm.GetStateAsync<int>("count", "load-count", CancellationToken.None).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.GetLazyStateCommand, frame.Type);
+        Assert.Equal("load-count", Gen.GetLazyStateCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task GetStateKeysAsync_WithEntryName_NamesEagerStateKeysCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        await sm.GetStateKeysAsync("list-keys", CancellationToken.None);
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.GetEagerStateKeysCommand, frame.Type);
+        Assert.Equal("list-keys", Gen.GetEagerStateKeysCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task GetStateKeysAsync_WithEntryName_NamesLazyStateKeysCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        var pending = sm.GetStateKeysAsync("list-keys", CancellationToken.None).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.GetLazyStateKeysCommand, frame.Type);
+        Assert.Equal("list-keys", Gen.GetLazyStateKeysCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task SetState_WithEntryName_NamesCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        sm.SetState("count", 1, "save-count");
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.SetStateCommand, frame.Type);
+        Assert.Equal("save-count", Gen.SetStateCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task ClearState_WithEntryName_NamesCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        sm.ClearState("count", "reset-count");
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.ClearStateCommand, frame.Type);
+        Assert.Equal("reset-count", Gen.ClearStateCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task ClearAllState_WithEntryName_NamesCommand()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        sm.ClearAllState("wipe-cart");
+
+        var frame = Assert.Single(await DrainOutboundAsync());
+        Assert.Equal(MessageType.ClearAllStateCommand, frame.Type);
+        Assert.Equal("wipe-cart", Gen.ClearAllStateCommandMessage.Parser.ParseFrom(frame.Payload).Name);
+    }
+
+    [Fact]
+    public async Task EagerStateReads_WithoutEntryName_WriteUnnamedCommands()
+    {
+        var eagerState = new Dictionary<string, ReadOnlyMemory<byte>>
+        {
+            ["count"] = JsonSerializer.SerializeToUtf8Bytes(42)
+        };
+
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, eagerState);
+
+        await sm.GetStateAsync<int>("count", null, CancellationToken.None);
+        await sm.GetStateKeysAsync(null, CancellationToken.None);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(new Gen.GetEagerStateCommandMessage
+        {
+            Key = ByteString.CopyFromUtf8("count"),
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(42)) }
+        }.ToByteArray(), frames[0].Payload);
+        Assert.Equal(new Gen.GetEagerStateKeysCommandMessage
+        {
+            Value = new Gen.StateKeys { Keys = { ByteString.CopyFromUtf8("count") } }
+        }.ToByteArray(), frames[1].Payload);
+    }
+
+    [Fact]
+    public async Task LazyStateReads_WithoutEntryName_WriteUnnamedCommands()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0, initialState: null, stateIsPartial: true);
+
+        var pendingGet = sm.GetStateAsync<int>("count", null, CancellationToken.None).AsTask();
+        var pendingKeys = sm.GetStateKeysAsync(null, CancellationToken.None).AsTask();
+        Assert.False(pendingGet.IsCompleted);
+        Assert.False(pendingKeys.IsCompleted);
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(2, frames.Count);
+        // Completion ids are allocated from zero, so the first read omits field 11 as well.
+        Assert.Equal(new Gen.GetLazyStateCommandMessage { Key = ByteString.CopyFromUtf8("count") }.ToByteArray(),
+            frames[0].Payload);
+        Assert.Equal(new Gen.GetLazyStateKeysCommandMessage { ResultCompletionId = 1 }.ToByteArray(),
+            frames[1].Payload);
+    }
+
+    [Fact]
+    public async Task StateMutations_WithoutEntryName_WriteUnnamedCommands()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "key-1", 0, 0);
+
+        sm.SetState("count", 1);
+        sm.ClearState("count");
+        sm.ClearAllState();
+
+        var frames = await DrainOutboundAsync();
+        Assert.Equal(3, frames.Count);
+        Assert.Equal(new Gen.SetStateCommandMessage
+        {
+            Key = ByteString.CopyFromUtf8("count"),
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(1)) }
+        }.ToByteArray(), frames[0].Payload);
+        Assert.Equal(new Gen.ClearStateCommandMessage { Key = ByteString.CopyFromUtf8("count") }.ToByteArray(),
+            frames[1].Payload);
+        Assert.Equal(new Gen.ClearAllStateCommandMessage().ToByteArray(), frames[2].Payload);
     }
 
     // ------- Awakeable -------
@@ -1455,7 +1628,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         var ex = await AssertReplayMismatchAsync(MessageType.GetLazyStateCommand,
             ProtobufCodec.CreateGetStateCommand("balance", 1),
-            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+            sm => sm.GetStateAsync<int>("count", null, CancellationToken.None).AsTask());
 
         AssertDifference(ex, "key", "balance", "count");
     }
@@ -1465,7 +1638,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         var ex = await AssertReplayMismatchAsync(MessageType.GetEagerStateCommand,
             ProtobufCodec.CreateGetEagerStateCommand("balance", JsonSerializer.SerializeToUtf8Bytes(1)),
-            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+            sm => sm.GetStateAsync<int>("count", null, CancellationToken.None).AsTask());
 
         AssertDifference(ex, "key", "balance", "count");
     }
@@ -1475,7 +1648,29 @@ public class InvocationStateMachineTests : IDisposable
     {
         await AssertReplaysWithoutMismatchAsync(MessageType.GetEagerStateCommand,
             ProtobufCodec.CreateGetEagerStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(7)),
-            sm => sm.GetStateAsync<int>("count", CancellationToken.None).AsTask());
+            sm => sm.GetStateAsync<int>("count", null, CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedNamedStateRead_ReplaysWithoutMismatch()
+    {
+        await AssertReplaysWithoutMismatchAsync(MessageType.GetEagerStateCommand,
+            ProtobufCodec.CreateGetEagerStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(7), "load-count"),
+            sm => sm.GetStateAsync<int>("count", "load-count", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ReplayedNamedStateWriteUnderAnotherName_ReplaysWithoutMismatch()
+    {
+        // An entry name labels the journal entry; it does not identify the operation, so renaming
+        // a state write between attempts replays against the recorded command as before.
+        await AssertReplaysWithoutMismatchAsync(MessageType.SetStateCommand,
+            ProtobufCodec.CreateSetStateCommand("count", JsonSerializer.SerializeToUtf8Bytes(1), "save-count"),
+            sm =>
+            {
+                sm.SetState("count", 1, "store-count");
+                return Task.CompletedTask;
+            });
     }
 
     [Fact]

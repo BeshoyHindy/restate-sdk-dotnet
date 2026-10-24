@@ -19,12 +19,22 @@ internal sealed class DefaultObjectContext : ObjectContext
 
     public override ValueTask<T?> Get<T>(StateKey<T> key) where T : default
     {
-        return _sm.GetStateAsync<T>(key.Name, _ct);
+        return _sm.GetStateAsync<T>(key.Name, null, _ct);
+    }
+
+    public override ValueTask<T?> Get<T>(StateKey<T> key, string? entryName) where T : default
+    {
+        return _sm.GetStateAsync<T>(key.Name, entryName, _ct);
     }
 
     public override ValueTask<string[]> StateKeys()
     {
-        return _sm.GetStateKeysAsync(_ct);
+        return _sm.GetStateKeysAsync(null, _ct);
+    }
+
+    public override ValueTask<string[]> StateKeys(string? entryName)
+    {
+        return _sm.GetStateKeysAsync(entryName, _ct);
     }
 
     public override void Set<T>(StateKey<T> key, T value)
@@ -32,13 +42,28 @@ internal sealed class DefaultObjectContext : ObjectContext
         _sm.SetState(key.Name, value);
     }
 
+    public override void Set<T>(StateKey<T> key, T value, string? entryName)
+    {
+        _sm.SetState(key.Name, value, entryName);
+    }
+
     public override void Clear(string key)
     {
         _sm.ClearState(key);
     }
 
+    public override void Clear(string key, string? entryName)
+    {
+        _sm.ClearState(key, entryName);
+    }
+
     public override void ClearAll()
     {
         _sm.ClearAllState();
+    }
+
+    public override void ClearAll(string? entryName)
+    {
+        _sm.ClearAllState(entryName);
     }
 }

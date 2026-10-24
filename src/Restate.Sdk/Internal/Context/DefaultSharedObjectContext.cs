@@ -19,11 +19,21 @@ internal sealed class DefaultSharedObjectContext : SharedObjectContext
 
     public override ValueTask<T?> Get<T>(StateKey<T> key) where T : default
     {
-        return _sm.GetStateAsync<T>(key.Name, _ct);
+        return _sm.GetStateAsync<T>(key.Name, null, _ct);
+    }
+
+    public override ValueTask<T?> Get<T>(StateKey<T> key, string? entryName) where T : default
+    {
+        return _sm.GetStateAsync<T>(key.Name, entryName, _ct);
     }
 
     public override ValueTask<string[]> StateKeys()
     {
-        return _sm.GetStateKeysAsync(_ct);
+        return _sm.GetStateKeysAsync(null, _ct);
+    }
+
+    public override ValueTask<string[]> StateKeys(string? entryName)
+    {
+        return _sm.GetStateKeysAsync(entryName, _ct);
     }
 }

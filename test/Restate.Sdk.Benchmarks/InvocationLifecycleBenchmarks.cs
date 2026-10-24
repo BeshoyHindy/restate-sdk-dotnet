@@ -85,7 +85,7 @@ public class InvocationLifecycleBenchmarks
         using var sm = new InvocationStateMachine(protocol.Reader, protocol.Writer);
         await sm.StartAsync(CancellationToken.None);
 
-        var current = await sm.GetStateAsync<int>("count", CancellationToken.None);
+        var current = await sm.GetStateAsync<int>("count", null, CancellationToken.None);
         sm.SetState("count", current + 1);
         return current;
     }

@@ -151,8 +151,21 @@ private static readonly StateKey<int> Count = new("count");
 
 var current = await ctx.Get(Count);
 ctx.Set(Count, current + 1);
-ctx.Clear(Count);
+ctx.Clear("count");
 ctx.ClearAll();
+```
+
+Every state operation also takes an optional entry name. The name labels the journal entry, so
+the Restate UI shows `load-count` instead of an anonymous state read. It is observability only:
+it does not change what is read or written, and omitting it records exactly the entry it always
+did.
+
+```csharp
+var current = await ctx.Get(Count, "load-count");
+ctx.Set(Count, current + 1, "bump-count");
+ctx.Clear("count", "reset-count");
+ctx.ClearAll("wipe-state");
+var keys = await ctx.StateKeys("list-keys");
 ```
 
 See [Service Types](service-types.md) for complete virtual object and workflow examples,

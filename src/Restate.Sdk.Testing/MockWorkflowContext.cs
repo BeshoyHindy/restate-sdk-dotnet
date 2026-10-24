@@ -63,6 +63,9 @@ public sealed class MockWorkflowContext : WorkflowContext
     /// <summary>Verifies whether a state key exists.</summary>
     public bool HasState(string key) => _stateStore.HasState(key);
 
+    /// <summary>The entry names passed to named state operations, in call order.</summary>
+    public IReadOnlyList<string> StateEntryNames => _stateStore.EntryNames;
+
     /// <summary>Pre-resolves a promise so that <see cref="Promise{T}" /> returns immediately.</summary>
     public void SetupPromise<T>(string name, T value) => _promiseStore.SetupPromise(name, value);
 
@@ -94,14 +97,31 @@ public sealed class MockWorkflowContext : WorkflowContext
     public override void Set<T>(StateKey<T> key, T value) => _stateStore.Set(key, value);
 
     /// <inheritdoc />
+    public override void Set<T>(StateKey<T> key, T value, string? entryName) =>
+        _stateStore.Set(key, value, entryName);
+
+    /// <inheritdoc />
     public override void Clear(string key) => _stateStore.Clear(key);
+
+    /// <inheritdoc />
+    public override void Clear(string key, string? entryName) => _stateStore.Clear(key, entryName);
 
     /// <inheritdoc />
     public override void ClearAll() => _stateStore.ClearAll();
 
     /// <inheritdoc />
+    public override void ClearAll(string? entryName) => _stateStore.ClearAll(entryName);
+
+    /// <inheritdoc />
     public override ValueTask<T?> Get<T>(StateKey<T> key) where T : default => _stateStore.Get<T>(key);
 
     /// <inheritdoc />
+    public override ValueTask<T?> Get<T>(StateKey<T> key, string? entryName) where T : default =>
+        _stateStore.Get<T>(key, entryName);
+
+    /// <inheritdoc />
     public override ValueTask<string[]> StateKeys() => _stateStore.StateKeys();
+
+    /// <inheritdoc />
+    public override ValueTask<string[]> StateKeys(string? entryName) => _stateStore.StateKeys(entryName);
 }

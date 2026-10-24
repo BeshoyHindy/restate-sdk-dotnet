@@ -38,6 +38,28 @@ public class InterfaceConformanceTests
         Assert.False(getter.IsAbstract);
     }
 
+    [Theory]
+    [InlineData(typeof(ISharedObjectContext), nameof(ISharedObjectContext.Get))]
+    [InlineData(typeof(ISharedObjectContext), nameof(ISharedObjectContext.StateKeys))]
+    [InlineData(typeof(IObjectContext), nameof(IObjectContext.Set))]
+    [InlineData(typeof(IObjectContext), nameof(IObjectContext.Clear))]
+    [InlineData(typeof(IObjectContext), nameof(IObjectContext.ClearAll))]
+    public void StateOperations_NamedOverloads_HaveDefaultImplementations(Type interfaceType, string methodName)
+    {
+        // Entry names were added after the state API shipped; like IContext.Logger, the named
+        // overloads are default interface implementations that drop the name, so external direct
+        // implementations keep compiling instead of breaking with CS0535.
+        var named = interfaceType
+            .GetMethods()
+            .Where(m => m.Name == methodName)
+            .Where(m => m.GetParameters() is [.., { ParameterType.FullName: "System.String" }] parameters
+                        && parameters[^1].Name == "entryName")
+            .ToList();
+
+        Assert.All(named, m => Assert.False(m.IsAbstract));
+        Assert.Single(named);
+    }
+
     // ──────────────────────────────────────────────
     // 2. Mock contexts implement expected interfaces (runtime instances)
     // ──────────────────────────────────────────────

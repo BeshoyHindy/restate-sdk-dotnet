@@ -40,8 +40,30 @@ public abstract class SharedObjectContext : Context, ISharedObjectContext
     /// <summary>Gets the value for the given state key, or default if not set.</summary>
     public abstract ValueTask<T?> Get<T>(StateKey<T> key);
 
+    /// <summary>
+    ///     Gets the value for the given state key, or default if not set, labelling the journal
+    ///     entry with <paramref name="entryName" /> so it reads as that name in the Restate UI.
+    ///     The name is observability only: it does not change what is read. The default
+    ///     implementation drops the name and reads through <see cref="Get{T}(StateKey{T})" />,
+    ///     so contexts that predate entry names keep working.
+    /// </summary>
+    public virtual ValueTask<T?> Get<T>(StateKey<T> key, string? entryName)
+    {
+        return Get(key);
+    }
+
     /// <summary>Lists all state keys for this virtual object instance.</summary>
     public abstract ValueTask<string[]> StateKeys();
+
+    /// <summary>
+    ///     Lists all state keys for this virtual object instance, labelling the journal entry with
+    ///     <paramref name="entryName" />. The name is observability only; the default
+    ///     implementation drops it and reads through <see cref="StateKeys()" />.
+    /// </summary>
+    public virtual ValueTask<string[]> StateKeys(string? entryName)
+    {
+        return StateKeys();
+    }
 
     /// <inheritdoc />
     public override ValueTask<DateTimeOffset> Now()
