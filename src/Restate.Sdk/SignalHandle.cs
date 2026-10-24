@@ -44,4 +44,10 @@ public readonly record struct SignalHandle<T>(int Index, IDurableFuture<T> Futur
     // Forwarded so that a handle handed straight to a combinator is ranked by the position the
     // runtime delivered its result at, exactly as the future inside it would be.
     long IArrivalOrderedFuture.ArrivalOrder => (Future as IArrivalOrderedFuture)?.ArrivalOrder ?? 0;
+
+    // Forwarded for the same reason: the combinators park on the signal's own delivery, so the
+    // handle costs nothing extra and its value is deserialized only if a combinator hands it back.
+    RawCompletion IArrivalOrderedFuture.Completion => Future is IArrivalOrderedFuture ordered
+        ? ordered.Completion
+        : RawCompletion.OfWait(Future.GetResult().AsTask());
 }

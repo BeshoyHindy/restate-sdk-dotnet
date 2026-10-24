@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.StateMachine;
@@ -599,6 +601,404 @@ public class CombinatorTests
 
         Assert.Null(Assert.Single(first).Error);
         Assert.Null(Assert.Single(second).Error);
+    }
+
+    // ── Lazy, arrival-ordered combinators ──
+    //
+    // The combinators park on the runtime's deliveries, not on decoded values: the winner is the
+    // branch the runtime delivered first — live and on replay alike — and a branch a combinator
+    // does not hand back is never deserialized.
+
+    [Fact]
+    public async Task Race_LiveAndReplayedDeliveries_PickTheEarlierDelivery()
+    {
+        Assert.Equal("second", await RaceDeliveries(deliveredBeforeTheCall: false));
+        Assert.Equal("second", await RaceDeliveries(deliveredBeforeTheCall: true));
+    }
+
+    [Fact]
+    public async Task Any_LiveAndReplayedDeliveries_PickTheEarlierDelivery()
+    {
+        Assert.Equal("second", await AnyDeliveries(deliveredBeforeTheCall: false));
+        Assert.Equal("second", await AnyDeliveries(deliveredBeforeTheCall: true));
+    }
+
+    [Fact]
+    public async Task WaitAll_LiveAndReplayedDeliveries_YieldInDeliveryOrder()
+    {
+        var live = await WaitAllDeliveries(deliveredBeforeTheCall: false);
+        var replayed = await WaitAllDeliveries(deliveredBeforeTheCall: true);
+
+        Assert.Equal(["second", "first"], live);
+        Assert.Equal(["second", "first"], replayed);
+    }
+
+    [Fact]
+    public async Task Race_BackToBackLiveDeliveries_AlwaysPicksTheEarlierDelivery()
+    {
+        await AssertEarlierLiveDeliveryWins((ctx, first, second) => ctx.Race(first, second).AsTask());
+    }
+
+    [Fact]
+    public async Task Any_BackToBackLiveDeliveries_AlwaysPicksTheEarlierDelivery()
+    {
+        await AssertEarlierLiveDeliveryWins((ctx, first, second) => ctx.Any(first, second).AsTask());
+    }
+
+    [Fact]
+    public async Task Race_DeserializesOnlyTheBranchItHandsBack()
+    {
+        var decoder = new CountingInt32Converter();
+        var (ctx, winner, loser) = TwoDeliveries(decoder);
+
+        Assert.Equal(1, await ctx.Race(winner, loser));
+        Assert.Equal(1, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task Any_DeserializesOnlyTheBranchItHandsBack()
+    {
+        var decoder = new CountingInt32Converter();
+        var (ctx, winner, loser) = TwoDeliveries(decoder);
+
+        Assert.Equal(1, await ctx.Any(winner, loser));
+        Assert.Equal(1, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task All_DeserializesEachInputOnce()
+    {
+        var decoder = new CountingInt32Converter();
+        var (ctx, first, second) = TwoDeliveries(decoder);
+
+        var results = await ctx.All(first, second);
+
+        Assert.Equal([1, 2], results);
+        Assert.Equal(2, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task AllSettled_DeserializesEachInputOnce()
+    {
+        var decoder = new CountingInt32Converter();
+        var (ctx, first, second) = TwoDeliveries(decoder);
+
+        var results = await ctx.AllSettled(first, second);
+
+        Assert.Equal([1, 2], results.Select(r => r.Value));
+        Assert.Equal(2, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task WaitAll_DeserializesEachInputOnce()
+    {
+        var decoder = new CountingInt32Converter();
+        var (ctx, first, second) = TwoDeliveries(decoder);
+
+        var yielded = new List<IDurableFuture>();
+        await foreach (var (future, _) in ctx.WaitAll(first, second))
+            yielded.Add(future);
+
+        Assert.Equal([first, second], yielded);
+        Assert.Equal(2, decoder.Reads);
+    }
+
+    [Fact]
+    public async Task Race_LosingBranchCannotBeDeserialized_LeavesNoUnobservedFault()
+    {
+        var unobserved = new List<Exception>();
+
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            lock (unobserved)
+                unobserved.AddRange(args.Exception.InnerExceptions);
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            Assert.Equal("winner", await RaceAgainstAPoisonedLoser());
+
+            // The loser's decode, if one ever started, is slow on purpose: give it time to fault
+            // before collecting, so an abandoned faulted task would be reported here.
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            lock (unobserved)
+                Assert.DoesNotContain(unobserved, ex => ex.Message == PoisonStringConverter.Marker);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
+    [Fact]
+    public async Task Any_PayloadCannotBeDeserialized_FailsTheAttempt()
+    {
+        // A payload the serializer cannot read is a bug, not a result the runtime delivered:
+        // it must fail the attempt so the invocation is retried, not settle as a failed branch.
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized("not-a-number"));
+
+        var ctx = new BareContext();
+        var future = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+
+        await Assert.ThrowsAsync<JsonException>(() => ctx.Any(future).AsTask());
+    }
+
+    [Fact]
+    public async Task AllSettled_PayloadCannotBeDeserialized_FailsTheAttempt()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized("not-a-number"));
+
+        var ctx = new BareContext();
+        var future = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+
+        await Assert.ThrowsAsync<JsonException>(() => ctx.AllSettled(future).AsTask());
+    }
+
+    [Fact]
+    public async Task Any_DeliveredFailure_CountsAsABranchFailure()
+    {
+        // A terminal failure the runtime delivered is the branch's own result: Any skips it and
+        // takes the next branch instead of failing the attempt.
+        var manager = new CompletionManager<int>();
+        manager.TryFail(1, 500, "boom");
+        manager.TryComplete(2, Serialized(42));
+
+        var ctx = new BareContext();
+        var failed = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+        var succeeded = new DurableFuture<int>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+        Assert.Equal(42, await ctx.Any(failed, succeeded));
+    }
+
+    [Fact]
+    public async Task AllSettled_DeliveredFailure_SettlesAsABranchFailure()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryFail(1, 500, "boom");
+        manager.TryComplete(2, Serialized(42));
+
+        var ctx = new BareContext();
+        var failed = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+        var succeeded = new DurableFuture<int>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+        var results = await ctx.AllSettled(failed, succeeded);
+
+        Assert.IsType<TerminalException>(results[0].Error);
+        Assert.Equal(42, results[1].Value);
+    }
+
+    /// <summary>
+    ///     Races two futures over completions delivered in reverse argument order: the second
+    ///     argument is delivered first and its payload stalls while being decoded, so a
+    ///     combinator that raced decoded values would hand back the first argument instead.
+    ///     With <paramref name="deliveredBeforeTheCall" /> the deliveries are replayed before the
+    ///     combinator is called; without it they arrive while it is already waiting.
+    /// </summary>
+    private static async Task<string> RaceDeliveries(bool deliveredBeforeTheCall)
+    {
+        var (ctx, manager, first, second) = StallingDeliveries();
+        if (deliveredBeforeTheCall)
+            Deliver(manager);
+
+        var race = ctx.Race(first, second).AsTask();
+        if (!deliveredBeforeTheCall)
+        {
+            Assert.False(race.IsCompleted);
+            Deliver(manager);
+        }
+
+        return await race;
+    }
+
+    private static async Task<string> AnyDeliveries(bool deliveredBeforeTheCall)
+    {
+        var (ctx, manager, first, second) = StallingDeliveries();
+        if (deliveredBeforeTheCall)
+            Deliver(manager);
+
+        var any = ctx.Any(first, second).AsTask();
+        if (!deliveredBeforeTheCall)
+        {
+            Assert.False(any.IsCompleted);
+            Deliver(manager);
+        }
+
+        return await any;
+    }
+
+    private static async Task<List<string>> WaitAllDeliveries(bool deliveredBeforeTheCall)
+    {
+        var (ctx, manager, first, second) = StallingDeliveries();
+        if (deliveredBeforeTheCall)
+            Deliver(manager);
+
+        // Enumerated by hand rather than with await foreach: the first MoveNextAsync runs the
+        // enumerator up to its first await, so the live case is parked on the two futures before
+        // anything is delivered.
+        await using var enumerator = ctx.WaitAll(first, second).GetAsyncEnumerator();
+        var moveNext = enumerator.MoveNextAsync();
+        if (!deliveredBeforeTheCall)
+        {
+            Assert.False(moveNext.IsCompleted);
+            Deliver(manager);
+        }
+
+        var yielded = new List<string>();
+        while (await moveNext)
+        {
+            yielded.Add(ReferenceEquals(enumerator.Current.future, first) ? "first" : "second");
+            moveNext = enumerator.MoveNextAsync();
+        }
+
+        return yielded;
+    }
+
+    /// <summary>
+    ///     Delivers two completions back to back, second argument first, to a combinator that is
+    ///     already waiting, and asserts it hands back the earlier delivery. The two deliveries wake
+    ///     the combinator on the thread pool in whichever order it schedules them, so a single
+    ///     attempt proves nothing; the delivery is repeated until every scheduling has had its
+    ///     chance to resume the later delivery's wake-up first.
+    /// </summary>
+    private static async Task AssertEarlierLiveDeliveryWins(
+        Func<Context, IDurableFuture<string>, IDurableFuture<string>, Task<string>> combinator)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var manager = new CompletionManager<int>();
+            var ctx = new BareContext();
+            var first = new DurableFuture<string>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+            var second = new DurableFuture<string>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+            var pending = combinator(ctx, first, second);
+            Assert.False(pending.IsCompleted);
+            Deliver(manager);
+
+            Assert.Equal("second", await pending);
+        }
+    }
+
+    private static void Deliver(CompletionManager<int> manager)
+    {
+        manager.TryComplete(2, Serialized("second"));
+        manager.TryComplete(1, Serialized("first"));
+    }
+
+    private static (Context Ctx, CompletionManager<int> Manager, DurableFuture<string> First,
+        DurableFuture<string> Second) StallingDeliveries()
+    {
+        var manager = new CompletionManager<int>();
+        var options = WithConverter(new StallingStringConverter("second"));
+        return (new BareContext(), manager,
+            new DurableFuture<string>(manager.GetOrRegister(1), options),
+            new DurableFuture<string>(manager.GetOrRegister(2), options));
+    }
+
+    private static (Context Ctx, DurableFuture<int> First, DurableFuture<int> Second) TwoDeliveries(
+        JsonConverter decoder)
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(1, Serialized(1));
+        manager.TryComplete(2, Serialized(2));
+
+        var options = WithConverter(decoder);
+        return (new BareContext(),
+            new DurableFuture<int>(manager.GetOrRegister(1), options),
+            new DurableFuture<int>(manager.GetOrRegister(2), options));
+    }
+
+    // Separate frame so the losing branch is unreachable — and collectable — by the time the
+    // caller forces a garbage collection.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<string> RaceAgainstAPoisonedLoser()
+    {
+        var manager = new CompletionManager<int>();
+        var options = WithConverter(new PoisonStringConverter());
+        var ctx = new BareContext();
+        var winner = new DurableFuture<string>(manager.GetOrRegister(1), options);
+        var loser = new DurableFuture<string>(manager.GetOrRegister(2), options);
+
+        manager.TryComplete(1, Serialized("winner"));
+        manager.TryComplete(2, Serialized(PoisonStringConverter.Poison));
+
+        return await ctx.Race(winner, loser);
+    }
+
+    private static JsonSerializerOptions WithConverter(JsonConverter converter)
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(converter);
+        return options;
+    }
+
+    /// <summary>
+    ///     Decodes strings, stalling on one payload so that the thread pool finishes the other
+    ///     branch's decode first.
+    /// </summary>
+    private sealed class StallingStringConverter(string stalls) : JsonConverter<string>
+    {
+        public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            var value = reader.GetString()!;
+            if (value == stalls)
+                Thread.Sleep(TimeSpan.FromMilliseconds(250));
+            return value;
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value);
+        }
+    }
+
+    /// <summary>Decodes strings, failing on one payload the way a broken serializer would.</summary>
+    private sealed class PoisonStringConverter : JsonConverter<string>
+    {
+        public const string Poison = "poison";
+        public const string Marker = "poisoned payload";
+
+        public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            var value = reader.GetString()!;
+            if (value != Poison)
+                return value;
+
+            // Slow enough that a combinator racing decoded values hands back the other branch
+            // and leaves this fault behind.
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+            throw new JsonException(Marker);
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value);
+        }
+    }
+
+    /// <summary>Counts how often a branch's payload is decoded.</summary>
+    private sealed class CountingInt32Converter : JsonConverter<int>
+    {
+        private int _reads;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public override int Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            Interlocked.Increment(ref _reads);
+            return reader.GetInt32();
+        }
+
+        public override void Write(Utf8JsonWriter writer, int value, JsonSerializerOptions options)
+        {
+            writer.WriteNumberValue(value);
+        }
     }
 
     /// <summary>
