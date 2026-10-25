@@ -18,9 +18,9 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
    - bumps `<Version>` in `Directory.Build.props` (the line is marked with
      `x-release-please-version`)
    - rewrites the version in the last row of the compatibility table in `README.md`,
-     which carries the same marker, so the table names the version being shipped; to
-     keep the superseded version as a row of its own, copy the row above it and leave
-     the marker on the last one
+     which carries the same marker, so the table names the version being shipped. The
+     updater rewrites that one row in place and cannot add a row, so after a cut the
+     superseded version's row is added above the marked row by hand
    - adds the pending changes to `CHANGELOG.md`
    - updates `.release-please-manifest.json`
    - moves every `PublicAPI.Unshipped.txt` entry into the `PublicAPI.Shipped.txt`
@@ -28,6 +28,13 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
      publishes stops being unshipped. The step runs
      `.github/scripts/roll-public-api.sh` and commits onto the release branch, so
      the roll is reviewed and merged with the rest of the release PR.
+
+   release-please rewrites an open release PR only when the body it generates differs
+   from the current one; otherwise it logs "remained the same" and skips the file
+   changes. A change to `release-please-config.json`, or to a marked file, made while a
+   release PR is open therefore needs the PR body edited (any small change) and the
+   latest Release Please workflow run re-run (`gh run rerun <id>`), after which the PR
+   picks up the file changes.
 3. Merge the release PR. release-please creates the `vX.Y.Z` tag and the
    GitHub Release, and the same workflow run then dispatches `publish.yml`
    on that tag.
