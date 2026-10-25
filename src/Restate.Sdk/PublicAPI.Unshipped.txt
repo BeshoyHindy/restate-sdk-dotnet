@@ -1,5 +1,1 @@
 #nullable enable
-Restate.Sdk.Awakeable<T>.Future.get -> Restate.Sdk.IDurableFuture<T>!
-Restate.Sdk.Awakeable<T>.Future.init -> void
-Restate.Sdk.Awakeable<T>.GetResult() -> System.Threading.Tasks.ValueTask<T>
-Restate.Sdk.Awakeable<T>.InvocationId.get -> string?

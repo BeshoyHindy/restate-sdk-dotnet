@@ -2,8 +2,12 @@
 Restate.Sdk.Awakeable<T>
 Restate.Sdk.Awakeable<T>.Awakeable() -> void
 Restate.Sdk.Awakeable<T>.Equals(Restate.Sdk.Awakeable<T> other) -> bool
+Restate.Sdk.Awakeable<T>.Future.get -> Restate.Sdk.IDurableFuture<T>!
+Restate.Sdk.Awakeable<T>.Future.init -> void
+Restate.Sdk.Awakeable<T>.GetResult() -> System.Threading.Tasks.ValueTask<T>
 Restate.Sdk.Awakeable<T>.Id.get -> string!
 Restate.Sdk.Awakeable<T>.Id.init -> void
+Restate.Sdk.Awakeable<T>.InvocationId.get -> string?
 Restate.Sdk.Awakeable<T>.Value.get -> System.Threading.Tasks.ValueTask<T>
 Restate.Sdk.Awakeable<T>.Value.init -> void
 Restate.Sdk.CallOptions
