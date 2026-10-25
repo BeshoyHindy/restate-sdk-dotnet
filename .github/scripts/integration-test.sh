@@ -244,6 +244,7 @@ sleep 2
 #   /restate/call/{service}/{key}/{handler}   request-response to a virtual object or workflow
 #   /restate/send/{service}/{handler}         one-way send, answered with 202
 #   /restate/send/{service}/{key}/{handler}   one-way send to a virtual object or workflow
+#   /restate/scope/{scope}/call|send/...      the same routes inside a concurrency scope
 # A send is delayed with a ?delay=<duration> query parameter; the unversioned
 # /{service}[/{key}]/{handler}[/send] paths are deprecated since server 1.7.
 # NOTE: JSON uses camelCase — the source generator configures JsonNamingPolicy.CamelCase
@@ -375,6 +376,15 @@ assert_void_response \
 assert_response \
     "PricingService/QuoteInScope (scoped call with a limit key)" \
     "http://localhost:8080/restate/call/PricingService/QuoteInScope" \
+    '{"tenant":"tenant-a","sku":"widget","quantity":2}' \
+    '"amountCents":500'
+
+# The same invocation through the scoped ingress route, which carries the scope in the path — this
+# is what a RestateClient bound with WithScope sends. The scope is the one PricingService declares,
+# and the reply must match the unscoped route's for the same input.
+assert_response \
+    "PricingService/QuoteInScope through the scoped ingress route" \
+    "http://localhost:8080/restate/scope/pricing/call/PricingService/QuoteInScope" \
     '{"tenant":"tenant-a","sku":"widget","quantity":2}' \
     '"amountCents":500'
 
