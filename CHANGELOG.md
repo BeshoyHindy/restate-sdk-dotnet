@@ -5,6 +5,13 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.4.2...v0.5.0) (2026-10-25)
+
+
+### Features
+
+* let an awakeable be awaited through the combinators as a durable future ([#154](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/154)) ([23e6041](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/23e6041eb7f99aebea5ffe988c264cc44c21b347))
+
 ## [0.4.2](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.4.1...v0.4.2) (2026-10-25)
 
 
