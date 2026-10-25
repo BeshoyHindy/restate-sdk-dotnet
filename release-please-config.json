@@ -10,6 +10,10 @@
         {
           "type": "generic",
           "path": "Directory.Build.props"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
         }
       ]
     }

@@ -17,6 +17,10 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
 2. The `release-please.yml` workflow maintains a release PR that:
    - bumps `<Version>` in `Directory.Build.props` (the line is marked with
      `x-release-please-version`)
+   - rewrites the version in the last row of the compatibility table in `README.md`,
+     which carries the same marker, so the table names the version being shipped; to
+     keep the superseded version as a row of its own, copy the row above it and leave
+     the marker on the last one
    - adds the pending changes to `CHANGELOG.md`
    - updates `.release-please-manifest.json`
    - moves every `PublicAPI.Unshipped.txt` entry into the `PublicAPI.Shipped.txt`
