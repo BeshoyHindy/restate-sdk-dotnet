@@ -15,7 +15,7 @@ public sealed class PrTitleWorkflowTests
     public void Title_lint_triggers_on_open_edit_synchronize_and_reopen()
     {
         var workflow = File.ReadAllText(
-            Path.Combine(RepoRoot(), ".github", "workflows", "pr-title.yml"));
+            Path.Combine(RepositoryLayout.RepoRoot(), ".github", "workflows", "pr-title.yml"));
 
         var trigger = Regex.Match(workflow, @"pull_request:\s*\r?\n\s*types:\s*\[(?<types>[^\]]*)\]");
         Assert.True(trigger.Success, "pr-title.yml no longer declares a pull_request types list.");
@@ -26,15 +26,5 @@ public sealed class PrTitleWorkflowTests
             .ToArray();
 
         Assert.Equal(["edited", "opened", "reopened", "synchronize"], types);
-    }
-
-    private static string RepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Restate.Sdk.slnx")))
-            directory = directory.Parent;
-
-        Assert.NotNull(directory);
-        return directory.FullName;
     }
 }

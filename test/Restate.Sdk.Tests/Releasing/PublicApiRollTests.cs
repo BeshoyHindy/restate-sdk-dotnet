@@ -159,7 +159,7 @@ public sealed class PublicApiRollTests : IDisposable
     private static string ReleaseWorkflow()
     {
         return File.ReadAllText(
-            Path.Combine(RepoRoot(), ".github", "workflows", "release-please.yml"));
+            Path.Combine(RepositoryLayout.RepoRoot(), ".github", "workflows", "release-please.yml"));
     }
 
     /// <summary>Builds a throwaway src tree: one directory per project, each with both API files.</summary>
@@ -184,7 +184,7 @@ public sealed class PublicApiRollTests : IDisposable
 
     private static string RunRollScript(string root)
     {
-        var script = Path.Combine(RepoRoot(), ".github", "scripts", "roll-public-api.sh");
+        var script = Path.Combine(RepositoryLayout.RepoRoot(), ".github", "scripts", "roll-public-api.sh");
 
         using var process = Process.Start(new ProcessStartInfo("bash", $"\"{script}\" \"{root}\"")
         {
@@ -204,15 +204,5 @@ public sealed class PublicApiRollTests : IDisposable
     private static string[] ReadLines(string root, string project, string fileName)
     {
         return File.ReadAllLines(Path.Combine(root, "src", project, fileName));
-    }
-
-    private static string RepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Restate.Sdk.slnx")))
-            directory = directory.Parent;
-
-        Assert.NotNull(directory);
-        return directory.FullName;
     }
 }

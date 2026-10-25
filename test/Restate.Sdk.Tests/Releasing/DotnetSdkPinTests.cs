@@ -20,7 +20,7 @@ public sealed class DotnetSdkPinTests
     [Fact]
     public void Workflows_name_no_sdk_version_of_their_own()
     {
-        var root = RepoRoot();
+        var root = RepositoryLayout.RepoRoot();
 
         var offenders = WorkflowFiles(root)
             .Where(file => Regex.IsMatch(File.ReadAllText(file), LiteralVersionPattern))
@@ -35,7 +35,7 @@ public sealed class DotnetSdkPinTests
     [Fact]
     public void Every_setup_dotnet_step_reads_global_json()
     {
-        var root = RepoRoot();
+        var root = RepositoryLayout.RepoRoot();
 
         var offenders = WorkflowFiles(root)
             .Select(file => (Path: Path.GetRelativePath(root, file), Text: File.ReadAllText(file)))
@@ -58,7 +58,8 @@ public sealed class DotnetSdkPinTests
     [Fact]
     public void GlobalJson_pins_an_exact_sdk_version()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepoRoot(), "global.json")));
+        using var document = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(RepositoryLayout.RepoRoot(), "global.json")));
         var sdk = document.RootElement.GetProperty("sdk");
 
         Assert.Matches(@"^\d+\.\d+\.\d+$", sdk.GetProperty("version").GetString());
@@ -68,15 +69,5 @@ public sealed class DotnetSdkPinTests
     private static IEnumerable<string> WorkflowFiles(string root)
     {
         return Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml");
-    }
-
-    private static string RepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Restate.Sdk.slnx")))
-            directory = directory.Parent;
-
-        Assert.NotNull(directory);
-        return directory.FullName;
     }
 }
