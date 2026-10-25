@@ -302,7 +302,6 @@ public sealed class RestateClient : IDisposable
     /// <exception cref="ArgumentException"><paramref name="serviceName" /> is empty.</exception>
     public ServiceHandle Service(string serviceName)
     {
-        ArgumentException.ThrowIfNullOrEmpty(serviceName);
         return new ServiceHandle(this, serviceName, null);
     }
 
@@ -317,8 +316,8 @@ public sealed class RestateClient : IDisposable
     /// </exception>
     public ServiceHandle VirtualObject(string serviceName, string key)
     {
-        ArgumentException.ThrowIfNullOrEmpty(serviceName);
-        ArgumentException.ThrowIfNullOrEmpty(key);
+        // The constructor reads a null key as "unkeyed", so a missing key is the factory's own error.
+        ArgumentNullException.ThrowIfNull(key);
         return new ServiceHandle(this, serviceName, key);
     }
 
@@ -333,8 +332,8 @@ public sealed class RestateClient : IDisposable
     /// </exception>
     public ServiceHandle Workflow(string serviceName, string key)
     {
-        ArgumentException.ThrowIfNullOrEmpty(serviceName);
-        ArgumentException.ThrowIfNullOrEmpty(key);
+        // The constructor reads a null key as "unkeyed", so a missing key is the factory's own error.
+        ArgumentNullException.ThrowIfNull(key);
         return new ServiceHandle(this, serviceName, key);
     }
 
@@ -770,10 +769,24 @@ public readonly record struct ServiceHandle
     private readonly string? _key;
     private readonly string _service;
 
-    internal ServiceHandle(RestateClient client, string service, string? key)
+    /// <summary>
+    ///     Builds a handle for <paramref name="serviceName" />, addressing the instance named by
+    ///     <paramref name="key" /> — <see langword="null" /> for a stateless service, which has no key.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="serviceName" /> is <see langword="null" />.</exception>
+    /// <exception cref="ArgumentException">
+    ///     <paramref name="serviceName" /> is empty, or <paramref name="key" /> is empty.
+    /// </exception>
+    internal ServiceHandle(RestateClient client, string serviceName, string? key)
     {
+        ArgumentException.ThrowIfNullOrEmpty(serviceName);
+        // Null means unkeyed, which only the keyed factories can tell apart from a missing key;
+        // empty is never addressable, so it is rejected wherever the handle is built.
+        if (key is not null)
+            ArgumentException.ThrowIfNullOrEmpty(key);
+
         _client = client;
-        _service = service;
+        _service = serviceName;
         _key = key;
     }
 
@@ -784,7 +797,6 @@ public readonly record struct ServiceHandle
     [RequiresDynamicCode(ReflectionJsonMessage)]
     public Task<TResponse> Call<TResponse>(string handler, object? request = null, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call<TResponse>(handler, request, default(CallOptions), ct);
     }
 
@@ -822,7 +834,6 @@ public readonly record struct ServiceHandle
         JsonTypeInfo<TRequest> requestTypeInfo, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call(handler, request, requestTypeInfo, responseTypeInfo, default(CallOptions), ct);
     }
 
@@ -862,7 +873,6 @@ public readonly record struct ServiceHandle
     public Task<TResponse> Call<TResponse>(string handler, JsonTypeInfo<TResponse> responseTypeInfo,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Call(handler, responseTypeInfo, default(CallOptions), ct);
     }
 
@@ -896,7 +906,6 @@ public readonly record struct ServiceHandle
     public Task<string> Send(string handler, object? request = null, TimeSpan? delay = null,
         string? idempotencyKey = null, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Send(handler, request, new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }
 
@@ -930,7 +939,6 @@ public readonly record struct ServiceHandle
     public Task<string> Send<TRequest>(string handler, TRequest? request, JsonTypeInfo<TRequest> requestTypeInfo,
         TimeSpan? delay = null, string? idempotencyKey = null, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(handler);
         return Send(handler, request, requestTypeInfo,
             new SendOptions { Delay = delay, IdempotencyKey = idempotencyKey }, ct);
     }

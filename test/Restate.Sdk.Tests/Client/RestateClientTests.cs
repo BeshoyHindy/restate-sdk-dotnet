@@ -595,6 +595,24 @@ public class RestateClientTests
         Assert.Equal("/restate/call/X/k/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
+    [Fact]
+    public async Task HandleConstructor_EmptyServiceNameOrKey_ThrowsBeforeTheHandleExists()
+    {
+        var (client, handler) = CreateClient();
+
+        // The factories are not the only door into a handle, so the constructor itself rejects what
+        // cannot address a route: an empty key would build "/restate/call/X//Greet".
+        Assert.Equal("key", Assert.Throws<ArgumentException>(() => new ServiceHandle(client, "X", "")).ParamName);
+        Assert.Equal("serviceName",
+            Assert.Throws<ArgumentException>(() => new ServiceHandle(client, "", "k")).ParamName);
+        Assert.Null(handler.LastRequest);
+
+        // A null key is how a stateless service says "unkeyed", so it stays accepted.
+        handler.ResponseBody = """{"message":"ok"}""";
+        await new ServiceHandle(client, "X", null).Call("Greet", ClientTestJsonContext.Default.GreetResponse);
+        Assert.Equal("/restate/call/X/Greet", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
