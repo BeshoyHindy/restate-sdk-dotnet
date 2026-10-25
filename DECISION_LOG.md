@@ -218,3 +218,63 @@ available and negotiates service protocol V7 by default, so the `scope` and `lim
 `CallCommand` and `OneWayCallCommand` reach a default deployment. Keeping the options internal
 would have left the feature unreachable from handler code. #13 stands as written for the
 negotiation range and the single vendored proto; this entry amends only its last sentence.
+
+## 19. Handlers Receive Their Context as an Explicit Parameter
+
+**Decision:** Handlers take `Context`, `ObjectContext`, `WorkflowContext` or `IRunContext` as a parameter. That style is the primary and only documented model and is never deprecated. No ambient accessor is provided today; if one is added it is an injected `IRestateContextAccessor` (the `IHttpContextAccessor` shape, backed by `AsyncLocal`) that returns null outside a handler and is documented as a secondary path, not a replacement.
+
+**Context:** The Java SDK 2.9 deprecated its `Context` parameter in favour of static `Restate.*` methods backed by a thread-local, so readers coming from Java expect the .NET SDK to follow. TypeScript, Go, Python and Rust still pass a context.
+
+**Rationale:**
+- The typed parameter gives compile-time safety per service type: a shared handler cannot write state, a plain service cannot read a key
+- `MockContext` and its keyed variants test a handler without any runtime
+- The source generator can diagnose a handler that takes the wrong context type; an ambient model hides that until runtime
+
+**Alternatives:**
+- Ambient context as the primary model: rejected; it hides the dependency from tests and loses the per-type compile-time check
+- A static `RestateContext.Current`: rejected for the same testability reason, even as a secondary path
+
+## 20. Cancellation Goes Through the Admin API
+
+**Decision:** `RestateClient.Cancel` sends `PATCH {admin}/invocations/{id}/cancel` and requires `RestateClientOptions.AdminAddress`; without an admin address it throws `InvalidOperationException` rather than guessing a port.
+
+**Context:** The client used to send `DELETE /restate/invocation/{id}` to the ingress. The ingress has never served a cancel route in any supported server version; the request was rejected with 400 against both 1.7 and 1.8.
+
+**Rationale:**
+- Cancellation is an operator action on the admin port in every Restate release; the sibling SDK clients that offer it also target the admin API
+- An explicit admin address keeps the ingress client usable where only the ingress is reachable, and makes the extra network dependency visible in configuration
+
+**Alternatives:**
+- Mark `Cancel` obsolete and remove it: rejected; cancelling from application code is a real need in workflow orchestration
+- Derive the admin address from the ingress address by swapping the port: rejected; deployments routinely expose the two on different hosts
+
+## 21. Canonical Ingress Routes, with the Awakeable Segment Passed Verbatim
+
+**Decision:** The ingress client uses only the `/restate/...` route family (`call`, `send`, `scope/{scope}/call|send`, `attach`, `output`, `lookup`). Service, key, handler, scope and invocation id segments are escaped exactly once with `Uri.EscapeDataString` when the path is built. The awakeable id in signal resolve and reject is interpolated unescaped.
+
+**Context:** Restate 1.8 deprecates the per-service and `/restate/invocation/...` routes. The server url-decodes the key and scope segments but takes the awakeable segment as written and then base64-decodes it. The Java SDK emits awakeable ids with base64 padding, so every Java-minted id ends in `=`.
+
+**Rationale:**
+- Escaping the segments the server decodes makes reserved characters in keys and scopes round-trip
+- Escaping the awakeable segment would turn `=` into `%3D`, which the server does not decode, so ids resolved fine before and would be rejected after; a segment the server never decodes must be passed through
+
+**Alternatives:**
+- Escape every segment uniformly: rejected because of the padded Java ids
+- Restore `=` after escaping: rejected as a special case that documents the wrong rule
+
+## 22. The Restate Image Is Pulled from docker.restate.dev
+
+**Decision:** `docker-compose.yml`, the Testcontainers default image, the CI integration script, the guide and the pin test name `docker.restate.dev/restatedev/restate:<major.minor>`. The pin test still accepts `docker.io/restatedev/restate`.
+
+**Context:** Since 1.8.0 the docs quickstart, the GitHub release notes and the upstream README pull from `docker.restate.dev`, a front for `ghcr.io/restatedev/restate`. Docker Hub still mirrors the same tags with identical digests.
+
+**Rationale:**
+- Following the registry the documentation names means a user copying a docs command and a user copying this repo's compose file get the same image
+- Accepting Docker Hub keeps a dependency bump or a user override from failing the pin test for the wrong reason
+
+**Alternatives:**
+- Stay on Docker Hub until it is deprecated: rejected; the docs already moved, and the pin test is where a silent divergence would surface last
+
+## 23. Signal Ids Are Not Escaped in Ingress Paths (clarifies #21)
+
+**Decision:** Covered by entry 21; recorded separately so a search for "signal id" lands here. `ResolveSignal` and `RejectSignal` send the awakeable id as given, after only a null-or-empty check.
