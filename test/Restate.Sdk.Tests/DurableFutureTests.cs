@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Journal;
 
@@ -215,5 +216,95 @@ public class DurableFutureTests
 
         Assert.Equal(first.Code, second.Code);
         Assert.Equal(first.Message, second.Message);
+    }
+
+    [Fact]
+    public async Task LazyTimerFuture_DeliveredFailure_ThrowsSameExceptionOnEveryAwait()
+    {
+        // Delivered as a failed result rather than a faulted setup: the TerminalException it
+        // stands for is built on every read, so only a kept outcome makes the two awaits agree.
+        var tcs = new TaskCompletionSource<CompletionResult>();
+        var source = PendingInit();
+        var future = new LazyTimerFuture(source.ValueTask);
+
+        source.SetResult(tcs);
+        tcs.SetResult(CompletionResult.Failure(500, "sleep rejected"));
+
+        var first = await Assert.ThrowsAsync<TerminalException>(() => future.GetResult().AsTask());
+        var second = await Assert.ThrowsAsync<TerminalException>(() => future.GetResult().AsTask());
+
+        Assert.Same(first, second);
+    }
+
+    // ------- Concurrent first awaits -------
+    //
+    // A future decodes its delivery on the first await and keeps the outcome. Two first awaits
+    // can land on two threads, so the memo has to be once-only under a race rather than a
+    // read-then-write: otherwise both threads decode and the awaits hand back two objects.
+
+    [Fact]
+    public void DurableFuture_AwaitedConcurrently_DecodesOnceAndSharesTheValue()
+    {
+        const int awaiters = 8;
+        const int rounds = 200;
+
+        // A floor under the pool, so every awaiter reaches the barrier instead of waiting for
+        // the pool to inject the thread that would release it.
+        ThreadPool.GetMinThreads(out var workerThreads, out var completionPortThreads);
+        ThreadPool.SetMinThreads(Math.Max(workerThreads, awaiters * 2), completionPortThreads);
+
+        var decoder = new CountingPayloadConverter();
+        var options = new JsonSerializerOptions { Converters = { decoder } };
+
+        for (var round = 0; round < rounds; round++)
+        {
+            var tcs = new TaskCompletionSource<CompletionResult>();
+            var future = new DurableFuture<Payload>(tcs, options);
+
+            // Delivered up front, so the decode runs inline on each awaiter's own thread.
+            tcs.SetResult(Serialized(new Payload(round), options));
+
+            using var start = new Barrier(awaiters);
+            var observed = new Payload[awaiters];
+            Parallel.For(0, awaiters, new ParallelOptions { MaxDegreeOfParallelism = awaiters }, i =>
+            {
+                start.SignalAndWait(TimeSpan.FromSeconds(10));
+                observed[i] = future.GetResult().AsTask().GetAwaiter().GetResult();
+            });
+
+            Assert.All(observed, payload => Assert.Same(observed[0], payload));
+        }
+
+        Assert.Equal(rounds, decoder.Reads);
+    }
+
+    private static CompletionResult Serialized<T>(T value, JsonSerializerOptions options)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        JsonSerializer.Serialize(new Utf8JsonWriter(buffer), value, options);
+        return CompletionResult.Success(buffer.WrittenMemory);
+    }
+
+    /// <summary>A decoded result object, to assert that every await hands back the same instance.</summary>
+    private sealed record Payload(int Value);
+
+    /// <summary>Counts how often a payload is decoded, from any thread.</summary>
+    private sealed class CountingPayloadConverter : JsonConverter<Payload>
+    {
+        private int _reads;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public override Payload Read(ref Utf8JsonReader reader, Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            Interlocked.Increment(ref _reads);
+            return new Payload(reader.GetInt32());
+        }
+
+        public override void Write(Utf8JsonWriter writer, Payload value, JsonSerializerOptions options)
+        {
+            writer.WriteNumberValue(value.Value);
+        }
     }
 }
