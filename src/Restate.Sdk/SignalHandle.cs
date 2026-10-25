@@ -29,7 +29,8 @@ public readonly record struct SignalHandle<T>(int Index, IDurableFuture<T> Futur
 
     /// <summary>
     ///     Awaits the signal's value, forwarding to <see cref="Future" />.
-    ///     Safe to await more than once: every await observes the same outcome.
+    ///     Safe to await more than once: every await observes the same outcome and the same
+    ///     decoded value.
     /// </summary>
     public ValueTask<T> GetResult()
     {

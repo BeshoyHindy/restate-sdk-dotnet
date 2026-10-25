@@ -731,6 +731,22 @@ public class CombinatorTests
         Assert.Same(first, second);
     }
 
+    [Fact]
+    public async Task AllSettled_FailedInput_ReportsTheExceptionTheAwaitThrows()
+    {
+        var ctx = new BareContext();
+        var (failed, tcs) = PendingFuture<int>();
+
+        tcs.SetResult(CompletionResult.Failure(500, "boom"));
+
+        var settled = Assert.Single(await ctx.AllSettled(failed));
+        var caught = await Assert.ThrowsAsync<TerminalException>(() => failed.GetResult().AsTask());
+
+        // One failed delivery stands for one exception object: what the combinator reported is
+        // what awaiting the input throws, so a handler can compare the two.
+        Assert.Same(caught, settled.Error);
+    }
+
     // ── Lazy, arrival-ordered combinators ──
     //
     // The combinators park on the runtime's deliveries, not on decoded values: the winner is the
