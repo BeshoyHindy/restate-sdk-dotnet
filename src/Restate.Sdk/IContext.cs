@@ -43,15 +43,23 @@ public interface IContext
     CancellationToken Aborted { get; }
 
     /// <summary>Executes an async side effect durably. The result is journaled and replayed on retries.</summary>
+    /// <remarks>
+    ///     The result is the object the action returned on the attempt that ran it, and a copy
+    ///     deserialized from the journal on every later attempt, so <typeparamref name="T" /> must
+    ///     round-trip through the configured serializer and callers must not rely on reference
+    ///     identity.
+    /// </remarks>
     ValueTask<T> Run<T>(string name, Func<Task<T>> action);
 
     /// <summary>Executes an async void side effect durably.</summary>
     ValueTask Run(string name, Func<Task> action);
 
     /// <summary>Executes a synchronous side effect durably. The result is journaled and replayed on retries.</summary>
+    /// <inheritdoc cref="Run{T}(string, Func{Task{T}})" path="/remarks" />
     ValueTask<T> Run<T>(string name, Func<T> action);
 
     /// <summary>Executes an async side effect with a restricted run context. Prevents nested Restate operations.</summary>
+    /// <inheritdoc cref="Run{T}(string, Func{Task{T}})" path="/remarks" />
     ValueTask<T> Run<T>(string name, Func<IRunContext, Task<T>> action);
 
     /// <summary>Executes an async void side effect with a restricted run context.</summary>
@@ -61,6 +69,7 @@ public interface IContext
     ///     Executes an async side effect durably with a custom retry policy.
     ///     The SDK retries locally with exponential backoff before propagating failures.
     /// </summary>
+    /// <inheritdoc cref="Run{T}(string, Func{Task{T}})" path="/remarks" />
     ValueTask<T> Run<T>(string name, Func<Task<T>> action, RetryPolicy retryPolicy);
 
     /// <summary>
@@ -72,6 +81,7 @@ public interface IContext
     ///     Executes a synchronous side effect durably with a custom retry policy.
     ///     The SDK retries locally with exponential backoff before propagating failures.
     /// </summary>
+    /// <inheritdoc cref="Run{T}(string, Func{Task{T}})" path="/remarks" />
     ValueTask<T> Run<T>(string name, Func<T> action, RetryPolicy retryPolicy);
 
     /// <summary>Calls a handler on a stateless service and awaits its response.</summary>
@@ -209,6 +219,7 @@ public interface IContext
     /// <summary>
     ///     Executes an async side effect and returns a non-blocking future.
     /// </summary>
+    /// <inheritdoc cref="Run{T}(string, Func{Task{T}})" path="/remarks" />
     IDurableFuture<T> RunAsync<T>(string name, Func<Task<T>> action);
 
     /// <summary>
