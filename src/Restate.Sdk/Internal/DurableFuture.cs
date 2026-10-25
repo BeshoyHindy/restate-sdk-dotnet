@@ -45,6 +45,7 @@ internal interface IArrivalOrderedFuture
 /// </summary>
 internal abstract class RawCompletion
 {
+    private readonly Lock _failureLock = new();
     private Exception? _failure;
     private bool _failureRead;
 
@@ -63,19 +64,28 @@ internal abstract class RawCompletion
 
     /// <summary>
     ///     The failure the delivery carried, or null when it carried a value or has not happened
-    ///     yet. Reading it deserializes nothing, and every read returns the same instance.
+    ///     yet. Reading it deserializes nothing, and every read returns the same instance, also
+    ///     when two first reads race on different threads.
     /// </summary>
     internal Exception? Failure
     {
         get
         {
-            if (!_failureRead && IsSettled)
-            {
-                _failure = ReadFailure();
-                _failureRead = true;
-            }
+            if (Volatile.Read(ref _failureRead)) return _failure;
+            if (!IsSettled) return null;
 
-            return _failure;
+            // Read once under a lock: a combinator woken by the delivery and an await it resumed
+            // can both land here first, and each must hand back the one object the other saw.
+            lock (_failureLock)
+            {
+                if (!_failureRead)
+                {
+                    _failure = ReadFailure();
+                    Volatile.Write(ref _failureRead, true);
+                }
+
+                return _failure;
+            }
         }
     }
 

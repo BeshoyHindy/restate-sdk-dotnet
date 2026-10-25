@@ -248,10 +248,7 @@ public class DurableFutureTests
         const int awaiters = 8;
         const int rounds = 200;
 
-        // A floor under the pool, so every awaiter reaches the barrier instead of waiting for
-        // the pool to inject the thread that would release it.
-        ThreadPool.GetMinThreads(out var workerThreads, out var completionPortThreads);
-        ThreadPool.SetMinThreads(Math.Max(workerThreads, awaiters * 2), completionPortThreads);
+        RaiseThreadPoolFloor(awaiters * 2);
 
         var decoder = new CountingPayloadConverter();
         var options = new JsonSerializerOptions { Converters = { decoder } };
@@ -276,6 +273,44 @@ public class DurableFutureTests
         }
 
         Assert.Equal(rounds, decoder.Reads);
+    }
+
+    [Fact]
+    public void RawCompletion_FailureReadConcurrently_HandsBackOneInstance()
+    {
+        const int readers = 8;
+        const int rounds = 200;
+
+        RaiseThreadPoolFloor(readers * 2);
+
+        for (var round = 0; round < rounds; round++)
+        {
+            var tcs = new TaskCompletionSource<CompletionResult>();
+            tcs.SetResult(CompletionResult.Failure(500, "boom"));
+            var completion = RawCompletion.OfDelivery(tcs.Task);
+
+            // A combinator woken by the delivery and an await it resumed read the failure on two
+            // pool threads at once; both must get the one instance the delivery stands for.
+            using var start = new Barrier(readers);
+            var observed = new Exception?[readers];
+            Parallel.For(0, readers, new ParallelOptions { MaxDegreeOfParallelism = readers }, i =>
+            {
+                start.SignalAndWait(TimeSpan.FromSeconds(10));
+                observed[i] = completion.Failure;
+            });
+
+            Assert.All(observed, failure => Assert.Same(observed[0], failure));
+        }
+    }
+
+    /// <summary>
+    ///     A floor under the pool, so every awaiter reaches its barrier instead of waiting for the
+    ///     pool to inject the thread that would release it.
+    /// </summary>
+    private static void RaiseThreadPoolFloor(int workers)
+    {
+        ThreadPool.GetMinThreads(out var workerThreads, out var completionPortThreads);
+        ThreadPool.SetMinThreads(Math.Max(workerThreads, workers), completionPortThreads);
     }
 
     private static CompletionResult Serialized<T>(T value, JsonSerializerOptions options)
