@@ -698,7 +698,8 @@ curl -X PATCH http://localhost:9070/invocations/<id>/kill
 ```
 
 `DELETE /invocations/{id}?mode=` still answers, but it is deprecated in favour of the named
-operations above. The [admin API reference](https://docs.restate.dev/admin-api) documents the
+operations above. The admin API's
+[invocation operations](https://docs.restate.dev/admin-api/invocation/kill-an-invocation) document the
 parameters and responses of each one.
 
 Any non-success ingress response throws a `RestateIngressException`:
