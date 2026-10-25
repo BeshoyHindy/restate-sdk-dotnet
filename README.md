@@ -778,7 +778,7 @@ dotnet run
 | 0.3.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.3.1 | 1.6.0+ | v5 - v7 | .NET 10.0 |
 | 0.4.0 | 1.6.0+ | v5 - v7 | .NET 10.0 |
-| 0.4.1 | 1.6.0+ | v5 - v7 | .NET 10.0 | <!-- x-release-please-version -->
+| 0.4.2 | 1.6.0+ | v5 - v7 | .NET 10.0 | <!-- x-release-please-version -->
 
 The protocol version is negotiated per invocation from the request content type, so the SDK and the
 server settle on the highest version both support; v5 is the floor, which is why the minimum server

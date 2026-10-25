@@ -5,6 +5,18 @@ All notable changes to the Restate .NET SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.4.1...v0.4.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* decode a durable future's result exactly once under concurrent first awaits ([#148](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/148)) ([0836873](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/08368730ae2d0252c8018d82bce576ffb2244b8f))
+* decode a durable future's result once and return the same value on every await ([#147](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/147)) ([d04d679](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/d04d679f263c3701b36394cd49548384830e2b77))
+* fail All on the first delivered failure instead of waiting for every input ([#146](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/146)) ([664d320](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/664d320c8208f2054542222e8afe6829953313f5))
+* pick combinator winners by delivery order and deserialize only the branch returned ([#137](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/137)) ([6e90441](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/6e904413dc1042c7c7dee5b39239dca03acd0d4b))
+* reject null or empty service name, key and handler when building an ingress handle ([#138](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/138)) ([175ade3](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/175ade318c1cbb66c157bb5b4fc2bfa82a0672b6))
+* validate ingress handle arguments once in the ServiceHandle constructor ([#150](https://github.com/BeshoyHindy/restate-sdk-dotnet/issues/150)) ([cb965a0](https://github.com/BeshoyHindy/restate-sdk-dotnet/commit/cb965a0e8f95b2b06f703d2ed50086b6f36ce4c6))
+
 ## [0.4.1](https://github.com/BeshoyHindy/restate-sdk-dotnet/compare/v0.4.0...v0.4.1) (2026-10-24)
 
 
