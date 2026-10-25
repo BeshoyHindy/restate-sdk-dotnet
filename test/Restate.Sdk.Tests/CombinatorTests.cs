@@ -123,6 +123,18 @@ public class CombinatorTests
     // ── Race ──
 
     [Fact]
+    public void Race_NoInputs_ThrowsBeforeAnyAwait()
+    {
+        var ctx = new BareContext();
+
+        // Thrown by the call itself rather than handed back in the returned ValueTask, so a
+        // caller that never awaits the race still sees the argument error.
+        var error = Assert.Throws<ArgumentException>(() => _ = ctx.Race(Array.Empty<IDurableFuture<int>>()));
+
+        Assert.Equal("futures", error.ParamName);
+    }
+
+    [Fact]
     public async Task Race_FirstCompleted_Wins()
     {
         var ctx = new TestCombinatorContext();
@@ -252,6 +264,24 @@ public class CombinatorTests
         Assert.Single(results);
         Assert.NotNull(results[0].Item2);
         Assert.IsType<TerminalException>(results[0].Item2);
+    }
+
+    [Fact]
+    public async Task WaitAll_CanceledFuture_YieldsTaskCanceledException()
+    {
+        // Invocation abort cancels pending completions (CompletionManager.CancelAll); the
+        // canceled branch is yielded with that cancellation as its error, not with none.
+        var ctx = new BareContext();
+        var completed = CompletedFuture(1);
+        var (canceled, canceledTcs) = PendingFuture<int>();
+
+        canceledTcs.SetCanceled();
+
+        var yielded = await YieldedBy(ctx, completed, canceled);
+
+        Assert.Null(yielded.Single(item => ReferenceEquals(item.Future, completed)).Error);
+        Assert.IsType<TaskCanceledException>(
+            yielded.Single(item => ReferenceEquals(item.Future, canceled)).Error);
     }
 
     // ── Any ──
@@ -790,6 +820,37 @@ public class CombinatorTests
     }
 
     [Fact]
+    public async Task All_EveryInputFailed_ThrowsTheEarlierDeliveredFailure()
+    {
+        await AssertEarlierDeliveredFailureThrows(deliveredBeforeTheCall: false);
+        await AssertEarlierDeliveredFailureThrows(deliveredBeforeTheCall: true);
+    }
+
+    [Fact]
+    public async Task WaitAll_SettledDeliveriesAndALocalResult_TakesTheDeliveriesFirst()
+    {
+        var (ctx, a, b, c) = SettledDeliveriesAndALocalResult();
+
+        var yielded = await YieldedBy(ctx, a, b, c);
+
+        // C was delivered first and A second, and B — which has no delivered result — is taken
+        // last, because a delivery sits ahead of it in argument order.
+        Assert.Equal([c, a, b], yielded.Select(item => item.Future));
+    }
+
+    [Fact]
+    public async Task WaitAll_ALocalResultAheadOfTheDeliveries_TakesItFirst()
+    {
+        var (ctx, a, b, c) = SettledDeliveriesAndALocalResult();
+
+        var yielded = await YieldedBy(ctx, b, a, c);
+
+        // The same three inputs with B in front: no delivery sits ahead of it in argument order,
+        // so it goes first and the two deliveries follow in the order they arrived.
+        Assert.Equal([b, c, a], yielded.Select(item => item.Future));
+    }
+
+    [Fact]
     public async Task Race_DeserializesOnlyTheBranchItHandsBack()
     {
         var decoder = new CountingInt32Converter();
@@ -1027,6 +1088,76 @@ public class CombinatorTests
 
             Assert.Equal("second", await pending);
         }
+    }
+
+    /// <summary>
+    ///     Fails two futures back to back, the second argument first, and asserts All throws the
+    ///     failure the runtime delivered first instead of the first argument's — and instead of
+    ///     waiting for the other input. The two deliveries wake the combinator on the thread
+    ///     pool in whichever order it schedules them, so a single attempt proves nothing; the
+    ///     delivery is repeated until every scheduling has had its chance, by which point the
+    ///     pool is warm and the wake-ups overlap. With <paramref name="deliveredBeforeTheCall" />
+    ///     the failures are replayed before All is called; without it they arrive while it is
+    ///     already waiting.
+    /// </summary>
+    private static async Task AssertEarlierDeliveredFailureThrows(bool deliveredBeforeTheCall)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var manager = new CompletionManager<int>();
+            var ctx = new BareContext();
+            if (deliveredBeforeTheCall)
+                DeliverFailures(manager);
+
+            var first = new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default);
+            var second = new DurableFuture<int>(manager.GetOrRegister(2), JsonSerializerOptions.Default);
+
+            var pending = ctx.All(first, second).AsTask();
+            if (!deliveredBeforeTheCall)
+            {
+                Assert.False(pending.IsCompleted);
+                DeliverFailures(manager);
+            }
+
+            var failure = await Assert.ThrowsAsync<TerminalException>(
+                () => pending.WaitAsync(TimeSpan.FromSeconds(30)));
+
+            Assert.Equal("second", failure.Message);
+        }
+    }
+
+    private static void DeliverFailures(CompletionManager<int> manager)
+    {
+        manager.TryFail(2, 500, "second");
+        manager.TryFail(1, 500, "first");
+    }
+
+    /// <summary>
+    ///     Three settled inputs: A, whose result the runtime delivered second, B, which has no
+    ///     delivered result of its own because it was replayed as an already-known value, and C,
+    ///     whose result the runtime delivered first.
+    /// </summary>
+    private static (Context Ctx, DurableFuture<int> A, DurableFuture<int> B, DurableFuture<int> C)
+        SettledDeliveriesAndALocalResult()
+    {
+        var manager = new CompletionManager<int>();
+        manager.TryComplete(2, Serialized(30));
+        manager.TryComplete(1, Serialized(10));
+
+        return (new BareContext(),
+            new DurableFuture<int>(manager.GetOrRegister(1), JsonSerializerOptions.Default),
+            CompletedFuture(20),
+            new DurableFuture<int>(manager.GetOrRegister(2), JsonSerializerOptions.Default));
+    }
+
+    private static async Task<List<(IDurableFuture Future, Exception? Error)>> YieldedBy(
+        Context ctx, params IDurableFuture[] inputs)
+    {
+        var yielded = new List<(IDurableFuture Future, Exception? Error)>();
+        await foreach (var item in ctx.WaitAll(inputs))
+            yielded.Add(item);
+
+        return yielded;
     }
 
     private static void Deliver(CompletionManager<int> manager)

@@ -503,7 +503,9 @@ public abstract class Context : IContext
 
     /// <summary>
     ///     Yields futures as the runtime delivers their results, in delivery order.
-    ///     Each element contains the completed future and an optional error.
+    ///     Each element contains the completed future and an optional error. A future canceled
+    ///     by an invocation abort is yielded with a <see cref="TaskCanceledException" /> as its
+    ///     error rather than with none.
     ///     <para>
     ///         Inputs are deserialized lazily, each one as it is yielded; a failed branch is read
     ///         from the delivery itself, without decoding a payload. Delivery order is the order
@@ -583,9 +585,12 @@ public abstract class Context : IContext
     /// <summary>
     ///     The index of the input to take next, or -1 while none of the untaken inputs has
     ///     settled. Inputs the runtime delivered a result to are ranked among themselves by the
-    ///     position it was delivered at; an input with no delivered result — resolved locally by
-    ///     a re-executed Run, or replayed as an already-known value — keeps its argument
-    ///     position, exactly where the caller put it.
+    ///     position it was delivered at. An input with no delivered result — resolved locally by
+    ///     a re-executed Run, or replayed as an already-known value — is taken as soon as no
+    ///     settled delivery sits ahead of it in argument order; while one does, the settled
+    ///     deliveries go first, in the order they were delivered. So settled inputs A (delivered
+    ///     second), B (no delivered result) and C (delivered first) are taken C, A, B, while the
+    ///     same three passed as B, A, C are taken B, C, A.
     /// </summary>
     private static int EarliestSettled<TFuture>(TFuture[] futures, RawCompletion[] completions, bool[] taken)
         where TFuture : class, IDurableFuture
