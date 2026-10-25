@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using System.Threading.Tasks.Sources;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.StateMachine;
 
@@ -239,15 +241,21 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
     private readonly InvocationIdSlot _invocationId;
     private readonly bool _isPreCompleted;
     private readonly JsonSerializerOptions? _jsonOptions;
+    private readonly ISerde<T>? _serde;
     private readonly TaskCompletionSource<CompletionResult>? _tcs;
     private RawCompletion? _completion;
 
+    /// <param name="tcs">The wait the runtime delivers this future's result to.</param>
+    /// <param name="jsonOptions">The options the payload is decoded with when there is no serde.</param>
+    /// <param name="invocationId">The slot the id of the invocation this future started arrives in.</param>
+    /// <param name="serde">The serde the caller brought for the payload, or null to decode it as JSON.</param>
     internal DurableFuture(TaskCompletionSource<CompletionResult> tcs, JsonSerializerOptions jsonOptions,
-        InvocationIdSlot invocationId = default)
+        InvocationIdSlot invocationId = default, ISerde<T>? serde = null)
     {
         _tcs = tcs;
         _jsonOptions = jsonOptions;
         _invocationId = invocationId;
+        _serde = serde;
         _decoded = new Lazy<Task<T>>(Decode, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
@@ -286,6 +294,8 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
         // combinator reports for this input is the one an await of it throws.
         if (Completion.Failure is { } failure)
             throw failure;
+        if (_serde is not null)
+            return _serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions!)!;
     }
@@ -475,14 +485,20 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
     private readonly ValueTask<TaskCompletionSource<CompletionResult>> _initTask;
     private readonly InvocationIdSlot _invocationId;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ISerde<T>? _serde;
     private RawCompletion? _completion;
 
+    /// <param name="initTask">The setup that produces the wait the runtime delivers the result to.</param>
+    /// <param name="jsonOptions">The options the payload is decoded with when there is no serde.</param>
+    /// <param name="invocationId">The slot the id of the invocation this future started arrives in.</param>
+    /// <param name="serde">The serde the caller brought for the payload, or null to decode it as JSON.</param>
     internal LazyNotificationFuture(ValueTask<TaskCompletionSource<CompletionResult>> initTask,
-        JsonSerializerOptions jsonOptions, InvocationIdSlot invocationId = default)
+        JsonSerializerOptions jsonOptions, InvocationIdSlot invocationId = default, ISerde<T>? serde = null)
     {
         _initTask = initTask.Preserve();
         _jsonOptions = jsonOptions;
         _invocationId = invocationId;
+        _serde = serde;
         _decoded = new Lazy<Task<T>>(Decode, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
@@ -510,6 +526,8 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
         var result = await tcs.Task.ConfigureAwait(false);
         if (Completion.Failure is { } failure)
             throw failure;
+        if (_serde is not null)
+            return _serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions)!;
     }
@@ -517,5 +535,59 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
     async ValueTask<object?> IDurableFuture.GetResult()
     {
         return await GetResult().ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+///     Hands out a durable future's result as a <see cref="ValueTask{T}" /> that touches the
+///     future only once it is awaited: an awakeable exposes both its future and a value, and
+///     asking the future for its result starts the decode of the payload, so a value nobody
+///     awaits must not deserialize anything when the runtime delivers the result.
+///     <para>
+///         The decode is shared with the future itself, so awaiting both the value and the future
+///         still decodes once and observes the same value.
+///     </para>
+/// </summary>
+internal sealed class DeferredFutureValue<T> : IValueTaskSource<T>
+{
+    private readonly Lazy<Task<T>> _awaited;
+
+    internal DeferredFutureValue(IDurableFuture<T> future)
+    {
+        _awaited = new Lazy<Task<T>>(() => future.GetResult().AsTask(),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    public ValueTaskSourceStatus GetStatus(short token)
+    {
+        var awaited = _awaited.Value;
+        if (!awaited.IsCompleted) return ValueTaskSourceStatus.Pending;
+        if (awaited.IsCanceled) return ValueTaskSourceStatus.Canceled;
+        return awaited.IsFaulted ? ValueTaskSourceStatus.Faulted : ValueTaskSourceStatus.Succeeded;
+    }
+
+    public void OnCompleted(Action<object?> continuation, object? state, short token,
+        ValueTaskSourceOnCompletedFlags flags)
+    {
+        // Registered on the decode itself with the capture the awaiter asked for, so awaiting the
+        // value behaves exactly as awaiting the future it stands for.
+        var awaiter = _awaited.Value
+            .ConfigureAwait((flags & ValueTaskSourceOnCompletedFlags.UseSchedulingContext) != 0)
+            .GetAwaiter();
+        if ((flags & ValueTaskSourceOnCompletedFlags.FlowExecutionContext) != 0)
+            awaiter.OnCompleted(() => continuation(state));
+        else
+            awaiter.UnsafeOnCompleted(() => continuation(state));
+    }
+
+    public T GetResult(short token)
+    {
+        return _awaited.Value.GetAwaiter().GetResult();
+    }
+
+    /// <summary>The value task to hand out; it asks the future for its result on the first await.</summary>
+    internal ValueTask<T> AsValueTask()
+    {
+        return new ValueTask<T>(this, 0);
     }
 }

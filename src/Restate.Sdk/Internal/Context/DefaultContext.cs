@@ -1,6 +1,6 @@
-using System.Buffers;
 using Microsoft.Extensions.Logging;
 using Restate.Sdk.Internal.Journal;
+using Restate.Sdk.Internal.Serde;
 using Restate.Sdk.Internal.StateMachine;
 
 namespace Restate.Sdk.Internal.Context;
@@ -258,11 +258,36 @@ internal sealed class DefaultContext : Restate.Sdk.Context
         var (id, tcs) = _stateMachine.Awakeable();
         // Flush any pending writes so the server processes prior commands before we block.
         var flushTask = _stateMachine.FlushAsync(Aborted);
+        var future = AwakeableFuture(flushTask, tcs, serde);
         return new Awakeable<T>
         {
             Id = id,
-            Value = FlushThenAwaitAwakeable(flushTask, tcs, serde)
+            // Deferred to the first await, so an awakeable the handler only composes — or never
+            // awaits at all — deserializes nothing when the runtime delivers its payload.
+            Value = new DeferredFutureValue<T>(future).AsValueTask(),
+            Future = future
         };
+    }
+
+    /// <summary>
+    ///     Wraps an awakeable's wait as a durable future: arrival-ordered, so the awakeable ranks
+    ///     among a combinator's inputs by the position its payload was delivered at, and decoded
+    ///     only on the first await. Buffered commands are flushed first, as a signal does: the
+    ///     server may need them before anything can resolve the awakeable, and the handler parks
+    ///     on the future rather than returning here.
+    /// </summary>
+    private IDurableFuture<T> AwakeableFuture<T>(ValueTask flushTask,
+        TaskCompletionSource<CompletionResult> tcs, ISerde<T>? serde)
+    {
+        // The caller's serde when it brought one, and otherwise the JSON serde, which decodes a
+        // payload the runtime delivered without a value as the default rather than as a
+        // malformed document — exactly what a blocking await of an awakeable has always done.
+        var payloadSerde = serde ?? new JsonSerde<T>(_stateMachine.JsonOptions);
+        if (flushTask.IsCompletedSuccessfully)
+            return new DurableFuture<T>(tcs, _stateMachine.JsonOptions, serde: payloadSerde);
+
+        return new LazyNotificationFuture<T>(AwaitFlush(flushTask, tcs), _stateMachine.JsonOptions,
+            serde: payloadSerde);
     }
 
     public override IDurableFuture<T> Signal<T>(string name)
@@ -295,17 +320,6 @@ internal sealed class DefaultContext : Restate.Sdk.Context
     {
         await flushTask.ConfigureAwait(false);
         return tcs;
-    }
-
-    private async ValueTask<T> FlushThenAwaitAwakeable<T>(
-        ValueTask flushTask, TaskCompletionSource<CompletionResult> tcs, ISerde<T>? serde = null)
-    {
-        await flushTask.ConfigureAwait(false);
-        var result = await tcs.Task.ConfigureAwait(false);
-        result.ThrowIfFailure();
-        if (serde is not null)
-            return serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
-        return _stateMachine.Deserialize<T>(result.Value);
     }
 
     public override ValueTask ResolveSignal<T>(string invocationId, string name, T value)

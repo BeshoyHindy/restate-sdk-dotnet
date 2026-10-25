@@ -258,6 +258,8 @@ var timer = ctx.Timer(TimeSpan.FromMinutes(5));
 var awakeable = ctx.Awakeable<string>();
 // pass awakeable.Id to external system, then:
 var payload = await awakeable.Value;
+// an awakeable is a durable future too, so it composes with the combinators
+var settled = await ctx.Race(awakeable, ctx.Signal<string>("cancelled"));
 
 // Signals (resolved by name against this invocation handle, compose with combinators)
 var approval = ctx.Signal<string>("approval");

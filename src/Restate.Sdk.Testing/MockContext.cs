@@ -407,7 +407,8 @@ public sealed class MockContext : Context
         return new Awakeable<T>
         {
             Id = id,
-            Value = new ValueTask<T>(value)
+            Value = new ValueTask<T>(value),
+            Future = new CompletedFuture<T>(value)
         };
     }
 

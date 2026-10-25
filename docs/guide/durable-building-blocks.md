@@ -73,7 +73,17 @@ var timer = ctx.Timer(TimeSpan.FromMinutes(5));
 var awakeable = ctx.Awakeable<string>();
 // pass awakeable.Id to external system, then:
 var payload = await awakeable.Value;
+
+// An awakeable is a durable future too, so it composes with the combinators
+var settled = await ctx.Race(awakeable, ctx.Signal<string>("cancelled"));
 ```
+
+An `Awakeable<T>` is itself an `IDurableFuture<T>`, so it goes straight into `All`, `Race`, `Any`,
+`AllSettled` and `WaitAll` without unwrapping `awakeable.Future`. Its payload is deserialized on
+the first await of the awakeable or of `Value`, so an awakeable a combinator does not hand back
+decodes nothing. A timer is the non-generic `IDurableFuture`, which the typed combinators cannot
+take, so give an awakeable a timeout with `ctx.WaitAll(awakeable, ctx.Timer(timeout))` and look at
+which future it yields first.
 
 ## Signals
 
