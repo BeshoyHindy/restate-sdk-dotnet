@@ -843,6 +843,7 @@ internal sealed partial class InvocationStateMachine
 
         _initialState ??= new Dictionary<string, ReadOnlyMemory<byte>>(4);
         _initialState[key] = CopyToPooled(serialized);
+        FlushBuffered();
     }
 
     public void ClearState(string key, string? entryName = null)
@@ -860,6 +861,7 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Completed(JournalEntryType.ClearState, ReadOnlyMemory<byte>.Empty, key));
 
         _initialState?.Remove(key);
+        FlushBuffered();
     }
 
     public void ClearAllState(string? entryName = null)
@@ -879,6 +881,7 @@ internal sealed partial class InvocationStateMachine
         // subsequent reads can resolve eagerly even if the StartMessage map was partial.
         _initialState?.Clear();
         _stateIsPartial = false;
+        FlushBuffered();
     }
 
     public async ValueTask<string[]> GetStateKeysAsync(string? entryName, CancellationToken ct)
@@ -1046,6 +1049,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompleteAwakeableSuccess(id, payload.Span));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompleteAwakeable, ReadOnlyMemory<byte>.Empty));
+        FlushBuffered();
     }
 
     public void RejectAwakeable(string id, string reason)
@@ -1062,6 +1066,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompleteAwakeableFailure(id, 500, reason));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompleteAwakeable, ReadOnlyMemory<byte>.Empty));
+        FlushBuffered();
     }
 
     // ------- Promises -------
@@ -1133,6 +1138,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompletePromiseSuccess(name, serialized.Span, completionId));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompletePromise, ReadOnlyMemory<byte>.Empty, name));
+        FlushBuffered();
     }
 
     public void RejectPromise(string name, string reason)
@@ -1151,6 +1157,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, completionId));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompletePromise, ReadOnlyMemory<byte>.Empty, name));
+        FlushBuffered();
     }
 
     // ------- Cancel invocation -------
