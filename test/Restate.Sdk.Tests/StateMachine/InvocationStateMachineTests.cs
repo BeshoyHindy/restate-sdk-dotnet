@@ -300,6 +300,153 @@ public class InvocationStateMachineTests : IDisposable
         AssertExhaustedRunFailure(terminal, await DrainOutboundAsync());
     }
 
+    // ------- Terminal failures thrown by a Run closure -------
+    //
+    // A terminal failure is the run's durable result, like a value: unless it is journaled, a
+    // retried or resumed attempt runs the side effect again and may decide differently.
+
+    private static readonly TerminalException Declined = new("declined", 409);
+
+    [Fact]
+    public async Task RunAsync_ClosureThrowsTerminal_ProposesTheFailureWithoutRetrying()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        var attempts = 0;
+        var thrown = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync<int>("effect", () =>
+            {
+                attempts++;
+                throw Declined;
+            }, CancellationToken.None, ThreeAttempts));
+
+        Assert.Equal(1, attempts);
+        Assert.Same(Declined, thrown);
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_Void_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunSync_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunSync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunFutureAsync_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunFutureAsync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_ReExecutedAfterReplay_ClosureThrowsTerminal_FailsTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    [Fact]
+    public async Task RunSync_ReExecutedAfterReplay_ClosureThrowsTerminal_FailsTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunSync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReplayedTerminalFailure_ThrowsWithoutRunningTheClosure()
+    {
+        using var sm = CreateSm();
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-run-failed"),
+            DebugId = "inv-run-failed",
+            KnownEntries = 3,
+            Key = "",
+            RandomSeed = 7
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(MessageType.RunCommand, ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray());
+        await WriteInboundAsync(MessageType.RunCompletion, new Gen.RunCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Failure = new Gen.Failure { Code = 409, Message = "declined" }
+        }.ToByteArray());
+        await sm.StartAsync(CancellationToken.None);
+
+        var executed = false;
+        var thrown = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", () =>
+            {
+                executed = true;
+                return Task.CompletedTask;
+            }, CancellationToken.None));
+
+        Assert.False(executed);
+        Assert.Equal(409, thrown.Code);
+        Assert.Equal("declined", thrown.Message);
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    /// <summary>
+    ///     Asserts the live run wrote its RunCommand followed by a failure proposal for that
+    ///     command's completion id carrying <see cref="Declined" />'s code and message unchanged.
+    /// </summary>
+    private static void AssertTerminalRunFailure(List<(MessageType Type, byte[] Payload)> frames)
+    {
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.RunCommand, frames[0].Type);
+        var command = Gen.RunCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("effect", command.Name);
+
+        Assert.Equal(MessageType.ProposeRunCompletion, frames[1].Type);
+        var expected = ProtobufCodec
+            .CreateRunProposalFailure(command.ResultCompletionId, 409, "declined")
+            .ToByteArray();
+        Assert.Equal(expected, frames[1].Payload);
+    }
+
     /// <summary>
     ///     Asserts that a run whose retries ran out on the live path wrote its RunCommand followed
     ///     by exactly the failure proposal for that command's completion id, and threw a terminal
