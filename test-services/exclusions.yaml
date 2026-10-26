@@ -1,9 +1,5 @@
 exclusions:
   "default":
-    # Cancelling an invocation does not cancel the calls it is blocked on: the cancel signal
-    # fails the invocation's own waits with 409, but no cancel is sent to child invocations.
-    - "dev.restate.sdktesting.tests.Cancellation.cancelFromAdminAPI"
-    - "dev.restate.sdktesting.tests.Cancellation.cancelFromContext"
     # No raw (non-JSON) serde for handler input and output.
     - "dev.restate.sdktesting.tests.Ingress.rawHandler"
     # TerminalException carries no metadata.

@@ -1859,7 +1859,7 @@ public class ProtocolIntegrationTests
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
         Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingCompletions);
-        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.WaitingCompletions);
         Assert.Empty(suspension.WaitingSignals);
 
@@ -1882,7 +1882,7 @@ public class ProtocolIntegrationTests
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
         // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
-        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1, 17 }, suspension.AwaitingOn.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }
@@ -1901,7 +1901,7 @@ public class ProtocolIntegrationTests
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
-        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingSignals);
         // A named signal is advertised by name, so the runtime knows what to resume on.
         Assert.Equal("approval", Assert.Single(suspension.AwaitingOn.WaitingNamedSignals));
 
@@ -1921,7 +1921,7 @@ public class ProtocolIntegrationTests
         Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         // The first user signal index is 17 (0-16 are reserved built-ins).
-        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1, 17 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.AwaitingOn.WaitingNamedSignals);
 
         Assert.Equal(responseData.Length, offset);
@@ -1949,7 +1949,7 @@ public class ProtocolIntegrationTests
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(new uint[] { 2 }, suspension.AwaitingOn.WaitingCompletions);
-        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingSignals);
         // Stated against the slot the command itself carries: no wait is registered for it, so
         // it cannot appear here however the SDK reads the invocation id back.
         Assert.DoesNotContain(callMsg.InvocationIdNotificationIdx, suspension.AwaitingOn.WaitingCompletions);
@@ -2007,7 +2007,7 @@ public class ProtocolIntegrationTests
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
         Assert.Null(suspension.AwaitingOn);
         Assert.Equal(new uint[] { 1 }, suspension.WaitingCompletions);
-        Assert.Empty(suspension.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }

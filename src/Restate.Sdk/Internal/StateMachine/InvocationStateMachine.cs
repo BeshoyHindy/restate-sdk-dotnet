@@ -60,6 +60,19 @@ internal sealed partial class InvocationStateMachine : IDisposable
     // The last flush the transport had not finished when FlushAsync returned; see FlushAsync.
     private Task? _pendingFlush;
 
+    // Cancellation of child calls; see PropagateCancellationBefore. The failure every wait is
+    // failed with once the runtime delivers the built-in CANCEL signal, set by the
+    // incoming-message loop.
+    private volatile TerminalException? _cancellation;
+    private bool _cancelPropagated;
+
+    // Request-response calls this invocation made, live or replayed: the wait for the call's
+    // result and the index its invocation id is delivered under.
+    private List<(Task<CompletionResult> Result, uint InvocationIdIndex)>? _childCalls;
+
+    // Children a replayed journal shows were already cancelled by an earlier attempt.
+    private HashSet<string>? _cancelledChildren;
+
     private Dictionary<string, ReadOnlyMemory<byte>>? _initialState;
 
     // True when the StartMessage state map is partial: only the keys it contains are locally
@@ -269,6 +282,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     private void WriteCommand(MessageType type, ReadOnlySpan<byte> payload)
     {
+        PropagateCancellationBefore(type);
         Log.WritingCommand(Logger, InvocationId, type, payload.Length);
         _writer.WriteMessage(type, payload);
     }
@@ -283,6 +297,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
     /// </summary>
     private void WriteCommand(MessageType type, IMessage message)
     {
+        PropagateCancellationBefore(type);
         var size = message.CalculateSize();
         Log.WritingCommand(Logger, InvocationId, type, size);
         var memory = _writer.GetPayloadMemory(type, MessageFlags.None, size);

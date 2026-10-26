@@ -1,7 +1,7 @@
 using Restate.Sdk.Hosting;
 using Restate.Sdk.TestServices;
 
-// Test services for the Restate SDK conformance suite (https://github.com/restatedev/sdk-test-suite).
+// Test services for the Restate SDK conformance suite (https://github.com/restatedev/e2e/tree/main/sdk-tests).
 // The suite starts this container with PORT, SERVICES (a comma-separated subset to bind) and,
 // for the request-signing test, E2E_REQUEST_SIGNING.
 var services = new Dictionary<string, Action<RestateHostBuilder>>

@@ -541,6 +541,7 @@ internal sealed partial class InvocationStateMachine
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
         _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
         var tcs = _completions.GetOrRegister((int)completionId);
+        TrackChildCall(tcs.Task, invocationIdNotificationIdx);
 
         WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId,
             options);
@@ -1390,6 +1391,11 @@ internal sealed partial class InvocationStateMachine
                 ct).ConfigureAwait(false);
             return;
         }
+
+        // Also wait on the built-in CANCEL signal: without it a suspended invocation is never
+        // resumed to be cancelled.
+        if (_cancellation is null && (signalIds.Count == 0 || signalIds[0] != CancelSignalIndex))
+            signalIds.Insert(0, CancelSignalIndex);
 
         // Set Suspended BEFORE flushing to prevent re-entry if FlushAsync throws.
         State = InvocationState.Suspended;

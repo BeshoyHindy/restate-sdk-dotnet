@@ -1208,7 +1208,7 @@ public class InvocationStateMachineTests : IDisposable
 
         var frames = await DrainOutboundAsync();
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[^1].Payload);
-        Assert.Equal(new uint[] { 17, 18 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1, 17, 18 }, suspension.AwaitingOn.WaitingSignals);
     }
 
     [Fact]
@@ -1596,7 +1596,7 @@ public class InvocationStateMachineTests : IDisposable
         var frames = await DrainOutboundAsync();
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[0].Payload);
         Assert.Equal("approval", Assert.Single(suspension.AwaitingOn.WaitingNamedSignals));
-        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
     }
 
@@ -2163,7 +2163,7 @@ public class InvocationStateMachineTests : IDisposable
 
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[1].Payload);
         Assert.Equal(new uint[] { 0 }, suspension.WaitingCompletions);
-        Assert.Empty(suspension.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingSignals);
         Assert.Null(suspension.AwaitingOn);
     }
 
@@ -2187,8 +2187,8 @@ public class InvocationStateMachineTests : IDisposable
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
         Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingCompletions);
-        // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
-        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+        // Signal 1 is the built-in CANCEL; the first user awakeable uses index 17 (0-16 are reserved).
+        Assert.Equal(new uint[] { 1, 17 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.WaitingCompletions);
         Assert.Empty(suspension.WaitingSignals);
     }
