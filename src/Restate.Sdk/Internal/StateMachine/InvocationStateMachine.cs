@@ -56,6 +56,23 @@ internal sealed partial class InvocationStateMachine : IDisposable
     // Thread-safe: each InvocationStateMachine handles a single invocation with no concurrent access.
     private readonly ArrayBufferWriter<byte> _serializeBuffer = new(256);
     private readonly ProtocolWriter _writer;
+
+    // The last flush the transport had not finished when FlushAsync returned; see FlushAsync.
+    private Task? _pendingFlush;
+
+    // Cancellation of child calls; see PropagateCancellationBefore. The failure every wait is
+    // failed with once the runtime delivers the built-in CANCEL signal, set by the
+    // incoming-message loop.
+    private volatile TerminalException? _cancellation;
+    private bool _cancelPropagated;
+
+    // Request-response calls this invocation made, live or replayed: the wait for the call's
+    // result and the index its invocation id is delivered under.
+    private List<(Task<CompletionResult> Result, uint InvocationIdIndex)>? _childCalls;
+
+    // Children a replayed journal shows were already cancelled by an earlier attempt.
+    private HashSet<string>? _cancelledChildren;
+
     private Dictionary<string, ReadOnlyMemory<byte>>? _initialState;
 
     // True when the StartMessage state map is partial: only the keys it contains are locally
@@ -265,6 +282,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
 
     private void WriteCommand(MessageType type, ReadOnlySpan<byte> payload)
     {
+        PropagateCancellationBefore(type);
         Log.WritingCommand(Logger, InvocationId, type, payload.Length);
         _writer.WriteMessage(type, payload);
     }
@@ -279,6 +297,7 @@ internal sealed partial class InvocationStateMachine : IDisposable
     /// </summary>
     private void WriteCommand(MessageType type, IMessage message)
     {
+        PropagateCancellationBefore(type);
         var size = message.CalculateSize();
         Log.WritingCommand(Logger, InvocationId, type, size);
         var memory = _writer.GetPayloadMemory(type, MessageFlags.None, size);
@@ -286,9 +305,18 @@ internal sealed partial class InvocationStateMachine : IDisposable
         _writer.AdvancePayload(size);
     }
 
+    /// <summary>
+    ///     Flushes buffered commands. A PipeWriter takes one flush at a time, and awakeables and
+    ///     signals hand back their future without awaiting their flush, so while the transport is
+    ///     still writing an earlier flush — Kestrel holds one back under HTTP/2 flow control — the
+    ///     next one queues behind it instead of overlapping it, which faults the connection.
+    /// </summary>
     internal ValueTask FlushAsync(CancellationToken ct)
     {
         Log.Flushing(Logger, InvocationId);
+        if (_pendingFlush is { IsCompleted: false } previous)
+            return new ValueTask(_pendingFlush = FlushAfterAsync(previous, ct));
+
         var task = _writer.FlushAsync(ct);
         if (task.IsCompletedSuccessfully)
         {
@@ -297,13 +325,40 @@ internal sealed partial class InvocationStateMachine : IDisposable
             return ValueTask.CompletedTask;
         }
 
-        return AwaitFlush(task);
+        // Kept as a Task: both the caller and the next flush may await it.
+        return new ValueTask(_pendingFlush = AwaitFlush(task));
     }
 
-    private async ValueTask AwaitFlush(ValueTask<FlushResult> task)
+    /// <summary>
+    ///     Sends a command nothing awaits — a state write, an awakeable or promise completion —
+    ///     without waiting for the transport. Other invocations observe these (a shared handler
+    ///     reading state, the holder of an awakeable), and the handler may next park on a future
+    ///     that only they can resolve; left buffered, the command would wait for the next
+    ///     flushing operation or for the runtime to close the stream on inactivity.
+    /// </summary>
+    private void FlushBuffered()
+    {
+        var flush = FlushAsync(CancellationToken.None);
+        if (!flush.IsCompletedSuccessfully)
+            // A broken transport fails the handler's next awaited operation; observe the fault
+            // here so it is not raised again as an unobserved task exception.
+            _ = flush.AsTask().ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+    }
+
+    private async Task AwaitFlush(ValueTask<FlushResult> task)
     {
         await task.ConfigureAwait(false);
         Log.FlushCompleted(Logger, InvocationId);
+    }
+
+    private async Task FlushAfterAsync(Task previous, CancellationToken ct)
+    {
+        // The earlier flush's failure is reported to whoever awaits that flush; this one only
+        // waits its turn, and fails on its own if the transport is broken.
+        await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        await AwaitFlush(_writer.FlushAsync(ct)).ConfigureAwait(false);
     }
 
     private Utf8JsonWriter GetJsonWriter()

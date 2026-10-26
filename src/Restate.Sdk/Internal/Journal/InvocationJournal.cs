@@ -130,6 +130,22 @@ internal sealed class InvocationJournal : IDisposable
         return true;
     }
 
+    /// <summary>
+    ///     Reads the next replayed command entry without consuming it. Returns
+    ///     <see langword="false" /> when replay is over or nothing is staged at that position.
+    /// </summary>
+    public bool TryPeekReplayEntry(out JournalEntry entry)
+    {
+        if (!IsReplaying || Count >= _staged)
+        {
+            entry = default;
+            return false;
+        }
+
+        entry = _entries[Count];
+        return true;
+    }
+
     public int Append(JournalEntry entry)
     {
         if (Count == _entries.Length)

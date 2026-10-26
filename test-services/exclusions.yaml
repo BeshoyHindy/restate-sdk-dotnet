@@ -1,0 +1,9 @@
+exclusions:
+  "default":
+    # No raw (non-JSON) serde for handler input and output.
+    - "dev.restate.sdktesting.tests.Ingress.rawHandler"
+    # TerminalException carries no metadata.
+    - "dev.restate.sdktesting.tests.UserErrors.failSeveralTimesWithMetadata"
+    - "dev.restate.sdktesting.tests.UserErrors.internalCallFailurePropagationWithMetadata"
+    - "dev.restate.sdktesting.tests.UserErrors.invokeTerminallyFailingCallWithMetadata"
+    - "dev.restate.sdktesting.tests.UserErrors.sideEffectWithTerminalErrorWithMetadata"

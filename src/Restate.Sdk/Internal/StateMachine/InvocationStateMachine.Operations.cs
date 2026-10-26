@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Restate.Sdk.Internal.Journal;
 using Restate.Sdk.Internal.Protocol;
@@ -88,25 +89,22 @@ internal sealed partial class InvocationStateMachine
     /// <summary>
     ///     Re-executes a replayed Run closure whose proposal was lost and proposes the result for
     ///     the replayed completion id. Mirrors the live path, except the RunCommand itself is not
-    ///     re-sent — it is already part of the journal.
+    ///     re-sent — it is already part of the journal — and the wait for the runtime's completion
+    ///     is the one replay registered.
     /// </summary>
     private async ValueTask<T> ReExecuteRunAsync<T>(string name, Func<Task<T>> action, uint completionId,
         TaskCompletionSource<CompletionResult> tcs, CancellationToken ct, RetryPolicy? retryPolicy = null)
     {
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
-        var result = retryPolicy is not null
-            ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct, new ReplayedRun(completionId, tcs))
-                .ConfigureAwait(false)
-            : await action().ConfigureAwait(false);
+        var result = await ExecuteRunClosureAsync(name, action, retryPolicy, new ReplayedRun(completionId, tcs), ct)
+            .ConfigureAwait(false);
         var serialized = Serialize(result);
         WriteRunProposal(completionId, serialized.Span);
         await FlushAsync(ct).ConfigureAwait(false);
 
-        // Resolve the registered wait locally (a no-op if EOF poisoned it meanwhile) so
-        // combinators observing this run's future see the result immediately, like the live path.
-        tcs.TrySetResult(CompletionResult.Success(CopyToPooled(serialized)));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+        _ = await tcs.Task.ConfigureAwait(false);
         return result;
     }
 
@@ -116,17 +114,14 @@ internal sealed partial class InvocationStateMachine
     {
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
-        if (retryPolicy is not null)
-            await ExecuteWithRetryAsync(name, action, retryPolicy, ct, new ReplayedRun(completionId, tcs))
-                .ConfigureAwait(false);
-        else
-            await action().ConfigureAwait(false);
+        await ExecuteRunClosureAsync(name, action, retryPolicy, new ReplayedRun(completionId, tcs), ct)
+            .ConfigureAwait(false);
 
         WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
         await FlushAsync(ct).ConfigureAwait(false);
 
-        tcs.TrySetResult(CompletionResult.Success(ReadOnlyMemory<byte>.Empty));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+        _ = await tcs.Task.ConfigureAwait(false);
     }
 
     /// <summary>Re-executes a replayed synchronous Run closure (see <see cref="ReExecuteRunAsync{T}" />).</summary>
@@ -135,17 +130,33 @@ internal sealed partial class InvocationStateMachine
     {
         Log.SideEffectReExecuting(Logger, name, InvocationId);
 
-        var result = action();
+        T result;
+        try
+        {
+            result = action();
+        }
+        catch (TerminalException failure)
+        {
+            await RecordRunFailureAsync(name, failure, new ReplayedRun(completionId, tcs), ct).ConfigureAwait(false);
+            throw;
+        }
+
         var serialized = Serialize(result);
         WriteRunProposal(completionId, serialized.Span);
         await FlushAsync(ct).ConfigureAwait(false);
 
-        tcs.TrySetResult(CompletionResult.Success(CopyToPooled(serialized)));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+        _ = await tcs.Task.ConfigureAwait(false);
         return result;
     }
 
     // ------- Side effects -------
+    //
+    // A proposed result is not durable until the runtime completes the run with it. Every path
+    // below registers the wait for that completion before writing the proposal and returns only
+    // once it arrived, so the handler never moves past a side effect whose result could still be
+    // lost. If the input closes first the wait is poisoned and the invocation suspends; the next
+    // attempt replays the stored result instead of running the closure again.
 
     /// <summary>Runs a synchronous side effect without closure/Task overhead.</summary>
     public ValueTask<T> RunSync<T>(string name, Func<T> action, CancellationToken ct)
@@ -163,33 +174,43 @@ internal sealed partial class InvocationStateMachine
         activity?.SetTag("restate.run.name", name);
         try
         {
-            var result = action();
+            T result;
+            try
+            {
+                result = action();
+            }
+            catch (TerminalException failure)
+            {
+                return RecordRunFailureAndRethrowAsync<T>(name, ExceptionDispatchInfo.Capture(failure), ct);
+            }
+
             var serialized = Serialize(result);
 
             var completionId = NextCompletionId();
+            var completed = _completions.GetOrRegister((int)completionId).Task;
             WriteRunCommand(name, completionId);
             WriteRunProposal(completionId, serialized.Span);
 
             var flushTask = FlushAsync(ct);
             var serializedCopy = CopyToPooled(serialized);
-            if (flushTask.IsCompletedSuccessfully)
+            if (flushTask.IsCompletedSuccessfully && completed.IsCompletedSuccessfully)
             {
                 _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
                 Log.SideEffectExecuted(Logger, name, InvocationId);
                 return new ValueTask<T>(result);
             }
 
-            var pending = RunSyncAwaitFlush(flushTask, result, serializedCopy, name, activity);
+            var pending = RunSyncAwaitCompletion(flushTask, completed, result, serializedCopy, name, activity);
 
             // RunSync executes synchronously on the caller's execution context, so
             // StartActivity made this span Activity.Current *in the caller*. The span is
-            // disposed by RunSyncAwaitFlush on a forked context, where the automatic
+            // disposed by RunSyncAwaitCompletion on a forked context, where the automatic
             // Current restore is invisible to the caller — restore it here so subsequent
             // operations don't parent under a stopped "restate.run" span.
             if (activity is not null && ReferenceEquals(Activity.Current, activity))
                 Activity.Current = activity.Parent;
 
-            activity = null; // Ownership transferred to RunSyncAwaitFlush.
+            activity = null; // Ownership transferred to RunSyncAwaitCompletion.
             return pending;
         }
         finally
@@ -198,13 +219,27 @@ internal sealed partial class InvocationStateMachine
         }
     }
 
-    private async ValueTask<T> RunSyncAwaitFlush<T>(ValueTask flushTask, T result, ReadOnlyMemory<byte> serializedCopy, string name, Activity? activity)
+    /// <summary>
+    ///     Journals the terminal failure of a synchronous Run closure, then rethrows it with the
+    ///     closure's stack trace (see <see cref="RecordRunFailureAsync" />).
+    /// </summary>
+    private async ValueTask<T> RecordRunFailureAndRethrowAsync<T>(string name, ExceptionDispatchInfo failure,
+        CancellationToken ct)
+    {
+        await RecordRunFailureAsync(name, (TerminalException)failure.SourceException, null, ct).ConfigureAwait(false);
+        failure.Throw();
+        return default!; // Unreachable: Throw never returns.
+    }
+
+    private async ValueTask<T> RunSyncAwaitCompletion<T>(ValueTask flushTask, Task<CompletionResult> completed,
+        T result, ReadOnlyMemory<byte> serializedCopy, string name, Activity? activity)
     {
         try
         {
             await flushTask.ConfigureAwait(false);
             _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
             Log.SideEffectExecuted(Logger, name, InvocationId);
+            _ = await completed.ConfigureAwait(false);
             return result;
         }
         finally
@@ -228,15 +263,12 @@ internal sealed partial class InvocationStateMachine
         using var activity = StartOperationActivity("restate.run");
         activity?.SetTag("restate.run.name", name);
 
-        T result;
-        if (retryPolicy is not null)
-            result = await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
-        else
-            result = await action().ConfigureAwait(false);
+        var result = await ExecuteRunClosureAsync(name, action, retryPolicy, null, ct).ConfigureAwait(false);
 
         var serialized = Serialize(result);
 
         var completionId = NextCompletionId();
+        var completed = _completions.GetOrRegister((int)completionId).Task;
         WriteRunCommand(name, completionId);
         WriteRunProposal(completionId, serialized.Span);
 
@@ -244,6 +276,7 @@ internal sealed partial class InvocationStateMachine
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.Run, CopyToPooled(serialized), name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+        _ = await completed.ConfigureAwait(false);
         return result;
     }
 
@@ -264,12 +297,10 @@ internal sealed partial class InvocationStateMachine
         using var activity = StartOperationActivity("restate.run");
         activity?.SetTag("restate.run.name", name);
 
-        if (retryPolicy is not null)
-            await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false);
-        else
-            await action().ConfigureAwait(false);
+        await ExecuteRunClosureAsync(name, action, retryPolicy, null, ct).ConfigureAwait(false);
 
         var completionId = NextCompletionId();
+        var completed = _completions.GetOrRegister((int)completionId).Task;
         WriteRunCommand(name, completionId);
         WriteRunProposal(completionId, ReadOnlySpan<byte>.Empty);
 
@@ -277,6 +308,7 @@ internal sealed partial class InvocationStateMachine
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
+        _ = await completed.ConfigureAwait(false);
     }
 
     // ------- Retry logic -------
@@ -287,8 +319,50 @@ internal sealed partial class InvocationStateMachine
     /// </summary>
     private readonly record struct ReplayedRun(uint CompletionId, TaskCompletionSource<CompletionResult> Wait);
 
+    /// <summary>
+    ///     Executes a Run closure, under <paramref name="retryPolicy" /> when one is given. A
+    ///     terminal failure — thrown by the closure, or raised when its retries ran out — is
+    ///     journaled before it propagates, so a retried or resumed attempt replays the failure
+    ///     instead of running the side effect again. <paramref name="replayed" /> is set when the
+    ///     closure re-executes a RunCommand that is already journaled.
+    /// </summary>
+    private async Task<T> ExecuteRunClosureAsync<T>(string name, Func<Task<T>> action, RetryPolicy? retryPolicy,
+        ReplayedRun? replayed, CancellationToken ct)
+    {
+        try
+        {
+            return retryPolicy is not null
+                ? await ExecuteWithRetryAsync(name, action, retryPolicy, ct).ConfigureAwait(false)
+                : await action().ConfigureAwait(false);
+        }
+        catch (TerminalException failure)
+        {
+            await RecordRunFailureAsync(name, failure, replayed, ct).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Executes a closure that produces no value on the same path as the generic overload: the
+    ///     action is wrapped into one returning a discarded <c>true</c>, so there is a single place
+    ///     where the policy is consulted and a run's failure is journaled.
+    /// </summary>
+    private Task ExecuteRunClosureAsync(string name, Func<Task> action, RetryPolicy? retryPolicy,
+        ReplayedRun? replayed, CancellationToken ct)
+    {
+        return ExecuteRunClosureAsync<bool>(name, async () =>
+        {
+            await action().ConfigureAwait(false);
+            return true;
+        }, retryPolicy, replayed, ct);
+    }
+
+    /// <summary>
+    ///     Retries a closure until it succeeds, fails terminally, or the policy runs out — then
+    ///     the last failure becomes a terminal 500 naming the run and the number of attempts.
+    /// </summary>
     private async Task<T> ExecuteWithRetryAsync<T>(string name, Func<Task<T>> action, RetryPolicy policy,
-        CancellationToken ct, ReplayedRun? replayed = null)
+        CancellationToken ct)
     {
         var startTime = DateTimeOffset.UtcNow;
         var attempt = 0;
@@ -307,7 +381,7 @@ internal sealed partial class InvocationStateMachine
             {
                 var elapsed = DateTimeOffset.UtcNow - startTime;
                 if (!policy.ShouldRetry(attempt + 1, elapsed))
-                    throw await ExhaustRetriesAsync(name, attempt + 1, ex, replayed, ct).ConfigureAwait(false);
+                    throw new TerminalException($"Run '{name}' failed after {attempt + 1} attempt(s): {ex.Message}", 500);
 
                 var delay = policy.GetDelay(attempt);
                 Log.SideEffectRetrying(Logger, name, attempt + 1, delay, InvocationId);
@@ -318,58 +392,40 @@ internal sealed partial class InvocationStateMachine
     }
 
     /// <summary>
-    ///     Retries a closure that produces no value, on the same loop as the generic overload: the
-    ///     action is wrapped into one returning a discarded <c>true</c>, so there is a single place
-    ///     where the policy is consulted and a run's retries are exhausted.
+    ///     Journals a Run whose closure failed terminally by proposing the failure as its result, and
+    ///     waits for the runtime to store it like any other proposal. On the live path the
+    ///     RunCommand has not been written yet, so a fresh completion id, its command and a journal
+    ///     entry are added. On the re-execution path the command is already journaled under the
+    ///     replayed id: only the proposal is written, and the wait replay registered is the one the
+    ///     runtime completes.
     /// </summary>
-    private Task ExecuteWithRetryAsync(string name, Func<Task> action, RetryPolicy policy,
-        CancellationToken ct, ReplayedRun? replayed = null)
+    private async ValueTask RecordRunFailureAsync(string name, TerminalException failure, ReplayedRun? replayed,
+        CancellationToken ct)
     {
-        return ExecuteWithRetryAsync<bool>(name, async () =>
-        {
-            await action().ConfigureAwait(false);
-            return true;
-        }, policy, ct, replayed);
-    }
-
-    /// <summary>
-    ///     Records a Run whose retries ran out as a terminal failure and returns the exception the
-    ///     caller throws. On the live path the RunCommand has not been written yet, so a fresh
-    ///     completion id, its command and a journal entry are added. On the re-execution path the
-    ///     command is already journaled under the replayed id: only the proposal is written, and the
-    ///     replayed wait is failed so anything observing that run's future sees the terminal error
-    ///     instead of waiting for a completion the runtime can never deliver.
-    /// </summary>
-    private async Task<TerminalException> ExhaustRetriesAsync(string name, int attempts, Exception cause,
-        ReplayedRun? replayed, CancellationToken ct)
-    {
-        var message = $"Run '{name}' failed after {attempts} attempt(s): {cause.Message}";
         var completionId = replayed?.CompletionId ?? NextCompletionId();
+        var completed = replayed?.Wait.Task ?? _completions.GetOrRegister((int)completionId).Task;
 
         if (replayed is null)
             WriteRunCommand(name, completionId);
 
         WriteCommand(MessageType.ProposeRunCompletion,
-            ProtobufCodec.CreateRunProposalFailure(completionId, 500, message));
+            ProtobufCodec.CreateRunProposalFailure(completionId, failure.Code, failure.Message));
         await FlushAsync(ct).ConfigureAwait(false);
 
-        var terminal = new TerminalException(message, 500);
-
-        if (replayed is { } run)
-        {
-            // Mark the fault observed: the wait belongs to a replayed command that nothing else
-            // has to await, and an unobserved faulted task raises UnobservedTaskException.
-            if (run.Wait.TrySetException(terminal))
-                _ = run.Wait.Task.Exception;
-        }
-        else
-        {
-            // Append journal entry so _journal.Count advances — subsequent operations
-            // (e.g. saga compensations catching this TerminalException) use correct indices.
+        // Append journal entry so _journal.Count advances — subsequent operations
+        // (e.g. saga compensations catching this TerminalException) use correct indices.
+        if (replayed is null)
             _journal.Append(JournalEntry.Completed(JournalEntryType.Run, ReadOnlyMemory<byte>.Empty, name));
-        }
 
-        return terminal;
+        try
+        {
+            _ = await completed.ConfigureAwait(false);
+        }
+        catch (TerminalException)
+        {
+            // The failure the runtime stored (or a cancellation): the caller rethrows the
+            // closure's own exception. A suspension propagates, since nothing is stored yet.
+        }
     }
 
     private void WriteRunCommand(string name, uint completionId)
@@ -404,21 +460,19 @@ internal sealed partial class InvocationStateMachine
             return (replayTcs, reExecuted);
         }
 
-        var value = await action().ConfigureAwait(false);
+        var value = await ExecuteRunClosureAsync(name, action, null, null, ct).ConfigureAwait(false);
         var serialized = Serialize(value);
 
         var completionId = NextCompletionId();
+        var tcs = _completions.GetOrRegister((int)completionId);
         WriteRunCommand(name, completionId);
         WriteRunProposal(completionId, serialized.Span);
 
         await FlushAsync(ct).ConfigureAwait(false);
 
-        var serializedCopy = CopyToPooled(serialized);
-        _journal.Append(JournalEntry.Completed(JournalEntryType.Run, serializedCopy, name));
+        _journal.Append(JournalEntry.Completed(JournalEntryType.Run, CopyToPooled(serialized), name));
         Log.SideEffectExecuted(Logger, name, InvocationId);
-
-        var tcs = new TaskCompletionSource<CompletionResult>();
-        tcs.SetResult(CompletionResult.Success(serializedCopy));
+        _ = await tcs.Task.ConfigureAwait(false);
         return (tcs, value);
     }
 
@@ -499,6 +553,7 @@ internal sealed partial class InvocationStateMachine
         // Register journal entry and TCS before flush to prevent race with incoming notifications.
         _journal.Append(JournalEntry.Pending(JournalEntryType.Call));
         var tcs = _completions.GetOrRegister((int)completionId);
+        TrackChildCall(tcs.Task, invocationIdNotificationIdx);
 
         WriteCallCommandMessage(service, handler, key, requestBytes, invocationIdNotificationIdx, completionId,
             options);
@@ -843,6 +898,7 @@ internal sealed partial class InvocationStateMachine
 
         _initialState ??= new Dictionary<string, ReadOnlyMemory<byte>>(4);
         _initialState[key] = CopyToPooled(serialized);
+        FlushBuffered();
     }
 
     public void ClearState(string key, string? entryName = null)
@@ -860,6 +916,7 @@ internal sealed partial class InvocationStateMachine
         _journal.Append(JournalEntry.Completed(JournalEntryType.ClearState, ReadOnlyMemory<byte>.Empty, key));
 
         _initialState?.Remove(key);
+        FlushBuffered();
     }
 
     public void ClearAllState(string? entryName = null)
@@ -879,6 +936,7 @@ internal sealed partial class InvocationStateMachine
         // subsequent reads can resolve eagerly even if the StartMessage map was partial.
         _initialState?.Clear();
         _stateIsPartial = false;
+        FlushBuffered();
     }
 
     public async ValueTask<string[]> GetStateKeysAsync(string? entryName, CancellationToken ct)
@@ -1046,6 +1104,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompleteAwakeableSuccess(id, payload.Span));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompleteAwakeable, ReadOnlyMemory<byte>.Empty));
+        FlushBuffered();
     }
 
     public void RejectAwakeable(string id, string reason)
@@ -1062,6 +1121,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompleteAwakeableFailure(id, 500, reason));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompleteAwakeable, ReadOnlyMemory<byte>.Empty));
+        FlushBuffered();
     }
 
     // ------- Promises -------
@@ -1133,6 +1193,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompletePromiseSuccess(name, serialized.Span, completionId));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompletePromise, ReadOnlyMemory<byte>.Empty, name));
+        FlushBuffered();
     }
 
     public void RejectPromise(string name, string reason)
@@ -1151,6 +1212,7 @@ internal sealed partial class InvocationStateMachine
             ProtobufCodec.CreateCompletePromiseFailure(name, 500, reason, completionId));
 
         _journal.Append(JournalEntry.Completed(JournalEntryType.CompletePromise, ReadOnlyMemory<byte>.Empty, name));
+        FlushBuffered();
     }
 
     // ------- Cancel invocation -------
@@ -1341,6 +1403,11 @@ internal sealed partial class InvocationStateMachine
                 ct).ConfigureAwait(false);
             return;
         }
+
+        // Also wait on the built-in CANCEL signal: without it a suspended invocation is never
+        // resumed to be cancelled.
+        if (_cancellation is null && (signalIds.Count == 0 || signalIds[0] != CancelSignalIndex))
+            signalIds.Insert(0, CancelSignalIndex);
 
         // Set Suspended BEFORE flushing to prevent re-entry if FlushAsync throws.
         State = InvocationState.Suspended;

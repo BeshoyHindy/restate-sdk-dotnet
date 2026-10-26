@@ -38,6 +38,7 @@ public class InvocationStateMachineTests : IDisposable
     private readonly Pipe _outbound = new();
     private readonly ProtocolReader _reader;
     private readonly ProtocolWriter _writer;
+    private RunAcknowledger? _runs;
 
     public InvocationStateMachineTests()
     {
@@ -146,6 +147,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var executed = false;
         var result = await sm.RunAsync("test", async () =>
@@ -164,6 +166,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var executed = false;
         await sm.RunAsync("test", async () =>
@@ -180,6 +183,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var result = await sm.RunAsync("effect", () =>
@@ -198,6 +202,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         await sm.RunAsync("effect", () =>
@@ -221,6 +226,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         var attempts = 0;
@@ -243,6 +249,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         var attempts = 0;
@@ -265,6 +272,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var alwaysFails = new Func<Task<int>>(() =>
@@ -285,6 +293,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var alwaysFails = new Func<Task>(() =>
@@ -298,6 +307,159 @@ public class InvocationStateMachineTests : IDisposable
 
         Assert.Equal(2, attempts);
         AssertExhaustedRunFailure(terminal, await DrainOutboundAsync());
+    }
+
+    // ------- Terminal failures thrown by a Run closure -------
+    //
+    // A terminal failure is the run's durable result, like a value: unless it is journaled, a
+    // retried or resumed attempt runs the side effect again and may decide differently.
+
+    private static readonly TerminalException Declined = new("declined", 409);
+
+    [Fact]
+    public async Task RunAsync_ClosureThrowsTerminal_ProposesTheFailureWithoutRetrying()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
+
+        var attempts = 0;
+        var thrown = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync<int>("effect", () =>
+            {
+                attempts++;
+                throw Declined;
+            }, CancellationToken.None, ThreeAttempts));
+
+        Assert.Equal(1, attempts);
+        Assert.Same(Declined, thrown);
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_Void_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunSync_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunSync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunFutureAsync_ClosureThrowsTerminal_ProposesTheFailure()
+    {
+        using var sm = CreateSm();
+        sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunFutureAsync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertTerminalRunFailure(await DrainOutboundAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_ReExecutedAfterReplay_ClosureThrowsTerminal_FailsTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    [Fact]
+    public async Task RunSync_ReExecutedAfterReplay_ClosureThrowsTerminal_FailsTheReplayedRun()
+    {
+        using var sm = CreateSm();
+        await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
+        var replayedWait = ReplayedRunWait(sm);
+
+        await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunSync<int>("effect", () => throw Declined, CancellationToken.None));
+
+        AssertFailureProposalForReplayedRun(await DrainOutboundAsync());
+        await AssertWaitFailedTerminallyAsync(replayedWait);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReplayedTerminalFailure_ThrowsWithoutRunningTheClosure()
+    {
+        using var sm = CreateSm();
+        var start = new Gen.StartMessage
+        {
+            Id = ByteString.CopyFromUtf8("inv-run-failed"),
+            DebugId = "inv-run-failed",
+            KnownEntries = 3,
+            Key = "",
+            RandomSeed = 7
+        };
+        await WriteInboundAsync(MessageType.Start, start.ToByteArray());
+        await WriteInboundAsync(MessageType.InputCommand, new Gen.InputCommandMessage
+        {
+            Value = new Gen.Value { Content = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes("World")) }
+        }.ToByteArray());
+        await WriteInboundAsync(MessageType.RunCommand, ProtobufCodec.CreateRunCommand("effect", 1).ToByteArray());
+        await WriteInboundAsync(MessageType.RunCompletion, new Gen.RunCompletionNotificationMessage
+        {
+            CompletionId = 1,
+            Failure = new Gen.Failure { Code = 409, Message = "declined" }
+        }.ToByteArray());
+        await sm.StartAsync(CancellationToken.None);
+
+        var executed = false;
+        var thrown = await Assert.ThrowsAsync<TerminalException>(async () =>
+            await sm.RunAsync("effect", () =>
+            {
+                executed = true;
+                return Task.CompletedTask;
+            }, CancellationToken.None));
+
+        Assert.False(executed);
+        Assert.Equal(409, thrown.Code);
+        Assert.Equal("declined", thrown.Message);
+        Assert.Empty(await DrainOutboundAsync());
+    }
+
+    /// <summary>
+    ///     Asserts the live run wrote its RunCommand followed by a failure proposal for that
+    ///     command's completion id carrying <see cref="Declined" />'s code and message unchanged.
+    /// </summary>
+    private static void AssertTerminalRunFailure(List<(MessageType Type, byte[] Payload)> frames)
+    {
+        Assert.Equal(2, frames.Count);
+        Assert.Equal(MessageType.RunCommand, frames[0].Type);
+        var command = Gen.RunCommandMessage.Parser.ParseFrom(frames[0].Payload);
+        Assert.Equal("effect", command.Name);
+
+        Assert.Equal(MessageType.ProposeRunCompletion, frames[1].Type);
+        var expected = ProtobufCodec
+            .CreateRunProposalFailure(command.ResultCompletionId, 409, "declined")
+            .ToByteArray();
+        Assert.Equal(expected, frames[1].Payload);
     }
 
     /// <summary>
@@ -1061,7 +1223,7 @@ public class InvocationStateMachineTests : IDisposable
 
         var frames = await DrainOutboundAsync();
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[^1].Payload);
-        Assert.Equal(new uint[] { 17, 18 }, suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1, 17, 18 }, suspension.AwaitingOn.WaitingSignals);
     }
 
     [Fact]
@@ -1449,7 +1611,7 @@ public class InvocationStateMachineTests : IDisposable
         var frames = await DrainOutboundAsync();
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[0].Payload);
         Assert.Equal("approval", Assert.Single(suspension.AwaitingOn.WaitingNamedSignals));
-        Assert.Empty(suspension.AwaitingOn.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.AwaitingOn.WaitingCompletions);
     }
 
@@ -1983,9 +2145,18 @@ public class InvocationStateMachineTests : IDisposable
     // ------- Suspension -------
 
     /// <summary>Completes the outbound writer and reads back every frame the SM flushed.</summary>
+    /// <summary>Completes every run the state machine proposes; see <see cref="RunAcknowledger" />.</summary>
+    private void AcknowledgeRuns(InvocationStateMachine sm)
+    {
+        _runs = RunAcknowledger.Start(sm, _outbound.Reader, _inbound.Writer);
+    }
+
     private async Task<List<(MessageType Type, byte[] Payload)>> DrainOutboundAsync()
     {
         _outbound.Writer.Complete();
+        if (_runs is not null)
+            return await _runs.Frames;
+
         var frames = new List<(MessageType Type, byte[] Payload)>();
         using var reader = new ProtocolReader(_outbound.Reader);
         while (await reader.ReadMessageAsync() is { } msg)
@@ -2016,7 +2187,7 @@ public class InvocationStateMachineTests : IDisposable
 
         var suspension = Gen.SuspensionMessage.Parser.ParseFrom(frames[1].Payload);
         Assert.Equal(new uint[] { 0 }, suspension.WaitingCompletions);
-        Assert.Empty(suspension.WaitingSignals);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingSignals);
         Assert.Null(suspension.AwaitingOn);
     }
 
@@ -2040,8 +2211,8 @@ public class InvocationStateMachineTests : IDisposable
         Assert.NotNull(suspension.AwaitingOn);
         Assert.Equal(Gen.CombinatorType.FirstCompleted, suspension.AwaitingOn.CombinatorType);
         Assert.Equal(new uint[] { 0 }, suspension.AwaitingOn.WaitingCompletions);
-        // The first user awakeable uses signal index 17 (0-16 are reserved built-ins).
-        Assert.Equal(new uint[] { 17 }, suspension.AwaitingOn.WaitingSignals);
+        // Signal 1 is the built-in CANCEL; the first user awakeable uses index 17 (0-16 are reserved).
+        Assert.Equal(new uint[] { 1, 17 }, suspension.AwaitingOn.WaitingSignals);
         Assert.Empty(suspension.WaitingCompletions);
         Assert.Empty(suspension.WaitingSignals);
     }
