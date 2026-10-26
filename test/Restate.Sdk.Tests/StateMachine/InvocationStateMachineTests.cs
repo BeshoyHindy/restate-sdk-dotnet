@@ -38,6 +38,7 @@ public class InvocationStateMachineTests : IDisposable
     private readonly Pipe _outbound = new();
     private readonly ProtocolReader _reader;
     private readonly ProtocolWriter _writer;
+    private RunAcknowledger? _runs;
 
     public InvocationStateMachineTests()
     {
@@ -146,6 +147,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var executed = false;
         var result = await sm.RunAsync("test", async () =>
@@ -164,6 +166,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var executed = false;
         await sm.RunAsync("test", async () =>
@@ -180,6 +183,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var result = await sm.RunAsync("effect", () =>
@@ -198,6 +202,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         await sm.RunAsync("effect", () =>
@@ -221,6 +226,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         var attempts = 0;
@@ -243,6 +249,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         var attempts = 0;
@@ -265,6 +272,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var alwaysFails = new Func<Task<int>>(() =>
@@ -285,6 +293,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var alwaysFails = new Func<Task>(() =>
@@ -312,6 +321,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         var attempts = 0;
         var thrown = await Assert.ThrowsAsync<TerminalException>(async () =>
@@ -331,6 +341,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         await Assert.ThrowsAsync<TerminalException>(async () =>
             await sm.RunAsync("effect", () => throw Declined, CancellationToken.None));
@@ -343,6 +354,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         await Assert.ThrowsAsync<TerminalException>(async () =>
             await sm.RunSync<int>("effect", () => throw Declined, CancellationToken.None));
@@ -355,6 +367,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         sm.Initialize("inv-1", "", 0, 0);
+        AcknowledgeRuns(sm);
 
         await Assert.ThrowsAsync<TerminalException>(async () =>
             await sm.RunFutureAsync<int>("effect", () => throw Declined, CancellationToken.None));
@@ -367,6 +380,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         await Assert.ThrowsAsync<TerminalException>(async () =>
@@ -381,6 +395,7 @@ public class InvocationStateMachineTests : IDisposable
     {
         using var sm = CreateSm();
         await StartReplayedRunWithoutCompletionAsync(sm);
+        AcknowledgeRuns(sm);
         var replayedWait = ReplayedRunWait(sm);
 
         await Assert.ThrowsAsync<TerminalException>(async () =>
@@ -2130,9 +2145,18 @@ public class InvocationStateMachineTests : IDisposable
     // ------- Suspension -------
 
     /// <summary>Completes the outbound writer and reads back every frame the SM flushed.</summary>
+    /// <summary>Completes every run the state machine proposes; see <see cref="RunAcknowledger" />.</summary>
+    private void AcknowledgeRuns(InvocationStateMachine sm)
+    {
+        _runs = RunAcknowledger.Start(sm, _outbound.Reader, _inbound.Writer);
+    }
+
     private async Task<List<(MessageType Type, byte[] Payload)>> DrainOutboundAsync()
     {
         _outbound.Writer.Complete();
+        if (_runs is not null)
+            return await _runs.Frames;
+
         var frames = new List<(MessageType Type, byte[] Payload)>();
         using var reader = new ProtocolReader(_outbound.Reader);
         while (await reader.ReadMessageAsync() is { } msg)

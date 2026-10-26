@@ -5,6 +5,7 @@ using Google.Protobuf;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Protocol;
 using Restate.Sdk.Internal.StateMachine;
+using Restate.Sdk.Tests.StateMachine;
 using Gen = Restate.Sdk.Internal.Protocol.Generated;
 
 namespace Restate.Sdk.Tests.Observability;
@@ -137,9 +138,8 @@ public class ActivityTests
         // this handler parents under a stopped "restate.run" activity.
         Assert.Same(invocation, Activity.Current);
 
-        // Drain the outbound pipe so the flush — and with it the Run — completes.
-        var drained = await outbound.Reader.ReadAsync();
-        outbound.Reader.AdvanceTo(drained.Buffer.End);
+        // Drain the outbound pipe so the flush completes, and complete the run as the runtime does.
+        var runs = RunAcknowledger.Start(sm, outbound.Reader, inbound.Writer);
 
         Assert.Equal(42, await pending);
 
@@ -147,10 +147,9 @@ public class ActivityTests
             a.OperationName == "restate.run" && a.TraceId == invocation!.TraceId);
         Assert.Equal(invocation!.SpanId, run.ParentSpanId);
 
-        inbound.Writer.Complete();
-        inbound.Reader.Complete();
         outbound.Writer.Complete();
-        outbound.Reader.Complete();
+        await runs.Frames;
+        inbound.Writer.Complete();
     }
 
     [Fact]

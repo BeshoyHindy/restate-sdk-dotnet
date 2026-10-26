@@ -1396,7 +1396,9 @@ public class ProtocolIntegrationTests
     {
         // The previous attempt crashed after the runtime persisted the RunCommand but before
         // it persisted the ProposeRunCompletion. Awaiting a notification would suspend forever
-        // (only the SDK can produce it) — the closure must re-execute and propose again.
+        // (only the SDK can produce it) — the closure must re-execute and propose again. The
+        // proposal is then waited on like a live one: the input already ended, so the attempt
+        // suspends until the runtime stored it.
         var responseData = await RunReplayedRunJournalAsync(includeStoredCompletion: false);
         var offset = 0;
 
@@ -1406,12 +1408,20 @@ public class ProtocolIntegrationTests
         Assert.Equal(1u, proposal.ResultCompletionId);
         Assert.Equal("\"fresh-World\"", proposal.Value.ToStringUtf8());
 
-        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
-        Assert.Equal("\"fresh-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
+        AssertSuspendedOnTheRun(responseData, ref offset);
+    }
 
-        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.End, endHeader.Type);
+    /// <summary>
+    ///     Asserts the rest of a V6 response is the suspension a re-executed run's proposal leaves
+    ///     behind: waiting on the run's completion id (1) and the CANCEL signal, and nothing after.
+    /// </summary>
+    private static void AssertSuspendedOnTheRun(byte[] responseData, ref int offset)
+    {
+        var (suspensionHeader, suspensionPayload) = ReadFramedMessage(responseData, ref offset);
+        Assert.Equal(MessageType.Suspension, suspensionHeader.Type);
+        var suspension = Gen.SuspensionMessage.Parser.ParseFrom(suspensionPayload);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingCompletions);
+        Assert.Equal(new uint[] { 1 }, suspension.WaitingSignals);
 
         Assert.Equal(responseData.Length, offset);
     }
@@ -1462,14 +1472,7 @@ public class ProtocolIntegrationTests
         Assert.Equal(1u, proposal.ResultCompletionId);
         Assert.Equal("\"retried-World\"", proposal.Value.ToStringUtf8());
 
-        var (outputHeader, outputPayload) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.OutputCommand, outputHeader.Type);
-        Assert.Equal("\"retried-World\"", Encoding.UTF8.GetString(ExtractOutputContent(outputPayload)));
-
-        var (endHeader, _) = ReadFramedMessage(responseData, ref offset);
-        Assert.Equal(MessageType.End, endHeader.Type);
-
-        Assert.Equal(responseData.Length, offset);
+        AssertSuspendedOnTheRun(responseData, ref offset);
     }
 
     [Fact]

@@ -403,7 +403,7 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
         ? (_initTask.Result.Tcs as CompletionSource)?.ArrivalOrder ?? 0
         : 0;
 
-    // The side effect carries its own result, so the setup completing is the whole delivery.
+    // The setup completes once the runtime stored the side effect's result, so it is the whole delivery.
     public RawCompletion Completion => _completion ??= RawCompletion.OfWait(_initTask.AsTask());
 
     public string? InvocationId => null;
