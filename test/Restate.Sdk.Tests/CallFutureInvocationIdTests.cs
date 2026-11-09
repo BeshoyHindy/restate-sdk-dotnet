@@ -206,6 +206,41 @@ public class CallFutureInvocationIdTests : IDisposable
         Assert.Equal("inv-called-lazily", future.InvocationId);
     }
 
+    /// <summary>A handler with no return value completes its callers with an empty value.</summary>
+    private Task DeliverEmptyCallResultAsync(uint completionId)
+    {
+        return WriteInboundAsync(MessageType.CallCompletion, new Gen.CallCompletionNotificationMessage
+        {
+            CompletionId = completionId,
+            Value = new Gen.Value { Content = ByteString.Empty }
+        }.ToByteArray());
+    }
+
+    [Fact]
+    public async Task CallFuture_ToAHandlerWithoutResult_DecodesAsDefault()
+    {
+        var ctx = StartLive();
+
+        var future = ctx.CallFuture<object?>("Downstream", "Reset", (object?)null);
+        var command = await ReadCallCommandAsync();
+        await DeliverEmptyCallResultAsync(command.ResultCompletionId);
+
+        Assert.Null(await future.GetResult());
+    }
+
+    [Fact]
+    public async Task LazilyCreatedCallFuture_ToAHandlerWithoutResult_DecodesAsDefault()
+    {
+        var ctx = StartLive(new PipeOptions(pauseWriterThreshold: 1, resumeWriterThreshold: 1));
+
+        var future = ctx.CallFuture<object?>("Downstream", "Reset", (object?)null);
+        Assert.IsType<LazyNotificationFuture<object?>>(future);
+        var command = await ReadCallCommandAsync();
+        await DeliverEmptyCallResultAsync(command.ResultCompletionId);
+
+        Assert.Null(await future.GetResult());
+    }
+
     [Fact]
     public void TimerRunAndSignalFutures_ReportNoInvocationId()
     {

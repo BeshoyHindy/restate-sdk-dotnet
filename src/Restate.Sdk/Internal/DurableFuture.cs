@@ -296,6 +296,10 @@ internal sealed class DurableFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
             throw failure;
         if (_serde is not null)
             return _serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
+        // A handler without a return value completes with an empty payload, which is not a
+        // JSON document; decode it as default like the synchronous call paths do.
+        if (result.Value.IsEmpty)
+            return default!;
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions!)!;
     }
@@ -399,7 +403,7 @@ internal sealed class LazyRunFuture<T> : IDurableFuture<T>, IArrivalOrderedFutur
         ? (_initTask.Result.Tcs as CompletionSource)?.ArrivalOrder ?? 0
         : 0;
 
-    // The side effect carries its own result, so the setup completing is the whole delivery.
+    // The setup completes once the runtime stored the side effect's result, so it is the whole delivery.
     public RawCompletion Completion => _completion ??= RawCompletion.OfWait(_initTask.AsTask());
 
     public string? InvocationId => null;
@@ -528,6 +532,10 @@ internal sealed class LazyNotificationFuture<T> : IDurableFuture<T>, IArrivalOrd
             throw failure;
         if (_serde is not null)
             return _serde.Deserialize(new ReadOnlySequence<byte>(result.Value));
+        // A handler without a return value completes with an empty payload, which is not a
+        // JSON document; decode it as default like the synchronous call paths do.
+        if (result.Value.IsEmpty)
+            return default!;
         var reader = new Utf8JsonReader(result.Value.Span);
         return JsonSerializer.Deserialize<T>(ref reader, _jsonOptions)!;
     }

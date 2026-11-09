@@ -295,8 +295,10 @@ internal sealed partial class InvocationStateMachine
     ///     Handles a signal in the reserved built-in range (0-16). CANCEL asks this invocation
     ///     to stop: every pending durable wait — and every wait registered afterwards — fails
     ///     with a terminal 409 so parked handlers unwind and compensation logic
-    ///     (try/finally, sagas) runs. Other built-ins carry no SDK semantics yet and are
-    ///     ignored; they must never resolve a user awakeable.
+    ///     (try/finally, sagas) runs. The calls the invocation is blocked on are cancelled too,
+    ///     before its next command (see <see cref="PropagateCancellationBefore" />). Other
+    ///     built-ins carry no SDK semantics yet and are ignored; they must never resolve a user
+    ///     awakeable.
     /// </summary>
     private void HandleBuiltInSignal(int signalIndex)
     {
@@ -305,9 +307,98 @@ internal sealed partial class InvocationStateMachine
 
         Log.InvocationCancelRequested(Logger, InvocationId);
         var cancellation = new TerminalException("The invocation was cancelled.", 409);
+        // Set before the waits fail, so the handler they wake already sees it.
+        _cancellation = cancellation;
         _completions.FailAllWith(cancellation);
         _signalCompletions.FailAllWith(cancellation);
         _namedSignals.FailAllWith(cancellation);
+    }
+
+    // ------- Cancelling child calls -------
+    //
+    // A cancelled invocation also cancels the request-response calls it is still waiting on, as
+    // the official SDKs do; one-way sends are left running. The cancel signals are journaled
+    // commands, so they are written on the handler's side, right before the first command the
+    // handler writes after the CANCEL arrived (in practice its failed output), never from the
+    // incoming-message loop where they would interleave with the handler's own commands.
+
+    private void TrackChildCall(Task<CompletionResult> result, uint invocationIdIndex)
+    {
+        (_childCalls ??= []).Add((result, invocationIdIndex));
+    }
+
+    /// <summary>
+    ///     True when the runtime delivered the call's outcome. A wait failed locally by the
+    ///     cancellation, or poisoned when the input closed, does not count: the child is still
+    ///     running.
+    /// </summary>
+    private bool HasCompleted(Task<CompletionResult> call)
+    {
+        if (call.IsCompletedSuccessfully)
+            return true;
+
+        return call.IsFaulted && call.Exception!.InnerException is TerminalException failure
+                              && !ReferenceEquals(failure, _cancellation);
+    }
+
+    /// <summary>
+    ///     Sends the CANCEL signal to every child call that has not completed, once, before the
+    ///     first command written after this invocation was cancelled. A child whose invocation id
+    ///     has not been delivered yet cannot be addressed and is skipped.
+    /// </summary>
+    private void PropagateCancellationBefore(MessageType type)
+    {
+        if (_cancellation is null || _cancelPropagated || !type.IsCommand() || State == InvocationState.Replaying)
+            return;
+
+        _cancelPropagated = true;
+        if (_childCalls is null)
+            return;
+
+        foreach (var (result, invocationIdIndex) in _childCalls)
+        {
+            if (HasCompleted(result)
+                || TryReadInvocationId(invocationIdIndex) is not { } childId
+                || _cancelledChildren?.Contains(childId) == true)
+                continue;
+
+            WriteCommand(MessageType.SendSignalCommand, ProtobufCodec.CreateCancelInvocationCommand(childId));
+            _journal.Append(JournalEntry.Completed(JournalEntryType.SendSignal, ReadOnlyMemory<byte>.Empty));
+            Log.CancellingInvocation(Logger, InvocationId, childId);
+        }
+    }
+
+    /// <summary>
+    ///     Consumes the cancel signals an earlier attempt sent to its child calls, which follow
+    ///     the command replay just matched. The handler never issues them itself, so leaving them
+    ///     in place would fail its next operation with a journal mismatch. A cancel the handler
+    ///     sent explicitly to a child that was already cancelled is left for that operation.
+    /// </summary>
+    private void SkipReplayedChildCancellations()
+    {
+        while (_cancellation is not null && _childCalls is not null && _journal.TryPeekReplayEntry(out var next)
+               && next.CommandType == MessageType.SendSignalCommand)
+        {
+            var fields = ProtobufCodec.ParseCommandFields(next.CommandType, next.Result.Span);
+            if (fields.SignalIndex != CancelSignalIndex || fields.Target is not { } target
+                || _cancelledChildren?.Contains(target) == true || !IsChildCall(target))
+                return;
+
+            _ = _journal.TryTakeReplayEntry(out _);
+            (_cancelledChildren ??= []).Add(target);
+            _cancelPropagated = true;
+        }
+    }
+
+    private bool IsChildCall(string invocationId)
+    {
+        foreach (var (_, invocationIdIndex) in _childCalls!)
+        {
+            if (TryReadInvocationId(invocationIdIndex) == invocationId)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -335,6 +426,16 @@ internal sealed partial class InvocationStateMachine
         var recorded = ProtobufCodec.ParseCommandFields(entry.CommandType, entry.Result.Span);
         if (CommandFields.FindDifference(entry.CommandType, recorded, attempted) is { } difference)
             ThrowFieldMismatch(index, expected, difference);
+
+        if (entry.CommandType == MessageType.CallCommand)
+        {
+            // The same wait the replayed call registers, so its outcome is visible here.
+            var completionId = (int)ProtobufCodec.ParseCommandCompletionId(entry.CommandType, entry.Result.Span);
+            TrackChildCall(_completions.GetOrRegister(completionId).Task,
+                ProtobufCodec.ParseCallInvocationIdIndex(entry.Result.Span));
+        }
+
+        SkipReplayedChildCancellations();
 
         if (!_journal.IsReplaying)
         {
