@@ -15,7 +15,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4.39.1
+      - uses: github/codeql-action/init@v4.39.3
         with:
           languages: csharp
           build-mode: manual
@@ -23,4 +23,4 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet build --configuration Release
-      - uses: github/codeql-action/analyze@v4.39.1
+      - uses: github/codeql-action/analyze@v4.39.3
