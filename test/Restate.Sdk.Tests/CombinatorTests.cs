@@ -565,6 +565,58 @@ public class CombinatorTests
         });
     }
 
+    // A resumed attempt replays the result that woke it and then sees the input close, which
+    // poisons the inputs that are still pending. The result must win over them whatever the
+    // argument order, or the attempt suspends again on inputs that may never complete.
+
+    [Fact]
+    public async Task Race_PoisonedFirstInput_TakesTheDeliveredResult()
+    {
+        var ctx = new BareContext();
+        var (poisoned, poisonedTcs) = PendingFuture<string>();
+        var (delivered, deliveredTcs) = PendingFuture<string>();
+
+        Complete(deliveredTcs, "timer");
+        poisonedTcs.SetException(new SuspensionException());
+
+        Assert.Equal("timer", await ctx.Race(poisoned, delivered).AsTask().WaitAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact]
+    public async Task Race_PoisonedFirstInput_TakesAResultResolvedLocally()
+    {
+        var ctx = new BareContext();
+        var (poisoned, poisonedTcs) = PendingFuture<string>();
+
+        poisonedTcs.SetException(new SuspensionException());
+
+        Assert.Equal("run", await ctx.Race(poisoned, CompletedFuture("run")).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact]
+    public async Task WaitAll_PoisonedFirstInput_YieldsTheDeliveredResultFirst()
+    {
+        var ctx = new BareContext();
+        var (poisoned, poisonedTcs) = PendingFuture<int>();
+        var (delivered, deliveredTcs) = PendingFuture<int>();
+
+        Complete(deliveredTcs, 1);
+        poisonedTcs.SetException(new SuspensionException());
+
+        var yielded = new List<IDurableFuture>();
+        await Assert.ThrowsAsync<SuspensionException>(async () =>
+        {
+            await foreach (var (future, error) in ctx.WaitAll(poisoned, delivered))
+            {
+                Assert.Null(error);
+                yielded.Add(future);
+            }
+        });
+
+        Assert.Equal([delivered], yielded);
+    }
+
     // ── SettledResult ──
 
     [Fact]

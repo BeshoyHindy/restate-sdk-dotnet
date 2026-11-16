@@ -151,7 +151,8 @@ await clientWithAdmin.Cancel(pending);
 ```
 
 The handler's pending operation then fails with a terminal cancellation error, so the invocation
-ends in failure instead of returning a result. Without an `AdminAddress`, `Cancel` throws
+ends in failure instead of returning a result. Calls the handler is still waiting on are cancelled
+with it; one-way sends keep running. Without an `AdminAddress`, `Cancel` throws
 `InvalidOperationException` rather than sending a request no server version answers.
 
 Reflection-based overloads use camelCase JSON by default. To match an endpoint with different
