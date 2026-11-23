@@ -591,6 +591,12 @@ public abstract class Context : IContext
     ///     deliveries go first, in the order they were delivered. So settled inputs A (delivered
     ///     second), B (no delivered result) and C (delivered first) are taken C, A, B, while the
     ///     same three passed as B, A, C are taken B, C, A.
+    ///     <para>
+    ///         An input poisoned because the invocation is suspending has no result yet, so it is
+    ///         taken only once no input with one is left. A resumed attempt replays the result
+    ///         that woke it and then sees the input stream close; that result must win over the
+    ///         inputs still pending, or the attempt suspends again on them.
+    ///     </para>
     /// </summary>
     private static int EarliestSettled<TFuture>(TFuture[] futures, RawCompletion[] completions, bool[] taken)
         where TFuture : class, IDurableFuture
@@ -599,11 +605,19 @@ public abstract class Context : IContext
         var firstArrival = 0L;
         var earliest = -1;
         var earliestArrival = 0L;
+        var poisoned = -1;
 
         for (var i = 0; i < futures.Length; i++)
         {
             if (taken[i] || !completions[i].IsSettled)
                 continue;
+
+            if (FindSuspension(completions[i].Failure) is not null)
+            {
+                if (poisoned < 0)
+                    poisoned = i;
+                continue;
+            }
 
             var arrival = ArrivalOrderOf(futures[i]);
             if (first < 0)
@@ -618,6 +632,9 @@ public abstract class Context : IContext
                 earliestArrival = arrival;
             }
         }
+
+        if (first < 0)
+            return poisoned;
 
         return firstArrival > 0 ? earliest : first;
     }
