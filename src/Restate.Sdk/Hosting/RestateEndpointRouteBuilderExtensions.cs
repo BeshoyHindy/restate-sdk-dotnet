@@ -121,23 +121,24 @@ public static class RestateEndpointRouteBuilderExtensions
 
             if (!registry.TryGetService(serviceName, out var service) || service is null)
             {
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                await context.Response.WriteAsync($"Service '{serviceName}' not found");
+                await WritePlainTextErrorAsync(
+                    context, StatusCodes.Status404NotFound, $"Service '{serviceName}' not found");
                 return;
             }
 
             if (!registry.TryGetHandler(serviceName, handlerName, out var handlerDef) || handlerDef is null)
             {
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                await context.Response.WriteAsync($"Handler '{handlerName}' not found on service '{serviceName}'");
+                await WritePlainTextErrorAsync(
+                    context, StatusCodes.Status404NotFound,
+                    $"Handler '{handlerName}' not found on service '{serviceName}'");
                 return;
             }
 
             // Negotiate the service protocol version from the request content type.
             if (!ServiceProtocolVersionExtensions.TryParse(context.Request.ContentType, out var protocolVersion))
             {
-                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
-                await context.Response.WriteAsync(
+                await WritePlainTextErrorAsync(
+                    context, StatusCodes.Status415UnsupportedMediaType,
                     $"Unsupported invocation content type '{context.Request.ContentType}'. " +
                     $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}");
                 return;
@@ -201,5 +202,18 @@ public static class RestateEndpointRouteBuilderExtensions
             scheme.Count == 1 ? scheme[0] : null,
             token.Count == 1 ? token[0] : null,
             audience.Value ?? "");
+    }
+
+    /// <summary>
+    ///     Writes an error body as plain text. These bodies echo request input (route values and
+    ///     headers), so the content type is declared and sniffing disabled, keeping a client from
+    ///     ever rendering that input as markup.
+    /// </summary>
+    private static Task WritePlainTextErrorAsync(HttpContext context, int statusCode, string message)
+    {
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        return context.Response.WriteAsync(message, context.RequestAborted);
     }
 }
