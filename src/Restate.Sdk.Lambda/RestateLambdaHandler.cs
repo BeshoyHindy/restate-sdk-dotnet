@@ -214,11 +214,9 @@ public abstract class RestateLambdaHandler
         var selectedContentType = RestateEndpointRouteBuilderExtensions.NegotiateVersion(acceptHeader);
 
         if (selectedContentType is null)
-            return new APIGatewayProxyResponse
-            {
-                StatusCode = 415,
-                Body = $"Unsupported discovery manifest version. Accept header was '{acceptHeader}'"
-            };
+            return PlainTextError(
+                415,
+                $"Unsupported discovery manifest version. Accept header was '{acceptHeader}'");
 
         var manifest = EndpointManifest.FromRegistry(_registry, "REQUEST_RESPONSE");
         var json = JsonSerializer.Serialize(manifest, DiscoveryJsonContext.Default.EndpointManifest);
@@ -254,6 +252,25 @@ public abstract class RestateLambdaHandler
         return null;
     }
 
+    /// <summary>
+    ///     Builds an error response with a plain-text body. These bodies echo request input (path
+    ///     segments and headers), so the content type is declared and sniffing disabled, keeping a
+    ///     client from ever rendering that input as markup.
+    /// </summary>
+    private static APIGatewayProxyResponse PlainTextError(int statusCode, string body)
+    {
+        return new APIGatewayProxyResponse
+        {
+            StatusCode = statusCode,
+            Headers = new Dictionary<string, string>
+            {
+                ["content-type"] = "text/plain; charset=utf-8",
+                ["x-content-type-options"] = "nosniff"
+            },
+            Body = body
+        };
+    }
+
     private async Task<APIGatewayProxyResponse> HandleInvocation(APIGatewayProxyRequest request, ILambdaContext context)
     {
         var path = request.Path ?? "";
@@ -262,38 +279,26 @@ public abstract class RestateLambdaHandler
         // Expected path: /invoke/{service}/{handler}
         var invokeIdx = Array.IndexOf(segments, "invoke");
         if (invokeIdx < 0 || invokeIdx + 2 >= segments.Length)
-            return new APIGatewayProxyResponse
-            {
-                StatusCode = 404,
-                Body = "Invalid invocation path. Expected /invoke/{service}/{handler}"
-            };
+            return PlainTextError(404, "Invalid invocation path. Expected /invoke/{service}/{handler}");
 
         var serviceName = segments[invokeIdx + 1];
         var handlerName = segments[invokeIdx + 2];
 
         if (!_registry.TryGetService(serviceName, out var service) || service is null)
-            return new APIGatewayProxyResponse
-            {
-                StatusCode = 404,
-                Body = $"Service '{serviceName}' not found"
-            };
+            return PlainTextError(404, $"Service '{serviceName}' not found");
 
         if (!_registry.TryGetHandler(serviceName, handlerName, out var handlerDef) || handlerDef is null)
-            return new APIGatewayProxyResponse
-            {
-                StatusCode = 404,
-                Body = $"Handler '{handlerName}' not found on service '{serviceName}'"
-            };
+            return PlainTextError(
+                404,
+                $"Handler '{handlerName}' not found on service '{serviceName}'");
 
         // Negotiate the service protocol version from the request content type.
         var contentType = GetHeader(request.Headers, "content-type");
         if (!ServiceProtocolVersionExtensions.TryParse(contentType, out var protocolVersion))
-            return new APIGatewayProxyResponse
-            {
-                StatusCode = 415,
-                Body = $"Unsupported invocation content type '{contentType}'. " +
-                       $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}"
-            };
+            return PlainTextError(
+                415,
+                $"Unsupported invocation content type '{contentType}'. " +
+                $"Supported: {ServiceProtocolVersionExtensions.SupportedContentTypes}");
 
         // Decode the binary protocol body
         byte[] requestBody;
