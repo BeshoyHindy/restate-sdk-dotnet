@@ -7,6 +7,8 @@ routing.
 
 Verification is opt-in. Configure at least one public key and every request to `/discover` and
 `/invoke/{service}/{handler}` must be signed; configure none and requests are not verified at all.
+An Endpoint started without keys logs one warning saying so (event id 15, category
+`Restate.Endpoint`), so an unverified deployment shows up in its startup log.
 
 ## Configure the keys
 
