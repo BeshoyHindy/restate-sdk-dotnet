@@ -105,6 +105,42 @@ public class ProtocolReaderWriterTests
         await Assert.ThrowsAsync<ProtocolException>(() => reader.ReadMessageAsync().AsTask());
     }
 
+    [Theory]
+    [InlineData(ProtocolReader.DefaultMaxMessageLength + 1u)]
+    [InlineData(0x80000000u)] // would overflow the int cast used to rent the payload buffer
+    [InlineData(uint.MaxValue)]
+    public async Task OversizedLengthPrefix_ThrowsBeforeBufferingPayload(uint declaredLength)
+    {
+        var pipe = new Pipe();
+
+        // Only the header is written: the reader must reject it without waiting for the payload.
+        MessageHeader.Create(MessageType.RunCommand, declaredLength).WriteTo(pipe.Writer);
+        await pipe.Writer.FlushAsync();
+
+        var reader = new ProtocolReader(pipe.Reader);
+        var ex = await Assert.ThrowsAsync<ProtocolException>(() => reader.ReadMessageAsync().AsTask());
+        Assert.Contains("exceeding", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LengthPrefixAtCustomLimit_IsAccepted_AndOneAboveIsRejected()
+    {
+        var pipe = new Pipe();
+        var writer = new ProtocolWriter(pipe.Writer);
+        writer.WriteMessage(MessageType.RunCommand, new byte[16]);
+        writer.WriteMessage(MessageType.RunCommand, new byte[17]);
+        await pipe.Writer.FlushAsync();
+        pipe.Writer.Complete();
+
+        var reader = new ProtocolReader(pipe.Reader, maxMessageLength: 16);
+
+        var accepted = await reader.ReadMessageAsync();
+        Assert.Equal(16, accepted!.Value.Payload.Length);
+        accepted.Value.Dispose();
+
+        await Assert.ThrowsAsync<ProtocolException>(() => reader.ReadMessageAsync().AsTask());
+    }
+
     [Fact]
     public async Task ChunkedData_ReassemblesCorrectly()
     {

@@ -9,14 +9,24 @@ namespace Restate.Sdk.Internal.Protocol;
 /// </summary>
 internal sealed class ProtocolReader : IDisposable
 {
+    /// <summary>
+    ///     Default upper bound on a single frame's payload length: 128 MiB.
+    ///     Restate's own <c>message-size-limit</c> defaults to 32 MiB, so this leaves headroom for
+    ///     operators who raise it, while stopping a forged length prefix (up to 4 GiB) from making
+    ///     the reader buffer unbounded data before failing.
+    /// </summary>
+    internal const uint DefaultMaxMessageLength = 128 * 1024 * 1024;
+
     private readonly PipeReader _reader;
+    private readonly uint _maxMessageLength;
     private MessageHeader _pendingHeader;
     private DecoderState _state = DecoderState.WaitingHeader;
     private bool _completed;
 
-    public ProtocolReader(PipeReader reader)
+    public ProtocolReader(PipeReader reader, uint maxMessageLength = DefaultMaxMessageLength)
     {
         _reader = reader;
+        _maxMessageLength = maxMessageLength;
     }
 
     public ProtocolReader(Stream stream) : this(PipeReader.Create(stream))
@@ -89,6 +99,12 @@ internal sealed class ProtocolReader : IDisposable
                 buffer.Slice(0, MessageHeader.Size).CopyTo(headerBytes);
                 _pendingHeader = MessageHeader.Read(headerBytes);
             }
+
+            // Reject before buffering the payload: the length prefix is untrusted input.
+            if (_pendingHeader.Length > _maxMessageLength)
+                throw new ProtocolException(
+                    $"Message {_pendingHeader.Type} declares a {_pendingHeader.Length}-byte payload, " +
+                    $"exceeding the {_maxMessageLength}-byte limit");
 
             buffer = buffer.Slice(MessageHeader.Size);
             _state = DecoderState.WaitingPayload;
