@@ -74,6 +74,9 @@ The repository uses trunk-based development (GitHub Flow):
   scheduled workflow, so its armed auto-merge can complete. The auto-merge is performed
   with a dedicated credential rather than the default workflow token, so that the usual
   push checks run on `main` for the merge commit.
+- Workflows pin every action to a full commit SHA, with the release as a trailing comment
+  (`uses: actions/checkout@<sha> # v7.0.1`). Dependabot bumps the SHA and the comment
+  together, and a test in `test/Restate.Sdk.Tests/Releasing` fails on a tag-only `uses:`.
 - Releases are cut by release-please: it collects merged commits into a release PR
   that updates `CHANGELOG.md` and the version in `Directory.Build.props`; merging that
   PR tags the release and CI publishes the packages to NuGet. See `RELEASING.md`.
