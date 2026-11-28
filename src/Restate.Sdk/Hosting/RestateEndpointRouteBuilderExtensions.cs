@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Restate.Sdk.Internal;
 using Restate.Sdk.Internal.Discovery;
 using Restate.Sdk.Internal.Identity;
@@ -72,6 +73,8 @@ public static class RestateEndpointRouteBuilderExtensions
 
         // Registered by AddRestate when identity keys are configured; null → no verification.
         var identityVerifier = endpoints.ServiceProvider.GetService<RequestIdentityVerifier>();
+        if (identityVerifier is null && endpoints.ServiceProvider.GetService<ILoggerFactory>() is { } loggerFactory)
+            Log.IdentityVerificationDisabled(loggerFactory.CreateLogger("Restate.Endpoint"));
 
         // Cache the discovery manifest as a byte[] — it never changes after startup.
         // Uses source-generated DiscoveryJsonContext for AOT compatibility.

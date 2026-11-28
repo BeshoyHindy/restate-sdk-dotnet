@@ -58,6 +58,12 @@ internal static partial class Log
         Message = "Journal mismatch: invocationId={InvocationId}, journalIndex={JournalIndex}, detail={Detail}")]
     public static partial void JournalMismatch(ILogger logger, string invocationId, int journalIndex, string detail);
 
+    [LoggerMessage(EventId = 15, Level = LogLevel.Warning,
+        Message = "Request identity verification is disabled: no identity keys are configured, so any client " +
+                  "that can reach this endpoint can invoke its handlers. Configure WithIdentityKeys(...) with the " +
+                  "public keys printed by restate-server to accept only signed requests.")]
+    public static partial void IdentityVerificationDisabled(ILogger logger);
+
     // --- Protocol diagnostics (Trace level, zero-overhead when disabled) ---
 
     [LoggerMessage(EventId = 100, Level = LogLevel.Trace,

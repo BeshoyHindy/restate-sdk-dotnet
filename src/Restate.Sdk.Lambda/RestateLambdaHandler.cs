@@ -62,6 +62,8 @@ public abstract class RestateLambdaHandler
         _registry = ServiceRegistry.FromTypes(_serviceTypes);
         _handler = new InvocationHandler(_loggerFactory, _telemetryOptions);
         _identityVerifier = _identityKeys.Count > 0 ? RequestIdentityVerifier.FromKeys(_identityKeys) : null;
+        if (_identityVerifier is null && _loggerFactory is not null)
+            Log.IdentityVerificationDisabled(_loggerFactory.CreateLogger("Restate.Endpoint"));
     }
 
     /// <summary>
