@@ -12,7 +12,7 @@ jobs:
   auto-merge:
     name: Arm auto-merge
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
 
     steps:
       - name: Dependabot metadata
@@ -28,7 +28,9 @@ jobs:
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         run: |
           low_risk=false
-          if [ "$ECOSYSTEM" = "github_actions" ]; then
+          if [ "$ECOSYSTEM" = "github_actions" ] &&
+             { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] ||
+               [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; }; then
             low_risk=true
           elif [ "$ECOSYSTEM" = "nuget" ] &&
                { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] ||

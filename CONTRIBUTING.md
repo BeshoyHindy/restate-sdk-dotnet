@@ -67,8 +67,8 @@ The repository uses trunk-based development (GitHub Flow):
   follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat:`, `fix:`, `docs:`, `perf:`, `refactor:`, `test:`, `build:`, `ci:`, `chore:`.
   A lint check on the PR title enforces this.
-- Dependabot pull requests for GitHub Actions bumps, for NuGet minor and patch updates
-  and for minor and patch bumps of the Restate server image in `docker-compose.yml` arm
+- Dependabot pull requests for minor and patch updates of GitHub Actions, of NuGet
+  packages and of the Restate server image in `docker-compose.yml` arm
   auto-merge and land on their own once the required checks pass; major updates are
   merged by hand. A Dependabot pull request that falls behind `main` is rebased by a
   scheduled workflow, so its armed auto-merge can complete. The auto-merge is performed
